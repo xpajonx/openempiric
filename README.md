@@ -1,4 +1,4 @@
-# opencode-harness (OpenEmpiric)
+# openempiric
 
 > Transform human-agent collaboration into durable organizational knowledge.
 
@@ -6,34 +6,34 @@ Most AI memory systems focus on remembering.
 
 We believe the harder problem is learning.
 
-`opencode-harness` is an event-sourced knowledge operating system for coding agents that continuously converts conversations, experiments, decisions, successes, and failures into structured knowledge that improves over time.
+`openempiric` is an event-sourced knowledge operating system for coding agents that continuously converts conversations, experiments, decisions, successes, and failures into structured knowledge that improves over time.
 
 ---
 
 ## Install
 
 ```bash
-git clone https://github.com/xpajonx/opencode-harness.git
-cd opencode-harness
+git clone https://github.com/xpajonx/openempiric.git
+cd openempiric
 uv sync
 ```
 
 ## Configure as OpenCode Plugin (WSL)
 
-`opencode-harness` now runs as a native OpenCode plugin and skill. 
+`openempiric` now runs as a native OpenCode plugin and skill. 
 
 1. **Install the Plugin:**
    Copy the plugin file to OpenCode's plugins directory.
    ```bash
    mkdir -p ~/.config/opencode/plugins
-   cp opencode-harness/harness.ts ~/.config/opencode/plugins/
+   cp openempiric/harness.ts ~/.config/opencode/plugins/
    ```
 
 2. **Install the Skill:**
    Copy the skill folder to OpenCode's skills directory. This allows you to configure limits (e.g. `max_parallel_tasks`) using YAML frontmatter.
    ```bash
    mkdir -p ~/.config/opencode/skills/harness-orchestrator
-   cp opencode-harness/SKILL.md ~/.config/opencode/skills/harness-orchestrator/
+   cp openempiric/SKILL.md ~/.config/opencode/skills/harness-orchestrator/
    ```
 
 You no longer need to manually edit `opencode.jsonc`. The plugin will dynamically register the `harness` MCP server and automatically handle session lifecycle hooks!
@@ -198,7 +198,7 @@ Embedding
 Retrieval
 ```
 
-opencode-harness treats learning as a first-class primitive.
+openempiric treats learning as a first-class primitive.
 
 ---
 
