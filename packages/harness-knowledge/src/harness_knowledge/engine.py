@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
 import math
@@ -10,10 +11,8 @@ import time
 import uuid
 from collections import Counter
 from pathlib import Path
-from typing import Literal
-import difflib
 
-from pydantic import BaseModel, Field
+from harness_knowledge.models import ConceptData, KnowledgeEvent
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -42,57 +41,66 @@ class FileLock:
             self.lock_path.unlink()
 
 
-class ConceptRelation(BaseModel):
-    type: str
-    target: str
+class SecureFileSystem:
+    def __init__(self, project_path: Path):
+        self.project_path = project_path.resolve()
 
+    def _verify_path(self, path: Path) -> Path:
+        resolved = path.resolve()
+        try:
+            if not resolved.is_relative_to(self.project_path):
+                raise PermissionError(
+                    f"Security Abort: Path traversal attempted outside project boundary -> {path}"
+                )
+        except ValueError:
+            raise PermissionError(
+                f"Security Abort: Path traversal attempted outside project boundary -> {path}"
+            )
+        return resolved
 
-class ConceptData(BaseModel):
-    concept_id: str
-    canonical_name: str
-    aliases: list[str] = Field(default_factory=list)
-    status: Literal["candidate", "emerging", "validated", "canonical", "deprecated"] = (
-        "candidate"
-    )
-    confidence: int = Field(default=1, ge=1, le=5)
-    evidence_count: int = 0
-    sessions: list[str] = Field(default_factory=list)
-    created_at: float = Field(default_factory=time.time)
-    updated_at: float = Field(default_factory=time.time)
-    relationships: list[ConceptRelation] = Field(default_factory=list)
+    def read_text(self, path: Path, encoding: str = "utf-8") -> str:
+        verified = self._verify_path(path)
+        if not verified.exists():
+            raise FileNotFoundError(f"File not found: {path}")
+        return verified.read_text(encoding=encoding)
 
+    def write_text(
+        self,
+        path: Path,
+        content: str,
+        encoding: str = "utf-8",
+        force_allow_truncation: bool = False,
+    ) -> bool:
+        verified = self._verify_path(path)
+        verified.parent.mkdir(parents=True, exist_ok=True)
+        if verified.exists() and not force_allow_truncation:
+            old_len = len(verified.read_text(encoding=encoding))
+            new_len = len(content)
+            if old_len > 10 and new_len < (old_len * 0.5):
+                raise ValueError(
+                    f"Safety Abort: New content is < 50% of old content. Truncation risk detected for {path}"
+                )
+        verified.write_text(content.strip() + "\n", encoding=encoding)
+        return True
 
-os.environ["CUDA_VISIBLE_DEVICES"] = ""
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
+    def append_text(self, path: Path, content: str, encoding: str = "utf-8") -> bool:
+        verified = self._verify_path(path)
+        verified.parent.mkdir(parents=True, exist_ok=True)
+        with open(verified, "a", encoding=encoding) as f:
+            f.write(content)
+        return True
 
+    def exists(self, path: Path) -> bool:
+        try:
+            verified = self._verify_path(path)
+            return verified.exists()
+        except PermissionError:
+            return False
 
-class KnowledgeEvent(BaseModel):
-    event_id: str = Field(description="UUID string for event identification")
-    timestamp: str = Field(description="ISO 8601 UTC timestamp format")
-    project: str = Field(description="Project identifier/directory name")
-    session_id: str = Field(description="Source session ID")
-    event_type: str = Field(
-        description="Type: hypothesis, experiment, validation, failure, decision, deprecation, observation"
-    )
-    concept_candidates: list[str] = Field(
-        default_factory=list, description="Associated concepts"
-    )
-    summary: str = Field(description="Short human-readable summary")
-    evidence: str = Field(description="Log snippet or conversation line")
-    confidence: int = Field(
-        default=1, ge=1, le=5, description="Confidence rating (1-5)"
-    )
-    source: str = Field(description="Source of capture: chat, diff, test")
-    schema_version: int = Field(default=1)
-
-    # Orchestrator Telemetry Integration
-    tokens: dict[str, int] | None = Field(
-        default=None, description="Prompt token count details (input/output/total)"
-    )
-    cost: float | None = Field(default=None, description="API invocation cost in USD")
-    duration_s: float | None = Field(
-        default=None, description="Subprocess run duration in seconds"
-    )
+    def unlink(self, path: Path):
+        verified = self._verify_path(path)
+        if verified.exists():
+            verified.unlink()
 
 
 HARNESS_DIR = ".harness"
@@ -134,6 +142,10 @@ class KnowledgeEngine:
         self.project_path = Path(project_path).resolve() if project_path else None
         self._db_dir: Path | None = None
 
+    def _sfs(self, project: str | Path | None = None) -> SecureFileSystem:
+        p = Path(project or self.project_path or ".").resolve()
+        return SecureFileSystem(p)
+
     def _resolve_harness(self, project_path: str | Path | None = None) -> Path:
         p = Path(project_path or self.project_path or ".").resolve()
         harness = p / HARNESS_DIR
@@ -151,6 +163,7 @@ class KnowledgeEngine:
         harness = project_path / HARNESS_DIR
         for d in DEFAULT_DIRS:
             (harness / d).mkdir(parents=True, exist_ok=True)
+        sfs = self._sfs(project_path)
         for fname, content in [
             (
                 "AGENTS.md",
@@ -167,8 +180,8 @@ class KnowledgeEngine:
             ),
         ]:
             fp = harness / fname
-            if not fp.exists():
-                fp.write_text(content)
+            if not sfs.exists(fp):
+                sfs.write_text(fp, content, force_allow_truncation=True)
 
     @property
     def model(self):
@@ -690,30 +703,32 @@ class KnowledgeEngine:
     def _load_registry(self, project: str | None = None) -> dict:
         p = self._registry_path(project)
         lock_path = p.with_suffix(".lock")
+        sfs = self._sfs(project)
         with FileLock(lock_path):
-            if p.exists():
+            if sfs.exists(p):
                 try:
-                    return json.loads(p.read_text())
+                    return json.loads(sfs.read_text(p))
                 except Exception:
                     return {}
             return {}
 
     def _save_registry(self, registry: dict, project: str | None = None):
         p = self._registry_path(project)
-        p.parent.mkdir(parents=True, exist_ok=True)
         lock_path = p.with_suffix(".lock")
+        sfs = self._sfs(project)
         with FileLock(lock_path):
-            p.write_text(json.dumps(registry, indent=2))
+            sfs.write_text(p, json.dumps(registry, indent=2))
 
     def _load_events(self, project: str | None = None) -> list[dict]:
         p = self._events_path(project)
         lock_path = p.with_suffix(".lock")
+        sfs = self._sfs(project)
         with FileLock(lock_path):
-            if not p.exists():
+            if not sfs.exists(p):
                 return []
             events = []
             try:
-                for line in p.read_text().splitlines():
+                for line in sfs.read_text(p).splitlines():
                     line = line.strip()
                     if line:
                         events.append(json.loads(line))
@@ -727,11 +742,10 @@ class KnowledgeEngine:
             event = KnowledgeEvent(**event)
 
         p = self._events_path(project)
-        p.parent.mkdir(parents=True, exist_ok=True)
         lock_path = p.with_suffix(".lock")
+        sfs = self._sfs(project)
         with FileLock(lock_path):
-            with open(p, "a") as f:
-                f.write(event.model_dump_json() + "\n")
+            sfs.append_text(p, event.model_dump_json() + "\n")
 
     def _safe_write_concept_file(
         self, file_path: Path, content: str, project: str | None = None
@@ -748,20 +762,8 @@ class KnowledgeEngine:
                 f"Security Abort: Path traversal attempted -> {file_path}"
             )
 
-        if file_path.exists():
-            try:
-                old_content = file_path.read_text(encoding="utf-8")
-                if len(content) < (len(old_content) * 0.5):
-                    raise ValueError(
-                        f"Safety Abort: New content is < 50% of old content. Truncation risk detected for {file_path}"
-                    )
-            except Exception as e:
-                if isinstance(e, (PermissionError, ValueError)):
-                    raise e
-                pass
-
-        file_path.write_text(content.strip() + "\n")
-        return True
+        sfs = self._sfs(project)
+        return sfs.write_text(file_path, content)
 
     def _log_action(self, message: str, project: str | None = None):
         harness = self._resolve_harness(project)
@@ -769,24 +771,27 @@ class KnowledgeEngine:
         date_str = time.strftime("%Y-%m-%d %H:%M")
         entry = f"- **[{date_str}]**: {message}\n"
 
-        log_file.parent.mkdir(parents=True, exist_ok=True)
-        if not log_file.exists():
-            log_file.write_text("# Wiki Log\n\n", encoding="utf-8")
+        sfs = self._sfs(project)
+        if not sfs.exists(log_file):
+            sfs.write_text(log_file, "# Wiki Log\n\n", force_allow_truncation=True)
 
-        with open(log_file, "a", encoding="utf-8") as f:
-            f.write(entry)
+        sfs.append_text(log_file, entry)
 
     def _sync_index(
         self, canonical_name: str, concept_id: str, project: str | None = None
     ):
         harness = self._resolve_harness(project)
         index_file = harness / "directives" / "index.md"
+        sfs = self._sfs(project)
 
-        index_file.parent.mkdir(parents=True, exist_ok=True)
-        if not index_file.exists():
-            index_file.write_text("# Wiki Index\n\n### Concepts\n\n", encoding="utf-8")
+        if not sfs.exists(index_file):
+            sfs.write_text(
+                index_file,
+                "# Wiki Index\n\n### Concepts\n\n",
+                force_allow_truncation=True,
+            )
 
-        content = index_file.read_text(encoding="utf-8")
+        content = sfs.read_text(index_file)
         display_title = canonical_name.replace("-", " ").title()
         link = f"- [[{concept_id}|{display_title}]]"
 
@@ -807,7 +812,9 @@ class KnowledgeEngine:
             updated_lines.append("\n### Concepts")
             updated_lines.append(link)
 
-        index_file.write_text("\n".join(updated_lines) + "\n", encoding="utf-8")
+        sfs.write_text(
+            index_file, "\n".join(updated_lines) + "\n", force_allow_truncation=True
+        )
 
     def _resolve_concept(self, term: str, registry: dict) -> tuple[str, dict]:
         term_clean = re.sub(r"[^\w\s-]", "", term).strip().lower()
@@ -975,10 +982,10 @@ class KnowledgeEngine:
             self._append_event(canonical_event, project)
 
         sessions_dir = self._sessions_dir(project)
-        sessions_dir.mkdir(parents=True, exist_ok=True)
+        sfs = self._sfs(project)
         date_str = time.strftime("%Y-%m-%d")
         report_file = sessions_dir / f"{date_str}.md"
-        if report_file.exists():
+        if sfs.exists(report_file):
             report_file = sessions_dir / f"{date_str}_{int(time.time() % 100000)}.md"
 
         yaml_events = [
@@ -1003,7 +1010,7 @@ project: {project or "default"}
 {yaml_content}
 ```
 """
-        report_file.write_text(report)
+        sfs.write_text(report_file, report, force_allow_truncation=True)
 
         return {
             "status": "success",
@@ -1350,7 +1357,8 @@ aliases: {json.dumps(cdata.get("aliases", []))}
 
     def consolidate(self, project: str | None = None) -> dict:
         concepts_dir = self._concepts_dir(project)
-        if not concepts_dir.exists():
+        sfs = self._sfs(project)
+        if not sfs.exists(concepts_dir):
             return {"status": "error", "message": "No concepts directory found."}
 
         md_files = list(concepts_dir.rglob("*.md"))
@@ -1364,7 +1372,7 @@ aliases: {json.dumps(cdata.get("aliases", []))}
         contents = {}
         for f in md_files:
             try:
-                contents[f] = f.read_text()
+                contents[f] = sfs.read_text(f)
             except Exception:
                 pass
 
@@ -1386,8 +1394,8 @@ aliases: {json.dumps(cdata.get("aliases", []))}
                     if len(f1.name) > len(f2.name):
                         f1, f2 = f2, f1
                     merged_content = f"{contents[f1].strip()}\n\n## Consolidated: {f2.stem.replace('_', ' ').title()}\n{contents[f2].strip()}"
-                    f1.write_text(merged_content)
-                    f2.unlink()
+                    sfs.write_text(f1, merged_content, force_allow_truncation=True)
+                    sfs.unlink(f2)
                     already_merged.add(f2)
                     contents[f1] = merged_content
                     merged.append(f"Merged {f2.name} -> {f1.name}")
@@ -1407,13 +1415,14 @@ aliases: {json.dumps(cdata.get("aliases", []))}
         self._registry_path(project)
         self._events_path(project)
         concepts_dir = self._concepts_dir(project)
+        sfs = self._sfs(project)
 
         # 1. Clean Slate
         temp_registry = {}
-        if concepts_dir.exists():
+        if sfs.exists(concepts_dir):
             for f in concepts_dir.glob("concept_*.md"):
                 try:
-                    f.unlink()
+                    sfs.unlink(f)
                 except Exception:
                     pass
 

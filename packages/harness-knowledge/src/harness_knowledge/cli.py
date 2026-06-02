@@ -64,6 +64,9 @@ def main():
     lint_parser = sub.add_parser("lint")
     lint_parser.add_argument("project", type=str)
     lint_parser.add_argument("--workers", type=int, default=4)
+    lint_parser.add_argument(
+        "--fix", action="store_true", help="Automatically heal links"
+    )
 
     args = parser.parse_args()
     eng = KnowledgeEngine()
@@ -232,17 +235,33 @@ def main():
         import asyncio
         from .linter import run_lint
 
-        res = asyncio.run(run_lint(Path(args.project), max_parallel=args.workers))
+        res = asyncio.run(
+            run_lint(Path(args.project), max_parallel=args.workers, fix=args.fix)
+        )
         if res["status"] == "error":
             print(render_panel("Lint Error", [res["message"]], status="error"))
         else:
             lines = [
                 f"Files scanned: {res.get('files_scanned', 0)}",
                 f"Broken links:  {len(res.get('broken_links', []))}",
+                f"Healed links:  {len(res.get('healed_links', []))}",
                 f"Orphan nodes:  {len(res.get('orphans', []))}",
             ]
+            if args.fix:
+                lines.append(f"Files fixed:   {res.get('fixed_files_count', 0)}")
+            lines.append("")
+
             for bl in res.get("broken_links", []):
-                lines.append(f"  ❌ Broken link: {bl['source']} -> {bl['target']}")
+                lines.append(
+                    f"  ❌ Broken link: {bl['source']}:{bl['line']} -> {bl['target']}"
+                )
+            if res.get("healed_links"):
+                action = "Fixed" if args.fix else "Can Heal"
+                lines.append(f"Healed links ({action}):")
+                for hl in res["healed_links"]:
+                    lines.append(
+                        f"  ✅ {hl['source']}:{hl['line']} -> resolved to {hl['target_concept']} (originally: {hl['original']})"
+                    )
             for op in res.get("orphans", []):
                 lines.append(f"  ⚠️ Orphan concept: {op}")
             print(

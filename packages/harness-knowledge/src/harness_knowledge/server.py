@@ -473,12 +473,15 @@ def mount_tools(mcp: object) -> None:
         return render_panel("Graph Query Results", lines, status="organize")
 
     @mcp.tool()
-    def knowledge_lint(project: str = "", max_parallel: int = 4) -> str:
+    def knowledge_lint(
+        project: str = "", max_parallel: int = 4, fix: bool = False
+    ) -> str:
         """Check the knowledge base for broken links and orphan concepts in parallel.
 
         Args:
             project: Project directory path. Defaults to current directory.
             max_parallel: Concurrency limit for link validation.
+            fix: Automatically heal broken links that match existing aliases.
         """
         import asyncio
         from .linter import run_lint
@@ -486,7 +489,7 @@ def mount_tools(mcp: object) -> None:
 
         target = Path(project) if project else Path.cwd()
         try:
-            res = asyncio.run(run_lint(target, max_parallel=max_parallel))
+            res = asyncio.run(run_lint(target, max_parallel=max_parallel, fix=fix))
         except Exception as e:
             return render_panel("Lint Failure", [f"Error: {e}"], status="error")
 
@@ -496,14 +499,27 @@ def mount_tools(mcp: object) -> None:
         lines = [
             f"Files Scanned: {res.get('files_scanned', 0)}",
             f"Broken Links:  {len(res.get('broken_links', []))}",
+            f"Healed Links:  {len(res.get('healed_links', []))}",
             f"Orphan Nodes:  {len(res.get('orphans', []))}",
-            "",
         ]
+        if fix:
+            lines.append(f"Files Fixed:   {res.get('fixed_files_count', 0)}")
+        lines.append("")
+
         if res.get("broken_links"):
             lines.append("Broken Links:")
             for bl in res["broken_links"]:
                 lines.append(
-                    f"  ❌ {bl['source']} -> {bl['target']} (in {Path(bl['file']).name})"
+                    f"  ❌ {bl['source']}:{bl['line']} -> {bl['target']} (in {Path(bl['file']).name})"
+                )
+            lines.append("")
+
+        if res.get("healed_links"):
+            action = "Fixed" if fix else "Can Heal"
+            lines.append(f"Healed Links ({action}):")
+            for hl in res["healed_links"]:
+                lines.append(
+                    f"  ✅ {hl['source']}:{hl['line']} -> resolved to {hl['target_concept']} (originally: {hl['original']})"
                 )
             lines.append("")
 
@@ -512,9 +528,15 @@ def mount_tools(mcp: object) -> None:
             for op in res["orphans"]:
                 lines.append(f"  ⚠️ {op}")
 
-        if not res.get("broken_links") and not res.get("orphans"):
+        if (
+            not res.get("broken_links")
+            and not res.get("orphans")
+            and not res.get("healed_links")
+        ):
             lines.append("✨ All links verified successfully and no orphans found!")
 
         return render_panel(
-            "Lint Results", lines, status="error" if res.get("broken_links") else "ok"
+            "Lint Results",
+            lines,
+            status="error" if res.get("broken_links") else "ok",
         )
