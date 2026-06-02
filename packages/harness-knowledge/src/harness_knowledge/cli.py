@@ -46,6 +46,9 @@ def main():
     consolidate_parser = sub.add_parser("consolidate")
     consolidate_parser.add_argument("project", type=str)
 
+    rebuild_parser = sub.add_parser("rebuild")
+    rebuild_parser.add_argument("project", type=str)
+
     events_parser = sub.add_parser("events")
     events_parser.add_argument("project", type=str)
     events_parser.add_argument("--concept", type=str, default="")
@@ -120,6 +123,11 @@ def main():
         e = KnowledgeEngine(args.project)
         res = e.consolidate(args.project)
         print(render_panel("Consolidation", res.get("merged", ["No changes"]), status="organize"))
+
+    elif args.command == "rebuild":
+        e = KnowledgeEngine(args.project)
+        res = e.rebuild_registry(args.project)
+        print(render_panel("Registry Rebuilt", [res.get("message", ""), f"Materialized concepts: {res.get('materialized', 0)}"], status="ok"))
 
     elif args.command == "events":
         e = KnowledgeEngine(args.project)

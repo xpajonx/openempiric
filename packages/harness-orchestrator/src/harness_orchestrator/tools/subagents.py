@@ -4,6 +4,7 @@ import json
 import time
 
 from ..client import run, run_json
+from ..config import load_harness_config
 
 
 def register(mcp: object) -> None:
@@ -16,9 +17,10 @@ def register(mcp: object) -> None:
         prompt: str,
         workdir: str = "",
         timeout: int = 300,
-        dangerously_skip_permissions: bool = True,
     ) -> str:
         """Run opencode with a prompt and return the response. Use this to delegate tasks to child opencode sessions — refactoring, testing, research — and get results back."""
+        cfg = load_harness_config()
+        dangerously_skip_permissions = cfg.get("dangerously_skip_permissions", True)
         result = run_json(prompt=prompt, workdir=workdir, timeout=timeout, dangerously_skip_permissions=dangerously_skip_permissions)
         
         telemetry_info = ""
@@ -61,17 +63,21 @@ def register(mcp: object) -> None:
         if not isinstance(parsed, list):
             return "Error: tasks must be a JSON array"
 
+        cfg = load_harness_config()
         if parallel:
             import asyncio
+            sem = asyncio.Semaphore(cfg.get("max_parallel_tasks", 4))
 
             async def _run_task_async(task: dict, idx: int) -> str:
-                prompt = task.get("prompt", "")
+                async with sem:
+                    prompt = task.get("prompt", "")
                 if not prompt:
                     return f"Task {idx}: skipped (no prompt)"
                 t = task.get("timeout", 120)
                 label = task.get("label", f"Task {idx}")
+                dangerously_skip = cfg.get("dangerously_skip_permissions", True)
                 start = time.time()
-                out = await asyncio.to_thread(run_json, prompt=prompt, workdir=workdir, timeout=t)
+                out = await asyncio.to_thread(run_json, prompt=prompt, workdir=workdir, timeout=t, dangerously_skip_permissions=dangerously_skip)
                 elapsed = time.time() - start
                 
                 try:
@@ -102,8 +108,9 @@ def register(mcp: object) -> None:
                     continue
                 t = task.get("timeout", 120)
                 label = task.get("label", f"Task {i}")
+                dangerously_skip = cfg.get("dangerously_skip_permissions", True)
                 start = time.time()
-                out = run_json(prompt=prompt, workdir=workdir, timeout=t)
+                out = run_json(prompt=prompt, workdir=workdir, timeout=t, dangerously_skip_permissions=dangerously_skip)
                 elapsed = time.time() - start
                 
                 try:

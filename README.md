@@ -19,20 +19,27 @@ cd opencode-harness
 uv sync
 ```
 
-## Configure in opencode.jsonc
+## Configure as OpenCode Plugin (WSL)
 
-Add this entry to your `~/.config/opencode/opencode.jsonc`:
+`opencode-harness` now runs as a native OpenCode plugin and skill. 
 
-```jsonc
-"harness": {
-  "type": "local",
-  "command": ["uv", "run", "--directory", "/path/to/opencode-harness", "python", "-m", "harness_orchestrator.server"],
-  "enabled": true,
-  "timeout": 60000
-}
-```
+1. **Install the Plugin:**
+   Copy the plugin file to OpenCode's plugins directory.
+   ```bash
+   mkdir -p ~/.config/opencode/plugins
+   cp opencode-harness/harness.ts ~/.config/opencode/plugins/
+   ```
 
-You can also register only specific tools via `disabledTools` or use a subdirectory as the project root — the `.harness/` folder is created inside whatever directory the MCP server is run from.
+2. **Install the Skill:**
+   Copy the skill folder to OpenCode's skills directory. This allows you to configure limits (e.g. `max_parallel_tasks`) using YAML frontmatter.
+   ```bash
+   mkdir -p ~/.config/opencode/skills/harness-orchestrator
+   cp opencode-harness/SKILL.md ~/.config/opencode/skills/harness-orchestrator/
+   ```
+
+You no longer need to manually edit `opencode.jsonc`. The plugin will dynamically register the `harness` MCP server and automatically handle session lifecycle hooks!
+
+
 
 ## Tools (32 total)
 
@@ -80,12 +87,14 @@ You can also register only specific tools via `disabledTools` or use a subdirect
 
 ## How knowledge works
 
-When you commit a session (`knowledge_session_commit`), the engine:
+When you commit a session (`knowledge_session_commit`), the engine strictly follows the knowledge formation pipeline:
 
-1. **Reflects** on the session transcript — extracts key facts, decisions, patterns
-2. **Materializes** — creates or updates concepts in the registry
-3. **Updates the graph** — runs community detection (Leiden) on concept co-occurrence
-4. **Re-indexes** — rebuilds the vector store with updated concept embeddings
+1. **Reflects** on the session transcript to extract structured Knowledge Events.
+2. **Event Store** — appends events to the immutable log (`events.jsonl`).
+3. **Concept Registry** — resolves concept identity and evaluates promotion rules (Candidate → Emerging → Validated → Canonical).
+4. **Materializes** — generates canonical wiki files for validated concepts only.
+5. **Updates the graph** — updates reciprocal links between materialized concepts.
+6. **Re-indexes** — rebuilds the vector store for semantic search.
 
 All data lives in `.harness/` at the project root.
 

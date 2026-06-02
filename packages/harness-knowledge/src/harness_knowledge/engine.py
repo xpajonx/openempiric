@@ -980,6 +980,60 @@ aliases: {json.dumps(cdata.get('aliases', []))}
 
         return {"status": "success", "message": f"Consolidated {len(merged)} files.", "merged": merged}
 
+    def rebuild_registry(self, project: str | None = None) -> dict:
+        """Rebuild concept registry and materialized files from the immutable events.jsonl log."""
+        harness = self._resolve_harness(project)
+        registry_path = self._registry_path(project)
+        events_path = self._events_path(project)
+        concepts_dir = self._concepts_dir(project)
+
+        # 1. Clean Slate
+        temp_registry = {}
+        if concepts_dir.exists():
+            for f in concepts_dir.glob("concept_*.md"):
+                try:
+                    f.unlink()
+                except Exception:
+                    pass
+
+        # 2. Sequential Processing
+        events = self._load_events(project)
+        for event in events:
+            concept_candidates = event.get("concept_candidates", [])
+            primary_term = concept_candidates[0] if concept_candidates else event.get("concept", "General")
+            
+            cid, cdata = self._resolve_concept(primary_term, temp_registry)
+            
+            if event.get("evidence"):
+                cdata["evidence_count"] = cdata.get("evidence_count", 0) + 1
+                
+            cdata = self.evaluate_concept_status(
+                cdata=cdata,
+                e_type=event.get("event_type", "observation"),
+                session_id=event.get("session_id", "historical")
+            )
+            temp_registry[cid] = cdata
+
+        # 3. Save snapshot
+        self._save_registry(temp_registry, project)
+
+        # 4. Re-materialize
+        materialized_log = []
+        concepts_dir.mkdir(parents=True, exist_ok=True)
+        for cid, cdata in temp_registry.items():
+            if cdata["status"] in ("validated", "canonical"):
+                concept_file = concepts_dir / f"{cid}.md"
+                body = f"# {cdata['canonical_name'].replace('-', ' ').title()}\n\nThis concept is a validated organizational knowledge node.\n\n## Learnings\n"
+                
+                concept_content = f"---\nconcept_id: {cid}\ncanonical_name: {cdata['canonical_name']}\nstatus: {cdata['status']}\nconfidence: {cdata['confidence']}\nevidence_count: {cdata['evidence_count']}\nsession_count: {cdata.get('session_count', 0)}\naliases: {json.dumps(cdata.get('aliases', []))}\n---\n{body}"
+                concept_file.write_text(concept_content)
+                materialized_log.append(cid)
+        
+        # 5. Re-index
+        self.index_all(force=True)
+
+        return {"status": "success", "message": "Registry rebuilt from events log.", "materialized": len(materialized_log)}
+
     def explain_concept(self, project: str | None = None, concept_id: str = "") -> dict:
         registry = self._load_registry(project)
         if concept_id not in registry:
