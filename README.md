@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>State-of-the-art event-sourced knowledge operating system and agent runtime for AI.</strong>
+  <strong>Event-sourced knowledge operating system and agent runtime for AI.</strong>
 </p>
 
 <p align="center">
@@ -27,13 +27,19 @@ Most AI memory systems focus on *remembering*. We believe the harder and more im
 
 ## Core Capabilities
 
-- 🤖 **Subagent Orchestration** — Spawn child OpenCode sessions and execute parallel tasks.
-- 🔄 **Session Lifecycle Hooks** — Create, prompt, list, export, and fork sessions.
-- 📋 **Plan Mode** — Decompose complex prompts into deterministic sub-tasks, and execute them.
-- 📝 **Todo Tracking** — Write, read, and advance persistent task lists.
+`openempiric` is first and foremost a **knowledge accumulation system**. To enrich and accelerate this knowledge pipeline, it includes built-in orchestration tools to capture cleaner, structured telemetry:
+
+### 🧠 Knowledge Layer
 - 🕸️ **Knowledge Graph** — Hybrid vector + BM25 search over your project's historical knowledge.
 - 📂 **Isolated Contexts** — Each project keeps its own `.harness/` folder containing its private vector DB and concept registry.
 - 🛡️ **Safety Guards** — Enforces path traversal sandboxing and a >50% truncation prevention guard during writes.
+
+### ⚡ Orchestrator Boosters
+*These tools exist purely to feed, structure, and improve the knowledge base:*
+- 🤖 **Subagent Orchestration** — Spawn child OpenCode sessions and execute parallel tasks to collect multi-perspective collaboration telemetry.
+- 🔄 **Session Lifecycle Hooks** — Create, prompt, list, export, and fork sessions to capture sequential discovery pathways.
+- 📋 **Plan Mode** — Decompose complex prompts into sub-tasks, yielding well-demarcated execution context for cleaner knowledge event generation.
+- 📝 **Todo Tracking** — Maintain persistent task lists to track concrete objectives alongside validated concept growth.
 
 ---
 
