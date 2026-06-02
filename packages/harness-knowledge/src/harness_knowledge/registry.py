@@ -16,6 +16,7 @@ class ConceptEntry:
     confidence: float = 0.0
     lifecycle: str = "candidate"
     materialized: bool = False
+    relationships: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {

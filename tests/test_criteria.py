@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from harness_orchestrator.server import mcp
+from harness_knowledge.engine import KnowledgeEngine
 
 
 @pytest.fixture
@@ -214,3 +215,118 @@ class TestCriteria:
                     main()
                 except SystemExit as e:
                     assert e.code == 0 or e.code is None
+
+    def test_truncation_guard(self, tmp_proj):
+        """Verify that truncation guard blocks heavily truncated updates."""
+        _call("knowledge_init", {"project": tmp_proj})
+        eng = KnowledgeEngine(tmp_proj)
+        concepts_dir = Path(tmp_proj) / ".harness" / "directives" / "wiki_concepts"
+        concepts_dir.mkdir(parents=True, exist_ok=True)
+        file_path = concepts_dir / "concept_001.md"
+        
+        long_content = "Some initial content. " * 50
+        eng._safe_write_concept_file(file_path, long_content, tmp_proj)
+        
+        short_content = "Too short."
+        with pytest.raises(ValueError, match="Truncation risk detected"):
+            eng._safe_write_concept_file(file_path, short_content, tmp_proj)
+
+    def test_path_traversal_protection(self, tmp_proj):
+        """Verify that path traversal raises PermissionError."""
+        _call("knowledge_init", {"project": tmp_proj})
+        eng = KnowledgeEngine(tmp_proj)
+        traversal_file = Path(tmp_proj) / "outside.md"
+        with pytest.raises(PermissionError, match="Path traversal attempted"):
+            eng._safe_write_concept_file(traversal_file, "Some content", tmp_proj)
+
+    def test_typed_links_and_reciprocal(self, tmp_proj):
+        """Verify that typed links and reciprocal links are correctly parsed and saved."""
+        _call("knowledge_init", {"project": tmp_proj})
+        eng = KnowledgeEngine(tmp_proj)
+        
+        registry = eng._load_registry(tmp_proj)
+        registry["concept_001"] = {
+            "concept_id": "concept_001",
+            "canonical_name": "concept-one",
+            "aliases": ["one"],
+            "status": "validated",
+            "confidence": 3,
+            "evidence_count": 3,
+            "session_count": 2,
+            "sessions": ["session_one"]
+        }
+        registry["concept_002"] = {
+            "concept_id": "concept_002",
+            "canonical_name": "concept-two",
+            "aliases": ["two"],
+            "status": "validated",
+            "confidence": 3,
+            "evidence_count": 3,
+            "session_count": 2,
+            "sessions": ["session_two"]
+        }
+        eng._save_registry(registry, tmp_proj)
+        
+        concepts_dir = Path(tmp_proj) / ".harness" / "directives" / "wiki_concepts"
+        concepts_dir.mkdir(parents=True, exist_ok=True)
+        
+        c1_content = """---
+concept_id: concept_001
+canonical_name: concept-one
+status: validated
+confidence: 3
+evidence_count: 3
+session_count: 2
+aliases: ["one"]
+---
+# Concept One
+We link here: [[depends_on:concept_002|Concept Two]]."""
+        (concepts_dir / "concept_001.md").write_text(c1_content)
+        
+        c2_content = """---
+concept_id: concept_002
+canonical_name: concept-two
+status: validated
+confidence: 3
+evidence_count: 3
+session_count: 2
+aliases: ["two"]
+---
+# Concept Two"""
+        (concepts_dir / "concept_002.md").write_text(c2_content)
+        
+        eng.update_graph(tmp_proj)
+        
+        updated_reg = eng._load_registry(tmp_proj)
+        assert any(r["type"] == "depends_on" and r["target"] == "concept_002" for r in updated_reg["concept_001"]["relationships"])
+        assert any(r["type"] == "depended_on_by" and r["target"] == "concept_001" for r in updated_reg["concept_002"]["relationships"])
+        
+        c2_new_content = (concepts_dir / "concept_002.md").read_text()
+        assert "[[depended_on_by:concept_001|" in c2_new_content
+
+    def test_linter_broken_and_orphans(self, tmp_proj):
+        """Verify linter detects broken links and orphans."""
+        _call("knowledge_init", {"project": tmp_proj})
+        eng = KnowledgeEngine(tmp_proj)
+        
+        concepts_dir = Path(tmp_proj) / ".harness" / "directives" / "wiki_concepts"
+        concepts_dir.mkdir(parents=True, exist_ok=True)
+        
+        c1_content = """---
+concept_id: concept_001
+canonical_name: concept-one
+status: validated
+confidence: 3
+---
+# Concept One
+Broken: [[concept_999]]."""
+        (concepts_dir / "concept_001.md").write_text(c1_content)
+        
+        import asyncio
+        from harness_knowledge.linter import run_lint
+        res = asyncio.run(run_lint(Path(tmp_proj)))
+        
+        assert res["status"] == "success"
+        assert len(res["broken_links"]) == 1
+        assert res["broken_links"][0]["target"] == "concept_999"
+        assert "concept_001" in res["orphans"]

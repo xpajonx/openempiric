@@ -41,6 +41,10 @@ class FileLock:
         if self.acquired and self.lock_path.exists():
             self.lock_path.unlink()
 
+class ConceptRelation(BaseModel):
+    type: str
+    target: str
+
 class ConceptData(BaseModel):
     concept_id: str
     canonical_name: str
@@ -51,6 +55,7 @@ class ConceptData(BaseModel):
     sessions: list[str] = Field(default_factory=list)
     created_at: float = Field(default_factory=time.time)
     updated_at: float = Field(default_factory=time.time)
+    relationships: list[ConceptRelation] = Field(default_factory=list)
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -583,6 +588,72 @@ class KnowledgeEngine:
             with open(p, "a") as f:
                 f.write(event.model_dump_json() + "\n")
 
+    def _safe_write_concept_file(self, file_path: Path, content: str, project: str | None = None) -> bool:
+        concepts_dir = self._concepts_dir(project).resolve()
+        resolved_path = file_path.resolve()
+        try:
+            if not resolved_path.is_relative_to(concepts_dir):
+                raise PermissionError(f"Security Abort: Path traversal attempted -> {file_path}")
+        except ValueError:
+            raise PermissionError(f"Security Abort: Path traversal attempted -> {file_path}")
+
+        if file_path.exists():
+            try:
+                old_content = file_path.read_text(encoding="utf-8")
+                if len(content) < (len(old_content) * 0.5):
+                    raise ValueError(f"Safety Abort: New content is < 50% of old content. Truncation risk detected for {file_path}")
+            except Exception as e:
+                if isinstance(e, (PermissionError, ValueError)):
+                    raise e
+                pass
+
+        file_path.write_text(content.strip() + "\n")
+        return True
+
+    def _log_action(self, message: str, project: str | None = None):
+        harness = self._resolve_harness(project)
+        log_file = harness / "directives" / "log.md"
+        date_str = time.strftime("%Y-%m-%d %H:%M")
+        entry = f"- **[{date_str}]**: {message}\n"
+        
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        if not log_file.exists():
+            log_file.write_text("# Wiki Log\n\n", encoding="utf-8")
+        
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(entry)
+
+    def _sync_index(self, canonical_name: str, concept_id: str, project: str | None = None):
+        harness = self._resolve_harness(project)
+        index_file = harness / "directives" / "index.md"
+        
+        index_file.parent.mkdir(parents=True, exist_ok=True)
+        if not index_file.exists():
+            index_file.write_text("# Wiki Index\n\n### Concepts\n\n", encoding="utf-8")
+            
+        content = index_file.read_text(encoding="utf-8")
+        display_title = canonical_name.replace("-", " ").title()
+        link = f"- [[{concept_id}|{display_title}]]"
+        
+        if f"[[{concept_id}|" in content:
+            return
+            
+        lines = content.splitlines()
+        updated_lines = []
+        inserted = False
+        for line in lines:
+            updated_lines.append(line)
+            if line.strip() == "### Concepts" and not inserted:
+                updated_lines.append("")
+                updated_lines.append(link)
+                inserted = True
+                
+        if not inserted:
+            updated_lines.append("\n### Concepts")
+            updated_lines.append(link)
+            
+        index_file.write_text("\n".join(updated_lines) + "\n", encoding="utf-8")
+
     def _resolve_concept(self, term: str, registry: dict) -> tuple[str, dict]:
         term_clean = re.sub(r"[^\w\s-]", "", term).strip().lower()
         if not term_clean:
@@ -822,12 +893,15 @@ aliases: {json.dumps(cdata.get('aliases', []))}
 ---
 {body}"""
 
-                concept_file.write_text(concept_content.strip() + "\n")
+                self._safe_write_concept_file(concept_file, concept_content, project)
+                self._log_action(f"Ingest | Materialized concept {cid} ({cdata['canonical_name']}) as {new_status}", project)
+                self._sync_index(cdata['canonical_name'], cid, project)
                 materialized_log.append(f"{cid} ({cdata['canonical_name']}) = {new_status}")
 
             elif new_status == "deprecated":
                 if concept_file.exists():
                     concept_file.unlink()
+                    self._log_action(f"Delete | Deprecated concept {cid} ({cdata['canonical_name']})", project)
                 materialized_log.append(f"Deprecated: {cid}")
 
             else:
@@ -846,44 +920,62 @@ aliases: {json.dumps(cdata.get('aliases', []))}
             return {"status": "success", "message": "No concept files found.", "links_updated": 0}
 
         registry = self._load_registry(project)
+        
+        for cid in registry:
+            registry[cid]["relationships"] = []
+
         concepts = {}
         for f in concept_files:
             cid = f.stem
             if cid not in registry:
                 continue
             text = f.read_text()
-            links = set(re.findall(r"\[\[(concept_\d+)(?:\|[^\]]*)?\]\]", text))
-            concepts[cid] = {"path": f, "name": registry[cid]["canonical_name"].replace("-", " ").title(), "text": text, "links": links}
+            matches = re.findall(r"\[\[(?:([a-zA-Z0-9_]+):)?(concept_\d{3})(?:\|([^\]]*))?\]\]", text)
+            parsed_links = []
+            for r_type, target_id, label in matches:
+                parsed_links.append({
+                    "type": r_type or "relates_to",
+                    "target": target_id,
+                    "label": label or target_id
+                })
+            concepts[cid] = {"path": f, "name": registry[cid]["canonical_name"].replace("-", " ").title(), "text": text, "links": parsed_links}
 
-        connections = {cid: set(data["links"]) for cid, data in concepts.items()}
+        rec_map = {
+            "depends_on": "depended_on_by",
+            "depended_on_by": "depends_on",
+            "implements": "implemented_by",
+            "implemented_by": "implements",
+            "supersedes": "superseded_by",
+            "superseded_by": "supersedes",
+            "mitigates": "mitigated_by",
+            "mitigated_by": "mitigates",
+            "relates_to": "relates_to",
+        }
+
+        printable_links = {cid: {} for cid in concepts}
 
         for cid_a, data_a in concepts.items():
-            fm = re.match(r"^---\s*\n.*?\n---\s*\n(.*)$", data_a["text"], re.DOTALL)
-            body = fm.group(1).lower() if fm else data_a["text"].lower()
-            for cid_b, data_b in concepts.items():
-                if cid_a == cid_b:
-                    continue
-                bdata = registry[cid_b]
-                canon = bdata["canonical_name"].lower()
-                if re.search(rf"\b{re.escape(cid_b)}\b", body) or re.search(rf"\b{re.escape(canon)}\b", body) or re.search(rf"\b{re.escape(canon.replace('-', ' '))}\b", body):
-                    connections[cid_a].add(cid_b)
-                else:
-                    for alias in bdata.get("aliases", []):
-                        if re.search(rf"\b{re.escape(alias.lower())}\b", body):
-                            connections[cid_a].add(cid_b)
-                            break
+            for link in data_a["links"]:
+                target = link["target"]
+                rel_type = link["type"]
+                
+                if target in concepts:
+                    rel_list_a = registry[cid_a].setdefault("relationships", [])
+                    if not any(r.get("target") == target and r.get("type") == rel_type for r in rel_list_a):
+                        rel_list_a.append({"type": rel_type, "target": target})
+                    printable_links[cid_a][target] = rel_type
 
-        reciprocal = {c: set(conn) for c, conn in connections.items()}
-        for cid_a, conns in connections.items():
-            for cid_b in conns:
-                if cid_b in reciprocal:
-                    reciprocal[cid_b].add(cid_a)
+                    rec_type = rec_map.get(rel_type, "relates_to")
+                    rel_list_b = registry[target].setdefault("relationships", [])
+                    if not any(r.get("target") == cid_a and r.get("type") == rec_type for r in rel_list_b):
+                        rel_list_b.append({"type": rec_type, "target": cid_a})
+                    printable_links[target][cid_a] = rec_type
 
         links_added = 0
         for cid, data in concepts.items():
             fp = data["path"]
             text = data["text"]
-            targets = {l for l in reciprocal[cid] if l in concepts and l != cid}
+            targets = printable_links[cid]
             if not targets:
                 continue
 
@@ -895,15 +987,17 @@ aliases: {json.dumps(cdata.get('aliases', []))}
             body = re.split(r"\n##\s+Related", fm.group(2), flags=re.IGNORECASE)[0].strip()
 
             related_lines = []
-            for tc in sorted(targets):
+            for tc, r_type in sorted(targets.items()):
                 tname = registry[tc]["canonical_name"].replace("-", " ").title()
-                related_lines.append(f"- [[{tc}|{tname}]] — {tname}")
+                r_label = r_type.replace("_", " ").title()
+                related_lines.append(f"- [[{r_type}:{tc}|{tname}]] — {tname} ({r_label})")
 
             new_text = header + body + "\n\n## Related Knowledge\n" + "\n".join(related_lines) + "\n"
             if new_text != text:
-                fp.write_text(new_text)
-                links_added += len(targets) - len(data["links"])
+                self._safe_write_concept_file(fp, new_text, project)
+                links_added += 1
 
+        self._save_registry(registry, project)
         return {"status": "success", "links_updated": links_added, "files_scanned": len(concept_files)}
 
     def get_events(self, project: str | None = None, concept: str = "", event_type: str = "", session_id: str = "") -> list[dict]:
@@ -1043,7 +1137,8 @@ aliases: {json.dumps(cdata.get('aliases', []))}
                 body = f"# {cdata['canonical_name'].replace('-', ' ').title()}\n\nThis concept is a validated organizational knowledge node.\n\n## Learnings\n"
                 
                 concept_content = f"---\nconcept_id: {cid}\ncanonical_name: {cdata['canonical_name']}\nstatus: {cdata['status']}\nconfidence: {cdata['confidence']}\nevidence_count: {cdata['evidence_count']}\nsession_count: {cdata.get('session_count', 0)}\naliases: {json.dumps(cdata.get('aliases', []))}\n---\n{body}"
-                concept_file.write_text(concept_content)
+                self._safe_write_concept_file(concept_file, concept_content, project)
+                self._sync_index(cdata['canonical_name'], cid, project)
                 materialized_log.append(cid)
         
         # 5. Re-index
@@ -1093,4 +1188,5 @@ aliases: {json.dumps(cdata.get('aliases', []))}
         if sf.exists():
             sf.unlink()
             
+        self._log_action(f"Merge | Merged secondary concept {secondary_id} into primary {primary_id} ({pdata['canonical_name']})", project)
         return {"status": "success", "message": f"Merged {secondary_id} into {primary_id}", "concept": pdata}

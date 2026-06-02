@@ -363,3 +363,96 @@ def mount_tools(mcp: object) -> None:
             return render_panel("Merge Error", [res.get("message", "")], status="error")
             
         return render_panel("Concepts Merged", [res.get("message", "")], status="organize")
+
+    @mcp.tool()
+    def knowledge_graph_query(project: str = "", concept_id: str = "", direction: str = "both") -> str:
+        """Query semantic relationships for a concept.
+        
+        Args:
+            project: Project directory path. Defaults to current directory.
+            concept_id: Target concept ID.
+            direction: Query direction: incoming, outgoing, or both.
+        """
+        eng = KnowledgeEngine(project or None)
+        try:
+            registry = eng._load_registry(project or None)
+        except Exception as e:
+            return render_panel("Query Failure", [f"Error: {e}"], status="error")
+            
+        if concept_id not in registry:
+            return render_panel("Query Error", [f"Concept {concept_id} not found."], status="error")
+            
+        cdata = registry[concept_id]
+        lines = [f"Concept: {cdata.get('canonical_name', '').title()} ({concept_id})", ""]
+        
+        if direction in ("outgoing", "both"):
+            lines.append("Outgoing Relationships:")
+            outgoing = cdata.get("relationships", [])
+            for rel in outgoing:
+                target_id = rel.get("target")
+                t_name = registry.get(target_id, {}).get("canonical_name", target_id).replace("-", " ").title()
+                r_type = rel.get("type", "relates_to").replace("_", " ").title()
+                lines.append(f"  - [{r_type}] -> {t_name} ({target_id})")
+            if not outgoing:
+                lines.append("  - None")
+            lines.append("")
+                
+        if direction in ("incoming", "both"):
+            lines.append("Incoming Relationships:")
+            incoming_count = 0
+            for cid, data in registry.items():
+                if cid == concept_id:
+                    continue
+                for rel in data.get("relationships", []):
+                    if rel.get("target") == concept_id:
+                        t_name = data.get("canonical_name", cid).replace("-", " ").title()
+                        r_type = rel.get("type", "relates_to").replace("_", " ").title()
+                        lines.append(f"  - {t_name} ({cid}) -> [{r_type}]")
+                        incoming_count += 1
+            if incoming_count == 0:
+                lines.append("  - None")
+                
+        return render_panel("Graph Query Results", lines, status="organize")
+
+    @mcp.tool()
+    def knowledge_lint(project: str = "", max_parallel: int = 4) -> str:
+        """Check the knowledge base for broken links and orphan concepts in parallel.
+        
+        Args:
+            project: Project directory path. Defaults to current directory.
+            max_parallel: Concurrency limit for link validation.
+        """
+        import asyncio
+        from .linter import run_lint
+        from pathlib import Path
+        
+        target = Path(project) if project else Path.cwd()
+        try:
+            res = asyncio.run(run_lint(target, max_parallel=max_parallel))
+        except Exception as e:
+            return render_panel("Lint Failure", [f"Error: {e}"], status="error")
+            
+        if res.get("status") == "error":
+            return render_panel("Lint Error", [res.get("message", "")], status="error")
+            
+        lines = [
+            f"Files Scanned: {res.get('files_scanned', 0)}",
+            f"Broken Links:  {len(res.get('broken_links', []))}",
+            f"Orphan Nodes:  {len(res.get('orphans', []))}",
+            ""
+        ]
+        if res.get("broken_links"):
+            lines.append("Broken Links:")
+            for bl in res["broken_links"]:
+                lines.append(f"  ❌ {bl['source']} -> {bl['target']} (in {Path(bl['file']).name})")
+            lines.append("")
+            
+        if res.get("orphans"):
+            lines.append("Orphan Concepts:")
+            for op in res["orphans"]:
+                lines.append(f"  ⚠️ {op}")
+                
+        if not res.get("broken_links") and not res.get("orphans"):
+            lines.append("✨ All links verified successfully and no orphans found!")
+            
+        return render_panel("Lint Results", lines, status="error" if res.get('broken_links') else "ok")

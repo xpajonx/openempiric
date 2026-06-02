@@ -62,6 +62,10 @@ def main():
     session_start_parser = sub.add_parser("session-start")
     session_start_parser.add_argument("project", type=str)
 
+    lint_parser = sub.add_parser("lint")
+    lint_parser.add_argument("project", type=str)
+    lint_parser.add_argument("--workers", type=int, default=4)
+
     args = parser.parse_args()
     eng = KnowledgeEngine()
 
@@ -142,6 +146,24 @@ def main():
             print(render_panel("Event", [f"Type: {ev['event_type']}", f"Summary: {ev.get('summary', '')}", f"Evidence: {ev.get('evidence', '')}"], status="ok"))
         except KeyError:
             print(render_panel("Not Found", [f"No event: {args.event_id}"], status="error"))
+
+    elif args.command == "lint":
+        import asyncio
+        from .linter import run_lint
+        res = asyncio.run(run_lint(Path(args.project), max_parallel=args.workers))
+        if res["status"] == "error":
+            print(render_panel("Lint Error", [res["message"]], status="error"))
+        else:
+            lines = [
+                f"Files scanned: {res.get('files_scanned', 0)}",
+                f"Broken links:  {len(res.get('broken_links', []))}",
+                f"Orphan nodes:  {len(res.get('orphans', []))}"
+            ]
+            for bl in res.get("broken_links", []):
+                lines.append(f"  ❌ Broken link: {bl['source']} -> {bl['target']}")
+            for op in res.get("orphans", []):
+                lines.append(f"  ⚠️ Orphan concept: {op}")
+            print(render_panel("Lint Results", lines, status="error" if res.get('broken_links') else "ok"))
 
 
 if __name__ == "__main__":
