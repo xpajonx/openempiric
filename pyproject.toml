@@ -1,0 +1,12 @@
+[project]
+name = "harness-mcp"
+version = "0.1.0"
+description = "Monorepo for harness MCP workspace"
+requires-python = ">=3.12"
+
+[workspace]
+members = [
+    "packages/harness-orchestrator",
+    "packages/harness-knowledge",
+    "packages/harness-tui",
+]

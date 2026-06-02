@@ -1,0 +1,17 @@
+[project]
+name = "harness-orchestrator"
+version = "0.1.0"
+description = "Process orchestrator MCP server — session lifecycle, subagent fan-out, plan mode, todo lists, and knowledge wiring for opencode"
+requires-python = ">=3.12"
+dependencies = [
+    "fastmcp>=3.2",
+    "opencode-ai>=0.1.0a36",
+    "harness-tui",
+    "harness-knowledge",
+]
+
+[project.entry-points."mcp"]
+harness = "harness_orchestrator.server:main"
+
+[tool.uv]
+dev-dependencies = ["pytest>=8"]

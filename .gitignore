@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+dist/
+
+# uv
+uv.lock
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Agent runtime state
+.harness/
+.local_vector_db/
+
+# Agent scaffolding
+AGENTS.md
+CLAUDE.md
+init.sh

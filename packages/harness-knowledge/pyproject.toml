@@ -1,0 +1,14 @@
+[project]
+name = "harness-knowledge"
+version = "0.1.0"
+description = "Local-first hybrid RAG knowledge layer — concept registry, knowledge events, vector search, and harness bootstrapper"
+requires-python = ">=3.12"
+dependencies = [
+    "chromadb",
+    "fastembed",
+    "watchdog",
+    "harness-tui",
+]
+
+[tool.uv]
+dev-dependencies = ["pytest>=8"]
