@@ -55,7 +55,7 @@ uv sync
 
 ## Configure as OpenCode Plugin (WSL)
 
-`openempiric` operates as a native OpenCode plugin and skill.
+`openempiric` operates as a native OpenCode plugin.
 
 1. **Install the Plugin:**
    Copy the plugin file to OpenCode's plugins directory.
@@ -64,14 +64,15 @@ uv sync
    cp openempiric/plugins/openempiric.ts ~/.config/opencode/plugins/
    ```
 
-2. **Install the Skill:**
-   Copy the skill folder to OpenCode's skills directory.
-   ```bash
-   mkdir -p ~/.config/opencode/skills/harness-orchestrator
-   cp openempiric/skills/harness-orchestrator/SKILL.md ~/.config/opencode/skills/harness-orchestrator/
+2. **Register the Plugin:**
+   Add `"openempiric"` to the `"plugin"` array in `~/.config/opencode/opencode.jsonc`:
+   ```json
+   "plugin": [
+     "openempiric"
+   ]
    ```
 
-The plugin will dynamically register the `openempiric` MCP server and automatically handle session lifecycle hooks!
+The plugin dynamically registers the `openempiric` MCP server and automatically loads the required agent memory and orchestration instructions!
 
 ---
 
