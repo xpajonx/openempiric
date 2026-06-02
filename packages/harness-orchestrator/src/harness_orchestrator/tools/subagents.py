@@ -19,8 +19,30 @@ def register(mcp: object) -> None:
         dangerously_skip_permissions: bool = True,
     ) -> str:
         """Run opencode with a prompt and return the response. Use this to delegate tasks to child opencode sessions — refactoring, testing, research — and get results back."""
-        result = run(prompt=prompt, workdir=workdir, timeout=timeout, dangerously_skip_permissions=dangerously_skip_permissions)
-        return result.text
+        result = run_json(prompt=prompt, workdir=workdir, timeout=timeout, dangerously_skip_permissions=dangerously_skip_permissions)
+        
+        telemetry_info = ""
+        try:
+            from harness_knowledge.engine import KnowledgeEngine
+            eng = KnowledgeEngine(workdir or None)
+            total_tool_calls = sum(1 for e in result.transcript.events if e.type == "tool_use")
+            telemetry = {
+                "duration_sec": int(result.duration_s),
+                "total_tool_calls": total_tool_calls
+            }
+            eng.session_commit(
+                project=workdir or None,
+                conversation_text=result.text,
+                session_id=result.session_id,
+                telemetry=telemetry
+            )
+            telemetry_info = f"\n\n[Telemetry: session {result.session_id} ingested ({int(result.duration_s)}s, {total_tool_calls} tools)]"
+        except ImportError:
+            pass
+        except Exception as e:
+            telemetry_info = f"\n\n[Telemetry Error: {e}]"
+            
+        return result.text + telemetry_info
 
     @mcp.tool()
     def harness_run_tasks(tasks: str, workdir: str = "", parallel: bool = False) -> str:
@@ -49,8 +71,21 @@ def register(mcp: object) -> None:
                 t = task.get("timeout", 120)
                 label = task.get("label", f"Task {idx}")
                 start = time.time()
-                out = await asyncio.to_thread(run, prompt=prompt, workdir=workdir, timeout=t)
+                out = await asyncio.to_thread(run_json, prompt=prompt, workdir=workdir, timeout=t)
                 elapsed = time.time() - start
+                
+                try:
+                    from harness_knowledge.engine import KnowledgeEngine
+                    eng = KnowledgeEngine(workdir or None)
+                    eng.session_commit(
+                        project=workdir or None,
+                        conversation_text=out.text,
+                        session_id=out.session_id,
+                        telemetry={"duration_sec": int(out.duration_s), "total_tool_calls": sum(1 for e in out.transcript.events if e.type == "tool_use")}
+                    )
+                except Exception:
+                    pass
+                
                 return f"[{label}] ({elapsed:.1f}s)\n{out.text}"
 
             async def _run_all() -> list[str]:
@@ -68,8 +103,21 @@ def register(mcp: object) -> None:
                 t = task.get("timeout", 120)
                 label = task.get("label", f"Task {i}")
                 start = time.time()
-                out = run(prompt=prompt, workdir=workdir, timeout=t)
+                out = run_json(prompt=prompt, workdir=workdir, timeout=t)
                 elapsed = time.time() - start
+                
+                try:
+                    from harness_knowledge.engine import KnowledgeEngine
+                    eng = KnowledgeEngine(workdir or None)
+                    eng.session_commit(
+                        project=workdir or None,
+                        conversation_text=out.text,
+                        session_id=out.session_id,
+                        telemetry={"duration_sec": int(out.duration_s), "total_tool_calls": sum(1 for e in out.transcript.events if e.type == "tool_use")}
+                    )
+                except Exception:
+                    pass
+                
                 results.append(f"[{label}] ({elapsed:.1f}s)\n{out.text}")
 
         return "\n---\n".join(results)

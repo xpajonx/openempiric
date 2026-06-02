@@ -311,3 +311,55 @@ def mount_tools(mcp: object) -> None:
             f"Session: {ev.get('session_id', '')}",
         ]
         return render_panel("Knowledge Event Detail", lines, status="ok")
+
+    @mcp.tool()
+    def knowledge_explain_concept(project: str = "", concept_id: str = "") -> str:
+        """Explain a concept and its evolution based on accumulated evidence.
+        
+        Args:
+            project: Project directory path. Defaults to current directory.
+            concept_id: The concept UUID
+        """
+        eng = KnowledgeEngine(project or None)
+        try:
+            res = eng.explain_concept(project or None, concept_id)
+        except Exception as e:
+            return render_panel("Explain Failure", [f"Error: {e}"], status="error")
+            
+        if res.get("status") == "error":
+            return render_panel("Concept Not Found", [res.get("message", "")], status="error")
+            
+        cdata = res["explanation"]["concept"]
+        lines = [
+            f"Concept: {cdata.get('canonical_name', '').title()} ({cdata.get('concept_id', '')})",
+            f"Status: {cdata.get('status', '').upper()}",
+            f"Confidence: {cdata.get('confidence', '')}/5",
+            f"Total Events: {res['explanation'].get('total_events', 0)}",
+            f"Aliases: {', '.join(cdata.get('aliases', []))}",
+            "",
+            "Recent Evidence:"
+        ]
+        for ev in res["explanation"].get("recent_evidence", []):
+            lines.append(f"  - {ev}")
+        
+        return render_panel("Concept Explanation", lines, status="ok")
+
+    @mcp.tool()
+    def knowledge_merge_concepts(project: str = "", primary_id: str = "", secondary_id: str = "") -> str:
+        """Merge a secondary concept into a primary concept.
+        
+        Args:
+            project: Project directory path. Defaults to current directory.
+            primary_id: The UUID of the concept to keep
+            secondary_id: The UUID of the concept to merge and remove
+        """
+        eng = KnowledgeEngine(project or None)
+        try:
+            res = eng.merge_concepts(project or None, primary_id, secondary_id)
+        except Exception as e:
+            return render_panel("Merge Failure", [f"Error: {e}"], status="error")
+            
+        if res.get("status") == "error":
+            return render_panel("Merge Error", [res.get("message", "")], status="error")
+            
+        return render_panel("Concepts Merged", [res.get("message", "")], status="organize")

@@ -12,8 +12,45 @@ import uuid
 from collections import Counter
 from pathlib import Path
 from typing import Any, Literal
+import difflib
 
 from pydantic import BaseModel, Field
+
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+class FileLock:
+    def __init__(self, lock_path: Path, timeout: float = 10.0):
+        self.lock_path = lock_path
+        self.timeout = timeout
+        self.acquired = False
+
+    def __enter__(self):
+        start_time = time.time()
+        while time.time() - start_time < self.timeout:
+            try:
+                self.lock_path.parent.mkdir(parents=True, exist_ok=True)
+                self.lock_path.touch(exist_ok=False)
+                self.acquired = True
+                return self
+            except FileExistsError:
+                time.sleep(0.1)
+        raise TimeoutError(f"Could not acquire lock on {self.lock_path}")
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.acquired and self.lock_path.exists():
+            self.lock_path.unlink()
+
+class ConceptData(BaseModel):
+    concept_id: str
+    canonical_name: str
+    aliases: list[str] = Field(default_factory=list)
+    status: Literal["candidate", "emerging", "validated", "canonical", "deprecated"] = "candidate"
+    confidence: int = Field(default=1, ge=1, le=5)
+    evidence_count: int = 0
+    sessions: list[str] = Field(default_factory=list)
+    created_at: float = Field(default_factory=time.time)
+    updated_at: float = Field(default_factory=time.time)
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -486,31 +523,37 @@ class KnowledgeEngine:
 
     def _load_registry(self, project: str | None = None) -> dict:
         p = self._registry_path(project)
-        if p.exists():
-            try:
-                return json.loads(p.read_text())
-            except Exception:
-                return {}
-        return {}
+        lock_path = p.with_suffix(".lock")
+        with FileLock(lock_path):
+            if p.exists():
+                try:
+                    return json.loads(p.read_text())
+                except Exception:
+                    return {}
+            return {}
 
     def _save_registry(self, registry: dict, project: str | None = None):
         p = self._registry_path(project)
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(registry, indent=2))
+        lock_path = p.with_suffix(".lock")
+        with FileLock(lock_path):
+            p.write_text(json.dumps(registry, indent=2))
 
     def _load_events(self, project: str | None = None) -> list[dict]:
         p = self._events_path(project)
-        if not p.exists():
-            return []
-        events = []
-        try:
-            for line in p.read_text().splitlines():
-                line = line.strip()
-                if line:
-                    events.append(json.loads(line))
-        except Exception:
-            return []
-        return events
+        lock_path = p.with_suffix(".lock")
+        with FileLock(lock_path):
+            if not p.exists():
+                return []
+            events = []
+            try:
+                for line in p.read_text().splitlines():
+                    line = line.strip()
+                    if line:
+                        events.append(json.loads(line))
+            except Exception:
+                return []
+            return events
 
     def _append_event(self, event: dict | KnowledgeEvent, project: str | None = None):
         if isinstance(event, dict):
@@ -519,21 +562,40 @@ class KnowledgeEngine:
 
         p = self._events_path(project)
         p.parent.mkdir(parents=True, exist_ok=True)
-        with open(p, "a") as f:
-            f.write(event.model_dump_json() + "\n")
+        lock_path = p.with_suffix(".lock")
+        with FileLock(lock_path):
+            with open(p, "a") as f:
+                f.write(event.model_dump_json() + "\n")
 
     def _resolve_concept(self, term: str, registry: dict) -> tuple[str, dict]:
-        term_clean = term.strip().lower()
+        term_clean = re.sub(r"[^\w\s-]", "", term).strip().lower()
+        if not term_clean:
+            term_clean = term.strip().lower()
+
         for cid, data in registry.items():
             canon = data.get("canonical_name", "").lower()
             aliases = [a.lower() for a in data.get("aliases", [])]
             if term_clean == canon or term_clean in aliases:
                 return cid, data
 
+        for cid, data in registry.items():
+            canon = data.get("canonical_name", "").lower()
+            aliases = [a.lower() for a in data.get("aliases", [])]
+            candidates = [canon] + aliases
+            for cand in candidates:
+                if difflib.SequenceMatcher(None, term_clean, cand).ratio() >= 0.85:
+                    if term not in data.get("aliases", []):
+                        data.setdefault("aliases", []).append(term)
+                    return cid, data
+
         next_num = len(registry) + 1
         new_id = f"concept_{next_num:03d}"
         canon_name = re.sub(r"[^a-zA-Z0-9\s-]", "", term).strip().replace(" ", "-").lower() or f"concept-{next_num}"
-        new_data = {"canonical_name": canon_name, "aliases": [term], "status": "candidate", "confidence": 1, "evidence_count": 0, "session_count": 0}
+        new_data = ConceptData(
+            concept_id=new_id,
+            canonical_name=canon_name,
+            aliases=[term]
+        ).model_dump()
         registry[new_id] = new_data
         return new_id, new_data
 
@@ -635,6 +697,36 @@ project: {project or 'default'}
 
         return {"status": "success", "report_path": str(report_file), "knowledge_events": yaml_events, "canonical_events": canonical_events}
 
+    def evaluate_concept_status(self, cdata: dict, e_type: str, session_id: str) -> dict:
+        """Evaluate and promote concept status based on session and evidence counts."""
+        confidence = cdata.get("confidence", 1)
+        
+        if session_id not in cdata.setdefault("sessions", []):
+            cdata["sessions"].append(session_id)
+            cdata["session_count"] = len(cdata["sessions"])
+        
+        if e_type == "validation":
+            confidence = min(5, confidence + 1)
+        elif e_type == "failure":
+            confidence = max(1, confidence - 1)
+        cdata["confidence"] = confidence
+
+        current_status = cdata.get("status", "candidate")
+
+        if e_type == "deprecation":
+            new_status = "deprecated"
+        elif cdata.get("session_count", 0) >= 5 and cdata["confidence"] >= 4:
+            new_status = "canonical"
+        elif cdata.get("evidence_count", 0) >= 3 or current_status == "validated":
+            new_status = "validated"
+        elif cdata.get("session_count", 0) >= 2:
+            new_status = "emerging"
+        else:
+            new_status = "candidate"
+
+        cdata["status"] = new_status
+        return cdata
+
     def materialize_concepts(self, project: str | None = None) -> dict:
         harness = self._resolve_harness(project)
         sessions_dir = self._sessions_dir(project)
@@ -674,30 +766,11 @@ project: {project or 'default'}
 
             cid, cdata = self._resolve_concept(concept, registry)
 
-            cdata["evidence_count"] = cdata.get("evidence_count", 0) + (1 if evidence else 0)
-            cdata["session_count"] = cdata.get("session_count", 0) + 1
+            if evidence:
+                cdata["evidence_count"] = cdata.get("evidence_count", 0) + 1
 
-            confidence = cdata.get("confidence", 1)
-            if e_type == "validation":
-                confidence = min(5, confidence + 1)
-            elif e_type == "failure":
-                confidence = max(1, confidence - 1)
-            cdata["confidence"] = confidence
-
-            current_status = cdata.get("status", "candidate")
-
-            if e_type == "deprecation":
-                new_status = "deprecated"
-            elif cdata["session_count"] >= 5 and cdata["confidence"] >= 4:
-                new_status = "canonical"
-            elif cdata["evidence_count"] >= 3 or current_status == "validated":
-                new_status = "validated"
-            elif cdata["session_count"] >= 2:
-                new_status = "emerging"
-            else:
-                new_status = "candidate"
-
-            cdata["status"] = new_status
+            cdata = self.evaluate_concept_status(cdata, e_type, session_id=latest.stem)
+            new_status = cdata["status"]
             registry[cid] = cdata
 
             concept_file = concepts_dir / f"{cid}.md"
@@ -906,3 +979,47 @@ aliases: {json.dumps(cdata.get('aliases', []))}
             self.index_all(force=True)
 
         return {"status": "success", "message": f"Consolidated {len(merged)} files.", "merged": merged}
+
+    def explain_concept(self, project: str | None = None, concept_id: str = "") -> dict:
+        registry = self._load_registry(project)
+        if concept_id not in registry:
+            return {"status": "error", "message": f"Concept {concept_id} not found."}
+        
+        cdata = registry[concept_id]
+        events = self.get_events(project, concept=cdata["canonical_name"])
+        
+        summary = {
+            "concept": cdata,
+            "total_events": len(events),
+            "recent_evidence": [e.get("evidence") for e in events[-5:] if e.get("evidence")]
+        }
+        return {"status": "success", "explanation": summary}
+
+    def merge_concepts(self, project: str | None = None, primary_id: str = "", secondary_id: str = "") -> dict:
+        registry = self._load_registry(project)
+        if primary_id not in registry or secondary_id not in registry:
+            return {"status": "error", "message": "One or both concepts not found."}
+        
+        pdata = registry[primary_id]
+        sdata = registry[secondary_id]
+        
+        new_aliases = set(pdata.get("aliases", []) + sdata.get("aliases", []) + [sdata.get("canonical_name")])
+        pdata["aliases"] = list(new_aliases)
+        
+        pdata["evidence_count"] = pdata.get("evidence_count", 0) + sdata.get("evidence_count", 0)
+        pdata["sessions"] = list(set(pdata.get("sessions", []) + sdata.get("sessions", [])))
+        pdata["session_count"] = len(pdata["sessions"])
+        
+        del registry[secondary_id]
+        self._save_registry(registry, project)
+        
+        pdata = self.evaluate_concept_status(pdata, "merge", "system")
+        registry[primary_id] = pdata
+        self._save_registry(registry, project)
+        
+        concepts_dir = self._concepts_dir(project)
+        sf = concepts_dir / f"{secondary_id}.md"
+        if sf.exists():
+            sf.unlink()
+            
+        return {"status": "success", "message": f"Merged {secondary_id} into {primary_id}", "concept": pdata}
