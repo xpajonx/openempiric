@@ -3,7 +3,6 @@ from __future__ import annotations
 import math
 import re
 from collections import Counter
-from pathlib import Path
 
 
 def tokenize(text: str) -> list[str]:
@@ -11,7 +10,12 @@ def tokenize(text: str) -> list[str]:
 
 
 class BM25:
-    def __init__(self, doc_freqs: dict[str, int] | None = None, avg_dl: float = 0, total_docs: int = 0):
+    def __init__(
+        self,
+        doc_freqs: dict[str, int] | None = None,
+        avg_dl: float = 0,
+        total_docs: int = 0,
+    ):
         self.doc_freqs = doc_freqs or {}
         self.avg_dl = avg_dl
         self.total_docs = total_docs
@@ -34,7 +38,11 @@ class BM25:
                 idf_cache[t] = math.log((self.total_docs - df + 0.5) / (df + 0.5) + 1.0)
             idf = idf_cache[t]
             freq = tf.get(t, 0)
-            score += idf * (freq * (self.k1 + 1)) / (freq + self.k1 * (1 - self.b + self.b * doc_len / self.avg_dl))
+            score += (
+                idf
+                * (freq * (self.k1 + 1))
+                / (freq + self.k1 * (1 - self.b + self.b * doc_len / self.avg_dl))
+            )
 
         return score
 
@@ -46,6 +54,7 @@ class DenseSearch:
     def _lazy_model(self):
         if self._model is None:
             from fastembed import TextEmbedding
+
             self._model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
         return self._model
 

@@ -41,9 +41,9 @@ def render_panel(title: str, lines: list, status: str = "OK", width: int = 72) -
     for line in lines:
         line_str = str(line)
         while len(line_str) > width - 4:
-            chunk = line_str[:width - 4]
+            chunk = line_str[: width - 4]
             panel_lines.append(f"║ {chunk.ljust(width - 4)} ║")
-            line_str = line_str[width - 4:]
+            line_str = line_str[width - 4 :]
         panel_lines.append(f"║ {line_str.ljust(width - 4)} ║")
 
     panel_lines.append(border_bottom)
@@ -60,7 +60,9 @@ def render_table(headers: list, rows: list, widths: list | None = None) -> list:
             for i in range(len(headers))
         ]
 
-    header_line = " | ".join(str(headers[i]).ljust(widths[i]) for i in range(len(headers)))
+    header_line = " | ".join(
+        str(headers[i]).ljust(widths[i]) for i in range(len(headers))
+    )
     separator = "-+-".join("-" * widths[i] for i in range(len(widths)))
 
     output = [header_line, separator]

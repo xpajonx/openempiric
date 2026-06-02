@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -84,6 +83,7 @@ class ConceptRegistry:
 
     def stale_candidates(self, max_sessions: int = 10) -> list[str]:
         return [
-            cid for cid, entry in self.concepts.items()
+            cid
+            for cid, entry in self.concepts.items()
             if entry.lifecycle == "candidate" and entry.session_count > max_sessions
         ]

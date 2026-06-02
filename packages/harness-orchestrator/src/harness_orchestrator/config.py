@@ -3,6 +3,7 @@ from pathlib import Path
 
 SKILL_PATH = Path("/home/xpajonx/.config/opencode/skills/harness-orchestrator/SKILL.md")
 
+
 def load_harness_config() -> dict:
     default_config = {
         "subagent_model": "gemini-3.5-flash",
@@ -10,11 +11,11 @@ def load_harness_config() -> dict:
         "max_parallel_tasks": 4,
         "knowledge_path": ".harness",
         "auto_reflect": True,
-        "dangerously_skip_permissions": True
+        "dangerously_skip_permissions": True,
     }
     if not SKILL_PATH.exists():
         return default_config
-        
+
     try:
         content = SKILL_PATH.read_text(encoding="utf-8")
         if content.startswith("---"):

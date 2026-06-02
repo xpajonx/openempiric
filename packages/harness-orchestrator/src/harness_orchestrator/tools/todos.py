@@ -31,6 +31,7 @@ def _save_todos(todos: list[dict], workdir: str = ""):
 
 def register(mcp: object) -> None:
     from fastmcp import FastMCP
+
     if not isinstance(mcp, FastMCP):
         return
 
@@ -54,12 +55,14 @@ def register(mcp: object) -> None:
             content = item.get("content", "")
             if not content:
                 continue
-            todos.append({
-                "id": item.get("id", str(uuid.uuid4())),
-                "content": content,
-                "status": item.get("status", "pending"),
-                "created_at": time.strftime("%Y-%m-%d %H:%M"),
-            })
+            todos.append(
+                {
+                    "id": item.get("id", str(uuid.uuid4())),
+                    "content": content,
+                    "status": item.get("status", "pending"),
+                    "created_at": time.strftime("%Y-%m-%d %H:%M"),
+                }
+            )
 
         _save_todos(todos, workdir)
 
@@ -77,7 +80,9 @@ def register(mcp: object) -> None:
 
         summary = [f"Todo list ({len(todos)} items):"]
         for t in todos:
-            status_icon = {"pending": " ", "in_progress": "→", "completed": "✓"}.get(t.get("status", "pending"), " ")
+            status_icon = {"pending": " ", "in_progress": "→", "completed": "✓"}.get(
+                t.get("status", "pending"), " "
+            )
             summary.append(f"  [{status_icon}] {t['content']}  (id: {t['id']})")
         return "\n".join(summary)
 
@@ -106,7 +111,11 @@ def register(mcp: object) -> None:
         if status:
             target["status"] = status
         else:
-            cycle = {"pending": "in_progress", "in_progress": "completed", "completed": "pending"}
+            cycle = {
+                "pending": "in_progress",
+                "in_progress": "completed",
+                "completed": "pending",
+            }
             target["status"] = cycle.get(target["status"], "in_progress")
 
         if target["status"] == "completed":

@@ -29,7 +29,11 @@ def add_wikilink(file_path: Path, target_id: str, display_name: str) -> bool:
 
 def update_concept_graph(concepts_dir: Path) -> dict:
     if not concepts_dir.exists():
-        return {"status": "error", "message": f"Concepts dir not found: {concepts_dir}", "links_updated": 0}
+        return {
+            "status": "error",
+            "message": f"Concepts dir not found: {concepts_dir}",
+            "links_updated": 0,
+        }
 
     md_files = sorted(concepts_dir.rglob("*.md"))
     links_updated = 0
@@ -48,8 +52,14 @@ def update_concept_graph(concepts_dir: Path) -> dict:
                     break
 
             if target_exists:
-                reciprocal = add_wikilink(target_file, file.stem, file.stem.replace("_", " "))
+                reciprocal = add_wikilink(
+                    target_file, file.stem, file.stem.replace("_", " ")
+                )
                 if reciprocal:
                     links_updated += 1
 
-    return {"status": "ok", "links_updated": links_updated, "files_scanned": len(md_files)}
+    return {
+        "status": "ok",
+        "links_updated": links_updated,
+        "files_scanned": len(md_files),
+    }

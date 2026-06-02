@@ -11,20 +11,32 @@ from harness_tui.panels import render_panel
 def migrate_from_central(central_path: str | Path = "", dry_run: bool = True) -> str:
     central = Path(central_path or "~/.config/opencode/memory").expanduser()
     if not central.exists():
-        return render_panel("Migration", [f"Central memory path not found: {central}"], status="error")
+        return render_panel(
+            "Migration", [f"Central memory path not found: {central}"], status="error"
+        )
 
     projects_dir = Path.home() / "projects"
     if not projects_dir.exists():
-        return render_panel("Migration", [f"Projects directory not found: {projects_dir}"], status="error")
+        return render_panel(
+            "Migration",
+            [f"Projects directory not found: {projects_dir}"],
+            status="error",
+        )
 
     registry_file = central / "wiki_registry.json"
     if not registry_file.exists():
-        return render_panel("Migration", ["No wiki_registry.json found in central memory."], status="info")
+        return render_panel(
+            "Migration",
+            ["No wiki_registry.json found in central memory."],
+            status="info",
+        )
 
     try:
         registry = json.loads(registry_file.read_text())
     except Exception as e:
-        return render_panel("Migration", [f"Error reading registry: {e}"], status="error")
+        return render_panel(
+            "Migration", [f"Error reading registry: {e}"], status="error"
+        )
 
     project_files: dict[str, list[str]] = {}
     for path_str in registry:
@@ -47,7 +59,9 @@ def migrate_from_central(central_path: str | Path = "", dry_run: bool = True) ->
 
         harness_dir = proj_dir / ".harness"
         if dry_run:
-            actions.append(f"WOULD MIGRATE {proj}: {len(files)} files → {harness_dir / 'directives/'}")
+            actions.append(
+                f"WOULD MIGRATE {proj}: {len(files)} files → {harness_dir / 'directives/'}"
+            )
             continue
 
         for src_path in files:
@@ -66,15 +80,19 @@ def migrate_from_central(central_path: str | Path = "", dry_run: bool = True) ->
         actions.append(f"OK {proj}: {len(files)} files")
 
     if dry_run:
-        lines = [
-            f"Central memory found at {central}",
-            f"Registry has {len(registry)} files across {len(project_files)} projects",
-            "",
-            "Would migrate to per-project .harness/:",
-        ] + [f"  {a}" for a in actions] + [
-            "",
-            "Run with dry_run=False to execute migration.",
-        ]
+        lines = (
+            [
+                f"Central memory found at {central}",
+                f"Registry has {len(registry)} files across {len(project_files)} projects",
+                "",
+                "Would migrate to per-project .harness/:",
+            ]
+            + [f"  {a}" for a in actions]
+            + [
+                "",
+                "Run with dry_run=False to execute migration.",
+            ]
+        )
         return render_panel("Migration Preview", lines, status="info")
     else:
         lines = [
@@ -85,7 +103,14 @@ def migrate_from_central(central_path: str | Path = "", dry_run: bool = True) ->
 
 def main():
     dry_run = "--no-dry-run" not in sys.argv
-    central = next((a for a in sys.argv[1:] if not a.startswith("--") and "/" in a or "memory" in a.lower()), "")
+    central = next(
+        (
+            a
+            for a in sys.argv[1:]
+            if not a.startswith("--") and "/" in a or "memory" in a.lower()
+        ),
+        "",
+    )
     print(migrate_from_central(central, dry_run=dry_run))
 
 

@@ -11,13 +11,14 @@ _FILE_REFS = re.compile(r"\b[\w./-]+\.\w{1,5}\b")
 
 def decompose(prompt: str) -> list[str]:
     """Split a prompt into sub-tasks.
-    
+
     This method delegates to a small LLM when the HARNESS_PLANNER_LLM env var is set,
     otherwise falls back to deterministic regex-based decomposition.
     """
     if os.environ.get("HARNESS_PLANNER_LLM"):
         try:
             from .client import run
+
             prompt_instructions = (
                 "Decompose the following prompt/task into a list of independent sub-tasks. "
                 "You MUST return ONLY a raw JSON array of strings, where each string is a task description, and no extra conversational text or markdown blocks.\n"
@@ -33,9 +34,11 @@ def decompose(prompt: str) -> list[str]:
                     if lines[-1].startswith("```"):
                         lines = lines[:-1]
                     text = "\n".join(lines).strip()
-            
+
             sub_tasks = json.loads(text)
-            if isinstance(sub_tasks, list) and all(isinstance(t, str) for t in sub_tasks):
+            if isinstance(sub_tasks, list) and all(
+                isinstance(t, str) for t in sub_tasks
+            ):
                 return sub_tasks
         except Exception:
             pass
@@ -53,13 +56,15 @@ def decompose(prompt: str) -> list[str]:
             return candidates[:4]
 
     if "\n" in prompt:
-        lines = [l.strip() for l in prompt.split("\n") if l.strip()]
-        long_lines = [l for l in lines if len(l) > 30]
+        lines = [line.strip() for line in prompt.split("\n") if line.strip()]
+        long_lines = [line for line in lines if len(line) > 30]
         if len(long_lines) >= 2:
             return long_lines[:4]
 
     coord_sections = _COORDINATORS.split(prompt)
-    coord_sections = [s.strip() for s in coord_sections if s.strip() and len(s.strip()) > 8]
+    coord_sections = [
+        s.strip() for s in coord_sections if s.strip() and len(s.strip()) > 8
+    ]
     if len(coord_sections) >= 2:
         return coord_sections[:4]
 

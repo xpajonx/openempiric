@@ -3,12 +3,13 @@ from __future__ import annotations
 import json
 import time
 
-from ..client import run, run_json
+from ..client import run_json
 from ..config import load_harness_config
 
 
 def register(mcp: object) -> None:
     from fastmcp import FastMCP
+
     if not isinstance(mcp, FastMCP):
         return
 
@@ -21,29 +22,37 @@ def register(mcp: object) -> None:
         """Run opencode with a prompt and return the response. Use this to delegate tasks to child opencode sessions — refactoring, testing, research — and get results back."""
         cfg = load_harness_config()
         dangerously_skip_permissions = cfg.get("dangerously_skip_permissions", True)
-        result = run_json(prompt=prompt, workdir=workdir, timeout=timeout, dangerously_skip_permissions=dangerously_skip_permissions)
-        
+        result = run_json(
+            prompt=prompt,
+            workdir=workdir,
+            timeout=timeout,
+            dangerously_skip_permissions=dangerously_skip_permissions,
+        )
+
         telemetry_info = ""
         try:
             from harness_knowledge.engine import KnowledgeEngine
+
             eng = KnowledgeEngine(workdir or None)
-            total_tool_calls = sum(1 for e in result.transcript.events if e.type == "tool_use")
+            total_tool_calls = sum(
+                1 for e in result.transcript.events if e.type == "tool_use"
+            )
             telemetry = {
                 "duration_sec": int(result.duration_s),
-                "total_tool_calls": total_tool_calls
+                "total_tool_calls": total_tool_calls,
             }
             eng.session_commit(
                 project=workdir or None,
                 conversation_text=result.text,
                 session_id=result.session_id,
-                telemetry=telemetry
+                telemetry=telemetry,
             )
             telemetry_info = f"\n\n[Telemetry: session {result.session_id} ingested ({int(result.duration_s)}s, {total_tool_calls} tools)]"
         except ImportError:
             pass
         except Exception as e:
             telemetry_info = f"\n\n[Telemetry Error: {e}]"
-            
+
         return result.text + telemetry_info
 
     @mcp.tool()
@@ -66,6 +75,7 @@ def register(mcp: object) -> None:
         cfg = load_harness_config()
         if parallel:
             import asyncio
+
             sem = asyncio.Semaphore(cfg.get("max_parallel_tasks", 4))
 
             async def _run_task_async(task: dict, idx: int) -> str:
@@ -77,21 +87,33 @@ def register(mcp: object) -> None:
                 label = task.get("label", f"Task {idx}")
                 dangerously_skip = cfg.get("dangerously_skip_permissions", True)
                 start = time.time()
-                out = await asyncio.to_thread(run_json, prompt=prompt, workdir=workdir, timeout=t, dangerously_skip_permissions=dangerously_skip)
+                out = await asyncio.to_thread(
+                    run_json,
+                    prompt=prompt,
+                    workdir=workdir,
+                    timeout=t,
+                    dangerously_skip_permissions=dangerously_skip,
+                )
                 elapsed = time.time() - start
-                
+
                 try:
                     from harness_knowledge.engine import KnowledgeEngine
+
                     eng = KnowledgeEngine(workdir or None)
                     eng.session_commit(
                         project=workdir or None,
                         conversation_text=out.text,
                         session_id=out.session_id,
-                        telemetry={"duration_sec": int(out.duration_s), "total_tool_calls": sum(1 for e in out.transcript.events if e.type == "tool_use")}
+                        telemetry={
+                            "duration_sec": int(out.duration_s),
+                            "total_tool_calls": sum(
+                                1 for e in out.transcript.events if e.type == "tool_use"
+                            ),
+                        },
                     )
                 except Exception:
                     pass
-                
+
                 return f"[{label}] ({elapsed:.1f}s)\n{out.text}"
 
             async def _run_all() -> list[str]:
@@ -110,21 +132,32 @@ def register(mcp: object) -> None:
                 label = task.get("label", f"Task {i}")
                 dangerously_skip = cfg.get("dangerously_skip_permissions", True)
                 start = time.time()
-                out = run_json(prompt=prompt, workdir=workdir, timeout=t, dangerously_skip_permissions=dangerously_skip)
+                out = run_json(
+                    prompt=prompt,
+                    workdir=workdir,
+                    timeout=t,
+                    dangerously_skip_permissions=dangerously_skip,
+                )
                 elapsed = time.time() - start
-                
+
                 try:
                     from harness_knowledge.engine import KnowledgeEngine
+
                     eng = KnowledgeEngine(workdir or None)
                     eng.session_commit(
                         project=workdir or None,
                         conversation_text=out.text,
                         session_id=out.session_id,
-                        telemetry={"duration_sec": int(out.duration_s), "total_tool_calls": sum(1 for e in out.transcript.events if e.type == "tool_use")}
+                        telemetry={
+                            "duration_sec": int(out.duration_s),
+                            "total_tool_calls": sum(
+                                1 for e in out.transcript.events if e.type == "tool_use"
+                            ),
+                        },
                     )
                 except Exception:
                     pass
-                
+
                 results.append(f"[{label}] ({elapsed:.1f}s)\n{out.text}")
 
         return "\n---\n".join(results)

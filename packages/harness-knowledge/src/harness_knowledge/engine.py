@@ -5,19 +5,19 @@ import json
 import math
 import os
 import re
-import shutil
 import sys
 import time
 import uuid
 from collections import Counter
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 import difflib
 
 from pydantic import BaseModel, Field
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 
 class FileLock:
     def __init__(self, lock_path: Path, timeout: float = 10.0):
@@ -41,15 +41,19 @@ class FileLock:
         if self.acquired and self.lock_path.exists():
             self.lock_path.unlink()
 
+
 class ConceptRelation(BaseModel):
     type: str
     target: str
+
 
 class ConceptData(BaseModel):
     concept_id: str
     canonical_name: str
     aliases: list[str] = Field(default_factory=list)
-    status: Literal["candidate", "emerging", "validated", "canonical", "deprecated"] = "candidate"
+    status: Literal["candidate", "emerging", "validated", "canonical", "deprecated"] = (
+        "candidate"
+    )
     confidence: int = Field(default=1, ge=1, le=5)
     evidence_count: int = 0
     sessions: list[str] = Field(default_factory=list)
@@ -57,26 +61,39 @@ class ConceptData(BaseModel):
     updated_at: float = Field(default_factory=time.time)
     relationships: list[ConceptRelation] = Field(default_factory=list)
 
+
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 
 class KnowledgeEvent(BaseModel):
     event_id: str = Field(description="UUID string for event identification")
     timestamp: str = Field(description="ISO 8601 UTC timestamp format")
     project: str = Field(description="Project identifier/directory name")
     session_id: str = Field(description="Source session ID")
-    event_type: str = Field(description="Type: hypothesis, experiment, validation, failure, decision, deprecation, observation")
-    concept_candidates: list[str] = Field(default_factory=list, description="Associated concepts")
+    event_type: str = Field(
+        description="Type: hypothesis, experiment, validation, failure, decision, deprecation, observation"
+    )
+    concept_candidates: list[str] = Field(
+        default_factory=list, description="Associated concepts"
+    )
     summary: str = Field(description="Short human-readable summary")
     evidence: str = Field(description="Log snippet or conversation line")
-    confidence: int = Field(default=1, ge=1, le=5, description="Confidence rating (1-5)")
+    confidence: int = Field(
+        default=1, ge=1, le=5, description="Confidence rating (1-5)"
+    )
     source: str = Field(description="Source of capture: chat, diff, test")
     schema_version: int = Field(default=1)
-    
+
     # Orchestrator Telemetry Integration
-    tokens: dict[str, int] | None = Field(default=None, description="Prompt token count details (input/output/total)")
+    tokens: dict[str, int] | None = Field(
+        default=None, description="Prompt token count details (input/output/total)"
+    )
     cost: float | None = Field(default=None, description="API invocation cost in USD")
-    duration_s: float | None = Field(default=None, description="Subprocess run duration in seconds")
+    duration_s: float | None = Field(
+        default=None, description="Subprocess run duration in seconds"
+    )
+
 
 HARNESS_DIR = ".harness"
 DEFAULT_DIRS = [
@@ -135,10 +152,19 @@ class KnowledgeEngine:
         for d in DEFAULT_DIRS:
             (harness / d).mkdir(parents=True, exist_ok=True)
         for fname, content in [
-            ("AGENTS.md", f"# Harness Framework — {project_path.name}\n\nMUST read at EVERY session.\n"),
+            (
+                "AGENTS.md",
+                f"# Harness Framework — {project_path.name}\n\nMUST read at EVERY session.\n",
+            ),
             ("CLAUDE.md", "# CLAUDE.md\nRefer to [AGENTS.md](AGENTS.md)\n"),
-            ("directives/progress.md", f"# Progress — {project_path.name}\n- **{time.strftime('%Y-%m-%d')}:** Initialized.\n"),
-            ("directives/session-handoff.md", "# Session Handoff\n\n## Next Action\nComplete phase one.\n"),
+            (
+                "directives/progress.md",
+                f"# Progress — {project_path.name}\n- **{time.strftime('%Y-%m-%d')}:** Initialized.\n",
+            ),
+            (
+                "directives/session-handoff.md",
+                "# Session Handoff\n\n## Next Action\nComplete phase one.\n",
+            ),
         ]:
             fp = harness / fname
             if not fp.exists():
@@ -148,6 +174,7 @@ class KnowledgeEngine:
     def model(self):
         if self._model is None:
             from fastembed import TextEmbedding
+
             self._model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
         return self._model
 
@@ -155,6 +182,7 @@ class KnowledgeEngine:
     def chroma_client(self):
         if self._chroma_client is None:
             import chromadb
+
             db_path = str(self._resolve_harness() / ".local_vector_db")
             os.makedirs(db_path, exist_ok=True)
             self._chroma_client = chromadb.PersistentClient(path=db_path)
@@ -192,8 +220,16 @@ class KnowledgeEngine:
         wiki_concepts = directives / "wiki_concepts"
 
         if design_concepts.exists():
-            return {"inbox": directives / "design_wiki.md", "concepts": design_concepts, "variant": "design_wiki"}
-        return {"inbox": directives / "wiki_inbox.md", "concepts": wiki_concepts, "variant": "wiki"}
+            return {
+                "inbox": directives / "design_wiki.md",
+                "concepts": design_concepts,
+                "variant": "design_wiki",
+            }
+        return {
+            "inbox": directives / "wiki_inbox.md",
+            "concepts": wiki_concepts,
+            "variant": "wiki",
+        }
 
     def calculate_sha256(self, filepath: Path) -> str:
         sha = hashlib.sha256()
@@ -222,16 +258,31 @@ class KnowledgeEngine:
             header = parts[i].strip()
             section_body = parts[i + 1].strip() if i + 1 < len(parts) else ""
             if section_body:
-                chunks.append({"title": header.lstrip("#").strip(), "text": f"{header}\n\n{section_body}"})
+                chunks.append(
+                    {
+                        "title": header.lstrip("#").strip(),
+                        "text": f"{header}\n\n{section_body}",
+                    }
+                )
 
         if not chunks:
             chunks.append({"title": "Full Document", "text": content.strip()})
 
         formatted = []
         for idx, chunk in enumerate(chunks):
-            section_text = f"Document: {rel_path}\nSection: {chunk['title']}\n\n{chunk['text']}"
+            section_text = (
+                f"Document: {rel_path}\nSection: {chunk['title']}\n\n{chunk['text']}"
+            )
             links = list(set(re.findall(r"\[\[([^\]]+)\]\]", chunk["text"])))
-            formatted.append({"chunk_id": f"{rel_path}#chunk_{idx}", "text": section_text, "title": chunk["title"], "raw_body": chunk["text"], "linked_concepts": links})
+            formatted.append(
+                {
+                    "chunk_id": f"{rel_path}#chunk_{idx}",
+                    "text": section_text,
+                    "title": chunk["title"],
+                    "raw_body": chunk["text"],
+                    "linked_concepts": links,
+                }
+            )
 
         return formatted
 
@@ -260,7 +311,13 @@ class KnowledgeEngine:
             except Exception:
                 registry = {}
 
-        stats = {"scanned": len(md_files), "new": 0, "updated": 0, "unchanged": 0, "failed": 0}
+        stats = {
+            "scanned": len(md_files),
+            "new": 0,
+            "updated": 0,
+            "unchanged": 0,
+            "failed": 0,
+        }
         active_paths = set()
         new_registry = {}
         to_index = []
@@ -308,20 +365,25 @@ class KnowledgeEngine:
 
             ids = [c["chunk_id"] for c in chunks]
             texts = [c["text"] for c in chunks]
-            metadatas = [{
-                "source": path_str,
-                "rel_path": rel_path,
-                "title": c["title"],
-                "content_hash": cur_hash,
-                "linked_concepts": ",".join(c["linked_concepts"]),
-                "created_at": str(mtime),
-                "updated_at": str(mtime),
-                "importance": imp,
-            } for c in chunks]
+            metadatas = [
+                {
+                    "source": path_str,
+                    "rel_path": rel_path,
+                    "title": c["title"],
+                    "content_hash": cur_hash,
+                    "linked_concepts": ",".join(c["linked_concepts"]),
+                    "created_at": str(mtime),
+                    "updated_at": str(mtime),
+                    "importance": imp,
+                }
+                for c in chunks
+            ]
 
             try:
                 embeddings = [list(e) for e in model.embed(texts)]
-                col.add(ids=ids, embeddings=embeddings, documents=texts, metadatas=metadatas)
+                col.add(
+                    ids=ids, embeddings=embeddings, documents=texts, metadatas=metadatas
+                )
             except Exception as e:
                 print(f"Index error: {e}", file=sys.stderr)
                 stats["failed"] += 1
@@ -355,7 +417,9 @@ class KnowledgeEngine:
             return []
 
         doc_texts = results["documents"][0]
-        bm25_scores = self._compute_bm25(query, doc_texts) if hybrid else [0.0] * len(doc_texts)
+        bm25_scores = (
+            self._compute_bm25(query, doc_texts) if hybrid else [0.0] * len(doc_texts)
+        )
 
         formatted = []
         seen_ids = set()
@@ -371,14 +435,21 @@ class KnowledgeEngine:
             recency = self._recency_score(meta.get("created_at", str(time.time())))
             importance = self._importance_score(meta.get("importance", "medium"))
 
-            final = (0.45 * dense) + (0.30 * sparse) + (0.15 * recency) + (0.10 * importance)
+            final = (
+                (0.45 * dense)
+                + (0.30 * sparse)
+                + (0.15 * recency)
+                + (0.10 * importance)
+            )
 
-            formatted.append({
-                "id": doc_id,
-                "document": results["documents"][0][i],
-                "metadata": meta,
-                "score": final,
-            })
+            formatted.append(
+                {
+                    "id": doc_id,
+                    "document": results["documents"][0][i],
+                    "metadata": meta,
+                    "score": final,
+                }
+            )
 
         formatted.sort(key=lambda x: x["score"], reverse=True)
         return formatted[:k]
@@ -408,7 +479,11 @@ class KnowledgeEngine:
                     n = df.get(q, 0)
                     idf = math.log((doc_count - n + 0.5) / (n + 0.5) + 1.0)
                     freq = tf[q]
-                    score += idf * (freq * (k1 + 1)) / (freq + k1 * (1 - b + b * doc_len / max(avg_dl, 1)))
+                    score += (
+                        idf
+                        * (freq * (k1 + 1))
+                        / (freq + k1 * (1 - b + b * doc_len / max(avg_dl, 1)))
+                    )
             scores.append(score)
 
         max_s = max(scores) if scores else 0
@@ -423,11 +498,16 @@ class KnowledgeEngine:
 
     def _importance_score(self, imp: str) -> float:
         match str(imp).lower():
-            case "critical": return 1.0
-            case "high": return 0.7
-            case "medium": return 0.5
-            case "low": return 0.2
-            case _: return 0.5
+            case "critical":
+                return 1.0
+            case "high":
+                return 0.7
+            case "medium":
+                return 0.5
+            case "low":
+                return 0.2
+            case _:
+                return 0.5
 
     def stats(self) -> dict:
         col = self.collection
@@ -464,20 +544,67 @@ class KnowledgeEngine:
         created_files = []
 
         for fname, content in [
-            ("AGENTS.md", f"# Harness Framework — {name}\n\nMUST read at EVERY session start AND end.\n\n## Lifecycle Status\n| Phase | Status | Description |\n|---|---|---|\n| PHASE_ONE | `[x]` Completed | Knowledge Event Foundation |\n| PHASE_TWO | `[x]` Completed | Concept Registry & Promotion Engine |\n| PHASE_THREE | `[x]` Completed | WSL OpenCode Plugin & Declarative YAML Orchestrator |\n| PHASE_FOUR | `[/]` In Progress | Concept Identity, Evolution & Explainability |\n"),
-            ("CLAUDE.md", "# CLAUDE.md\nRefer to [AGENTS.md](AGENTS.md) for workspace lifecycle details.\n"),
-            ("directives/wiki_inbox.md", "# Wiki Inbox\n\nAppend raw lessons, API observations, and style guidelines here.\n"),
-            ("directives/progress.md", f"# Project Progress Log — {name}\n\n- **{time.strftime('%Y-%m-%d')}:** Harness initialized.\n"),
-            ("directives/session-handoff.md", "# Session Handoff\n\n## Next Action\nImplement Phase 4: Concept Identity Resolution, Knowledge Evolution, and Concept Explainability.\n"),
-            ("state/workflow_state.json", json.dumps({"current_phase": "PHASE_FOUR", "completed_steps": ["PHASE_ONE", "PHASE_TWO", "PHASE_THREE"], "history": []}, indent=2)),
-            ("state/feature_list.json", json.dumps({
-                "phases": [
-                    {"id": "PHASE_ONE", "name": "Knowledge Event Foundation", "completed": True},
-                    {"id": "PHASE_TWO", "name": "Concept Registry & Promotion Engine", "completed": True},
-                    {"id": "PHASE_THREE", "name": "WSL OpenCode Plugin & Declarative YAML Orchestrator", "completed": True},
-                    {"id": "PHASE_FOUR", "name": "Concept Identity, Evolution & Explainability", "completed": False}
-                ]
-            }, indent=2)),
+            (
+                "AGENTS.md",
+                f"# Harness Framework — {name}\n\nMUST read at EVERY session start AND end.\n\n## Lifecycle Status\n| Phase | Status | Description |\n|---|---|---|\n| PHASE_ONE | `[x]` Completed | Knowledge Event Foundation |\n| PHASE_TWO | `[x]` Completed | Concept Registry & Promotion Engine |\n| PHASE_THREE | `[x]` Completed | WSL OpenCode Plugin & Declarative YAML Orchestrator |\n| PHASE_FOUR | `[/]` In Progress | Concept Identity, Evolution & Explainability |\n",
+            ),
+            (
+                "CLAUDE.md",
+                "# CLAUDE.md\nRefer to [AGENTS.md](AGENTS.md) for workspace lifecycle details.\n",
+            ),
+            (
+                "directives/wiki_inbox.md",
+                "# Wiki Inbox\n\nAppend raw lessons, API observations, and style guidelines here.\n",
+            ),
+            (
+                "directives/progress.md",
+                f"# Project Progress Log — {name}\n\n- **{time.strftime('%Y-%m-%d')}:** Harness initialized.\n",
+            ),
+            (
+                "directives/session-handoff.md",
+                "# Session Handoff\n\n## Next Action\nImplement Phase 4: Concept Identity Resolution, Knowledge Evolution, and Concept Explainability.\n",
+            ),
+            (
+                "state/workflow_state.json",
+                json.dumps(
+                    {
+                        "current_phase": "PHASE_FOUR",
+                        "completed_steps": ["PHASE_ONE", "PHASE_TWO", "PHASE_THREE"],
+                        "history": [],
+                    },
+                    indent=2,
+                ),
+            ),
+            (
+                "state/feature_list.json",
+                json.dumps(
+                    {
+                        "phases": [
+                            {
+                                "id": "PHASE_ONE",
+                                "name": "Knowledge Event Foundation",
+                                "completed": True,
+                            },
+                            {
+                                "id": "PHASE_TWO",
+                                "name": "Concept Registry & Promotion Engine",
+                                "completed": True,
+                            },
+                            {
+                                "id": "PHASE_THREE",
+                                "name": "WSL OpenCode Plugin & Declarative YAML Orchestrator",
+                                "completed": True,
+                            },
+                            {
+                                "id": "PHASE_FOUR",
+                                "name": "Concept Identity, Evolution & Explainability",
+                                "completed": False,
+                            },
+                        ]
+                    },
+                    indent=2,
+                ),
+            ),
         ]:
             fp = harness / fname
             if not fp.exists():
@@ -485,7 +612,12 @@ class KnowledgeEngine:
                 fp.write_text(content)
                 created_files.append(fname)
 
-        return {"status": "success", "message": f"Harness initialized in {project_dir}", "created_directories": created_dirs, "created_files": created_files}
+        return {
+            "status": "success",
+            "message": f"Harness initialized in {project_dir}",
+            "created_directories": created_dirs,
+            "created_files": created_files,
+        }
 
     def restore_session_state(self, project: str | None = None) -> dict:
         h = self._resolve_harness(project)
@@ -503,7 +635,13 @@ class KnowledgeEngine:
         discoveries = []
         full_content = ""
 
-        for fp, target_list, attr in [(goals, active_goals, "goals"), (handoff, active_goals, "handoff"), (issues, blockers, "issues"), (decisions, discoveries, "decisions"), (progress, None, "progress")]:
+        for fp, target_list, attr in [
+            (goals, active_goals, "goals"),
+            (handoff, active_goals, "handoff"),
+            (issues, blockers, "issues"),
+            (decisions, discoveries, "decisions"),
+            (progress, None, "progress"),
+        ]:
             if fp.exists():
                 text = fp.read_text()
                 full_content += text + "\n"
@@ -540,7 +678,14 @@ class KnowledgeEngine:
             except Exception:
                 pass
 
-        return {"status": "success", "active_goals": active_goals[:5], "blockers": blockers[:5], "recent_discoveries": discoveries[:5], "recommended_files": rec_files, "query_context": keywords[:60]}
+        return {
+            "status": "success",
+            "active_goals": active_goals[:5],
+            "blockers": blockers[:5],
+            "recent_discoveries": discoveries[:5],
+            "recommended_files": rec_files,
+            "query_context": keywords[:60],
+        }
 
     def _load_registry(self, project: str | None = None) -> dict:
         p = self._registry_path(project)
@@ -588,20 +733,28 @@ class KnowledgeEngine:
             with open(p, "a") as f:
                 f.write(event.model_dump_json() + "\n")
 
-    def _safe_write_concept_file(self, file_path: Path, content: str, project: str | None = None) -> bool:
+    def _safe_write_concept_file(
+        self, file_path: Path, content: str, project: str | None = None
+    ) -> bool:
         concepts_dir = self._concepts_dir(project).resolve()
         resolved_path = file_path.resolve()
         try:
             if not resolved_path.is_relative_to(concepts_dir):
-                raise PermissionError(f"Security Abort: Path traversal attempted -> {file_path}")
+                raise PermissionError(
+                    f"Security Abort: Path traversal attempted -> {file_path}"
+                )
         except ValueError:
-            raise PermissionError(f"Security Abort: Path traversal attempted -> {file_path}")
+            raise PermissionError(
+                f"Security Abort: Path traversal attempted -> {file_path}"
+            )
 
         if file_path.exists():
             try:
                 old_content = file_path.read_text(encoding="utf-8")
                 if len(content) < (len(old_content) * 0.5):
-                    raise ValueError(f"Safety Abort: New content is < 50% of old content. Truncation risk detected for {file_path}")
+                    raise ValueError(
+                        f"Safety Abort: New content is < 50% of old content. Truncation risk detected for {file_path}"
+                    )
             except Exception as e:
                 if isinstance(e, (PermissionError, ValueError)):
                     raise e
@@ -615,29 +768,31 @@ class KnowledgeEngine:
         log_file = harness / "directives" / "log.md"
         date_str = time.strftime("%Y-%m-%d %H:%M")
         entry = f"- **[{date_str}]**: {message}\n"
-        
+
         log_file.parent.mkdir(parents=True, exist_ok=True)
         if not log_file.exists():
             log_file.write_text("# Wiki Log\n\n", encoding="utf-8")
-        
+
         with open(log_file, "a", encoding="utf-8") as f:
             f.write(entry)
 
-    def _sync_index(self, canonical_name: str, concept_id: str, project: str | None = None):
+    def _sync_index(
+        self, canonical_name: str, concept_id: str, project: str | None = None
+    ):
         harness = self._resolve_harness(project)
         index_file = harness / "directives" / "index.md"
-        
+
         index_file.parent.mkdir(parents=True, exist_ok=True)
         if not index_file.exists():
             index_file.write_text("# Wiki Index\n\n### Concepts\n\n", encoding="utf-8")
-            
+
         content = index_file.read_text(encoding="utf-8")
         display_title = canonical_name.replace("-", " ").title()
         link = f"- [[{concept_id}|{display_title}]]"
-        
+
         if f"[[{concept_id}|" in content:
             return
-            
+
         lines = content.splitlines()
         updated_lines = []
         inserted = False
@@ -647,11 +802,11 @@ class KnowledgeEngine:
                 updated_lines.append("")
                 updated_lines.append(link)
                 inserted = True
-                
+
         if not inserted:
             updated_lines.append("\n### Concepts")
             updated_lines.append(link)
-            
+
         index_file.write_text("\n".join(updated_lines) + "\n", encoding="utf-8")
 
     def _resolve_concept(self, term: str, registry: dict) -> tuple[str, dict]:
@@ -677,39 +832,58 @@ class KnowledgeEngine:
 
         next_num = len(registry) + 1
         new_id = f"concept_{next_num:03d}"
-        canon_name = re.sub(r"[^a-zA-Z0-9\s-]", "", term).strip().replace(" ", "-").lower() or f"concept-{next_num}"
+        canon_name = (
+            re.sub(r"[^a-zA-Z0-9\s-]", "", term).strip().replace(" ", "-").lower()
+            or f"concept-{next_num}"
+        )
         new_data = ConceptData(
-            concept_id=new_id,
-            canonical_name=canon_name,
-            aliases=[term]
+            concept_id=new_id, canonical_name=canon_name, aliases=[term]
         ).model_dump()
         registry[new_id] = new_data
         return new_id, new_data
 
-    def reflect_session(self, project: str | None = None, conversation_text: str = "", session_id: str = "", telemetry: dict | None = None) -> dict:
+    def reflect_session(
+        self,
+        project: str | None = None,
+        conversation_text: str = "",
+        session_id: str = "",
+        telemetry: dict | None = None,
+    ) -> dict:
         if not session_id:
             session_id = f"session_{time.strftime('%Y%m%d_%H%M%S')}"
 
         knowledge_events = []
-        harness = self._resolve_harness(project)
+        self._resolve_harness(project)
         concepts_dir = self._concepts_dir(project)
 
-        modified_files = list(concepts_dir.rglob("*.md")) if concepts_dir.exists() else []
+        modified_files = (
+            list(concepts_dir.rglob("*.md")) if concepts_dir.exists() else []
+        )
         for fp in modified_files:
             concept = fp.stem.replace("_", " ").replace("-", " ").title()
-            knowledge_events.append({"type": "observation", "concept": concept, "evidence": f"Modified: {fp.name}", "confidence": 1, "source": "diff"})
+            knowledge_events.append(
+                {
+                    "type": "observation",
+                    "concept": concept,
+                    "evidence": f"Modified: {fp.name}",
+                    "confidence": 1,
+                    "source": "diff",
+                }
+            )
 
         text_clean = conversation_text.strip()
         if telemetry:
             duration = telemetry.get("duration_sec", 0)
             tool_calls = telemetry.get("total_tool_calls", 0)
-            knowledge_events.append({
-                "type": "telemetry",
-                "concept": "Session Metrics",
-                "evidence": f"Session duration: {duration}s, Tool calls: {tool_calls}",
-                "confidence": 1,
-                "source": "orchestrator"
-            })
+            knowledge_events.append(
+                {
+                    "type": "telemetry",
+                    "concept": "Session Metrics",
+                    "evidence": f"Session duration: {duration}s, Tool calls: {tool_calls}",
+                    "confidence": 1,
+                    "source": "orchestrator",
+                }
+            )
         if text_clean.startswith("{"):
             try:
                 data = json.loads(text_clean)
@@ -721,15 +895,55 @@ class KnowledgeEngine:
             for line in conversation_text.splitlines():
                 lower = line.strip().lower()
                 if lower.startswith("hypothesis:") or lower.startswith("hyp:"):
-                    knowledge_events.append({"type": "hypothesis", "concept": lower.split(":", 1)[1].strip()[:80], "evidence": line.strip(), "confidence": 1, "source": "chat"})
+                    knowledge_events.append(
+                        {
+                            "type": "hypothesis",
+                            "concept": lower.split(":", 1)[1].strip()[:80],
+                            "evidence": line.strip(),
+                            "confidence": 1,
+                            "source": "chat",
+                        }
+                    )
                 elif lower.startswith("experiment:") or lower.startswith("exp:"):
-                    knowledge_events.append({"type": "experiment", "concept": lower.split(":", 1)[1].strip()[:80], "evidence": line.strip(), "confidence": 1, "source": "chat"})
+                    knowledge_events.append(
+                        {
+                            "type": "experiment",
+                            "concept": lower.split(":", 1)[1].strip()[:80],
+                            "evidence": line.strip(),
+                            "confidence": 1,
+                            "source": "chat",
+                        }
+                    )
                 elif lower.startswith("validation:") or lower.startswith("val:"):
-                    knowledge_events.append({"type": "validation", "concept": lower.split(":", 1)[1].strip()[:80], "evidence": line.strip(), "confidence": 1, "source": "chat"})
+                    knowledge_events.append(
+                        {
+                            "type": "validation",
+                            "concept": lower.split(":", 1)[1].strip()[:80],
+                            "evidence": line.strip(),
+                            "confidence": 1,
+                            "source": "chat",
+                        }
+                    )
                 elif lower.startswith("failure:") or lower.startswith("fail:"):
-                    knowledge_events.append({"type": "failure", "concept": lower.split(":", 1)[1].strip()[:80], "evidence": line.strip(), "confidence": 1, "source": "chat"})
+                    knowledge_events.append(
+                        {
+                            "type": "failure",
+                            "concept": lower.split(":", 1)[1].strip()[:80],
+                            "evidence": line.strip(),
+                            "confidence": 1,
+                            "source": "chat",
+                        }
+                    )
                 elif lower.startswith("decision:") or lower.startswith("dec:"):
-                    knowledge_events.append({"type": "decision", "concept": lower.split(":", 1)[1].strip()[:80], "evidence": line.strip(), "confidence": 1, "source": "chat"})
+                    knowledge_events.append(
+                        {
+                            "type": "decision",
+                            "concept": lower.split(":", 1)[1].strip()[:80],
+                            "evidence": line.strip(),
+                            "confidence": 1,
+                            "source": "chat",
+                        }
+                    )
 
         seen = set()
         canonical_events = []
@@ -767,12 +981,20 @@ class KnowledgeEngine:
         if report_file.exists():
             report_file = sessions_dir / f"{date_str}_{int(time.time() % 100000)}.md"
 
-        yaml_events = [{"type": e["event_type"], "concept": e["concept_candidates"][0], "evidence": e["evidence"], "confidence": e["confidence"]} for e in canonical_events]
+        yaml_events = [
+            {
+                "type": e["event_type"],
+                "concept": e["concept_candidates"][0],
+                "evidence": e["evidence"],
+                "confidence": e["confidence"],
+            }
+            for e in canonical_events
+        ]
         yaml_content = json.dumps({"knowledge_events": yaml_events}, indent=2)
 
         report = f"""---
 date: {date_str}
-project: {project or 'default'}
+project: {project or "default"}
 ---
 # Session Learning Report — {date_str}
 
@@ -783,16 +1005,23 @@ project: {project or 'default'}
 """
         report_file.write_text(report)
 
-        return {"status": "success", "report_path": str(report_file), "knowledge_events": yaml_events, "canonical_events": canonical_events}
+        return {
+            "status": "success",
+            "report_path": str(report_file),
+            "knowledge_events": yaml_events,
+            "canonical_events": canonical_events,
+        }
 
-    def evaluate_concept_status(self, cdata: dict, e_type: str, session_id: str) -> dict:
+    def evaluate_concept_status(
+        self, cdata: dict, e_type: str, session_id: str
+    ) -> dict:
         """Evaluate and promote concept status based on session and evidence counts."""
         confidence = cdata.get("confidence", 1)
-        
+
         if session_id not in cdata.setdefault("sessions", []):
             cdata["sessions"].append(session_id)
             cdata["session_count"] = len(cdata["sessions"])
-        
+
         if e_type == "validation":
             confidence = min(5, confidence + 1)
         elif e_type == "failure":
@@ -816,17 +1045,25 @@ project: {project or 'default'}
         return cdata
 
     def materialize_concepts(self, project: str | None = None) -> dict:
-        harness = self._resolve_harness(project)
+        self._resolve_harness(project)
         sessions_dir = self._sessions_dir(project)
         if not sessions_dir.exists():
-            return {"status": "success", "message": "No session reports found.", "materialized": []}
+            return {
+                "status": "success",
+                "message": "No session reports found.",
+                "materialized": [],
+            }
 
         concepts_dir = self._concepts_dir(project)
         concepts_dir.mkdir(parents=True, exist_ok=True)
 
         session_files = sorted(sessions_dir.glob("*.md"))
         if not session_files:
-            return {"status": "success", "message": "No session reports found.", "materialized": []}
+            return {
+                "status": "success",
+                "message": "No session reports found.",
+                "materialized": [],
+            }
 
         latest = session_files[-1]
         content = latest.read_text()
@@ -842,7 +1079,11 @@ project: {project or 'default'}
                 pass
 
         if not knowledge_events:
-            return {"status": "success", "message": "No knowledge events found.", "materialized": []}
+            return {
+                "status": "success",
+                "message": "No knowledge events found.",
+                "materialized": [],
+            }
 
         registry = self._load_registry(project)
         materialized_log = []
@@ -884,28 +1125,38 @@ project: {project or 'default'}
 
                 concept_content = f"""---
 concept_id: {cid}
-canonical_name: {cdata['canonical_name']}
+canonical_name: {cdata["canonical_name"]}
 status: {new_status}
-confidence: {cdata['confidence']}
-evidence_count: {cdata['evidence_count']}
-session_count: {cdata['session_count']}
-aliases: {json.dumps(cdata.get('aliases', []))}
+confidence: {cdata["confidence"]}
+evidence_count: {cdata["evidence_count"]}
+session_count: {cdata["session_count"]}
+aliases: {json.dumps(cdata.get("aliases", []))}
 ---
 {body}"""
 
                 self._safe_write_concept_file(concept_file, concept_content, project)
-                self._log_action(f"Ingest | Materialized concept {cid} ({cdata['canonical_name']}) as {new_status}", project)
-                self._sync_index(cdata['canonical_name'], cid, project)
-                materialized_log.append(f"{cid} ({cdata['canonical_name']}) = {new_status}")
+                self._log_action(
+                    f"Ingest | Materialized concept {cid} ({cdata['canonical_name']}) as {new_status}",
+                    project,
+                )
+                self._sync_index(cdata["canonical_name"], cid, project)
+                materialized_log.append(
+                    f"{cid} ({cdata['canonical_name']}) = {new_status}"
+                )
 
             elif new_status == "deprecated":
                 if concept_file.exists():
                     concept_file.unlink()
-                    self._log_action(f"Delete | Deprecated concept {cid} ({cdata['canonical_name']})", project)
+                    self._log_action(
+                        f"Delete | Deprecated concept {cid} ({cdata['canonical_name']})",
+                        project,
+                    )
                 materialized_log.append(f"Deprecated: {cid}")
 
             else:
-                materialized_log.append(f"{cid} ({cdata['canonical_name']}) = {new_status} (not materialized)")
+                materialized_log.append(
+                    f"{cid} ({cdata['canonical_name']}) = {new_status} (not materialized)"
+                )
 
         self._save_registry(registry, project)
         return {"status": "success", "materialized": materialized_log}
@@ -913,14 +1164,22 @@ aliases: {json.dumps(cdata.get('aliases', []))}
     def update_graph(self, project: str | None = None) -> dict:
         concepts_dir = self._concepts_dir(project)
         if not concepts_dir.exists():
-            return {"status": "success", "message": "No concepts directory.", "links_updated": 0}
+            return {
+                "status": "success",
+                "message": "No concepts directory.",
+                "links_updated": 0,
+            }
 
         concept_files = list(concepts_dir.glob("concept_*.md"))
         if not concept_files:
-            return {"status": "success", "message": "No concept files found.", "links_updated": 0}
+            return {
+                "status": "success",
+                "message": "No concept files found.",
+                "links_updated": 0,
+            }
 
         registry = self._load_registry(project)
-        
+
         for cid in registry:
             registry[cid]["relationships"] = []
 
@@ -930,15 +1189,24 @@ aliases: {json.dumps(cdata.get('aliases', []))}
             if cid not in registry:
                 continue
             text = f.read_text()
-            matches = re.findall(r"\[\[(?:([a-zA-Z0-9_]+):)?(concept_\d{3})(?:\|([^\]]*))?\]\]", text)
+            matches = re.findall(
+                r"\[\[(?:([a-zA-Z0-9_]+):)?(concept_\d{3})(?:\|([^\]]*))?\]\]", text
+            )
             parsed_links = []
             for r_type, target_id, label in matches:
-                parsed_links.append({
-                    "type": r_type or "relates_to",
-                    "target": target_id,
-                    "label": label or target_id
-                })
-            concepts[cid] = {"path": f, "name": registry[cid]["canonical_name"].replace("-", " ").title(), "text": text, "links": parsed_links}
+                parsed_links.append(
+                    {
+                        "type": r_type or "relates_to",
+                        "target": target_id,
+                        "label": label or target_id,
+                    }
+                )
+            concepts[cid] = {
+                "path": f,
+                "name": registry[cid]["canonical_name"].replace("-", " ").title(),
+                "text": text,
+                "links": parsed_links,
+            }
 
         rec_map = {
             "depends_on": "depended_on_by",
@@ -958,16 +1226,22 @@ aliases: {json.dumps(cdata.get('aliases', []))}
             for link in data_a["links"]:
                 target = link["target"]
                 rel_type = link["type"]
-                
+
                 if target in concepts:
                     rel_list_a = registry[cid_a].setdefault("relationships", [])
-                    if not any(r.get("target") == target and r.get("type") == rel_type for r in rel_list_a):
+                    if not any(
+                        r.get("target") == target and r.get("type") == rel_type
+                        for r in rel_list_a
+                    ):
                         rel_list_a.append({"type": rel_type, "target": target})
                     printable_links[cid_a][target] = rel_type
 
                     rec_type = rec_map.get(rel_type, "relates_to")
                     rel_list_b = registry[target].setdefault("relationships", [])
-                    if not any(r.get("target") == cid_a and r.get("type") == rec_type for r in rel_list_b):
+                    if not any(
+                        r.get("target") == cid_a and r.get("type") == rec_type
+                        for r in rel_list_b
+                    ):
                         rel_list_b.append({"type": rec_type, "target": cid_a})
                     printable_links[target][cid_a] = rec_type
 
@@ -984,23 +1258,43 @@ aliases: {json.dumps(cdata.get('aliases', []))}
                 continue
 
             header = fm.group(1)
-            body = re.split(r"\n##\s+Related", fm.group(2), flags=re.IGNORECASE)[0].strip()
+            body = re.split(r"\n##\s+Related", fm.group(2), flags=re.IGNORECASE)[
+                0
+            ].strip()
 
             related_lines = []
             for tc, r_type in sorted(targets.items()):
                 tname = registry[tc]["canonical_name"].replace("-", " ").title()
                 r_label = r_type.replace("_", " ").title()
-                related_lines.append(f"- [[{r_type}:{tc}|{tname}]] — {tname} ({r_label})")
+                related_lines.append(
+                    f"- [[{r_type}:{tc}|{tname}]] — {tname} ({r_label})"
+                )
 
-            new_text = header + body + "\n\n## Related Knowledge\n" + "\n".join(related_lines) + "\n"
+            new_text = (
+                header
+                + body
+                + "\n\n## Related Knowledge\n"
+                + "\n".join(related_lines)
+                + "\n"
+            )
             if new_text != text:
                 self._safe_write_concept_file(fp, new_text, project)
                 links_added += 1
 
         self._save_registry(registry, project)
-        return {"status": "success", "links_updated": links_added, "files_scanned": len(concept_files)}
+        return {
+            "status": "success",
+            "links_updated": links_added,
+            "files_scanned": len(concept_files),
+        }
 
-    def get_events(self, project: str | None = None, concept: str = "", event_type: str = "", session_id: str = "") -> list[dict]:
+    def get_events(
+        self,
+        project: str | None = None,
+        concept: str = "",
+        event_type: str = "",
+        session_id: str = "",
+    ) -> list[dict]:
         events = self._load_events(project)
         filtered = []
         for ev in events:
@@ -1021,8 +1315,16 @@ aliases: {json.dumps(cdata.get('aliases', []))}
                 return ev
         raise KeyError(f"Event {event_id} not found")
 
-    def session_commit(self, project: str | None = None, conversation_text: str = "", session_id: str = "", telemetry: dict | None = None) -> dict:
-        res = self.reflect_session(project, conversation_text, session_id=session_id, telemetry=telemetry)
+    def session_commit(
+        self,
+        project: str | None = None,
+        conversation_text: str = "",
+        session_id: str = "",
+        telemetry: dict | None = None,
+    ) -> dict:
+        res = self.reflect_session(
+            project, conversation_text, session_id=session_id, telemetry=telemetry
+        )
         if res["status"] == "error":
             return res
 
@@ -1053,7 +1355,11 @@ aliases: {json.dumps(cdata.get('aliases', []))}
 
         md_files = list(concepts_dir.rglob("*.md"))
         if len(md_files) < 2:
-            return {"status": "success", "message": "Fewer than 2 files. No consolidation needed.", "merged": []}
+            return {
+                "status": "success",
+                "message": "Fewer than 2 files. No consolidation needed.",
+                "merged": [],
+            }
 
         contents = {}
         for f in md_files:
@@ -1089,13 +1395,17 @@ aliases: {json.dumps(cdata.get('aliases', []))}
         if merged:
             self.index_all(force=True)
 
-        return {"status": "success", "message": f"Consolidated {len(merged)} files.", "merged": merged}
+        return {
+            "status": "success",
+            "message": f"Consolidated {len(merged)} files.",
+            "merged": merged,
+        }
 
     def rebuild_registry(self, project: str | None = None) -> dict:
         """Rebuild concept registry and materialized files from the immutable events.jsonl log."""
-        harness = self._resolve_harness(project)
-        registry_path = self._registry_path(project)
-        events_path = self._events_path(project)
+        self._resolve_harness(project)
+        self._registry_path(project)
+        self._events_path(project)
         concepts_dir = self._concepts_dir(project)
 
         # 1. Clean Slate
@@ -1111,17 +1421,21 @@ aliases: {json.dumps(cdata.get('aliases', []))}
         events = self._load_events(project)
         for event in events:
             concept_candidates = event.get("concept_candidates", [])
-            primary_term = concept_candidates[0] if concept_candidates else event.get("concept", "General")
-            
+            primary_term = (
+                concept_candidates[0]
+                if concept_candidates
+                else event.get("concept", "General")
+            )
+
             cid, cdata = self._resolve_concept(primary_term, temp_registry)
-            
+
             if event.get("evidence"):
                 cdata["evidence_count"] = cdata.get("evidence_count", 0) + 1
-                
+
             cdata = self.evaluate_concept_status(
                 cdata=cdata,
                 e_type=event.get("event_type", "observation"),
-                session_id=event.get("session_id", "historical")
+                session_id=event.get("session_id", "historical"),
             )
             temp_registry[cid] = cdata
 
@@ -1135,58 +1449,81 @@ aliases: {json.dumps(cdata.get('aliases', []))}
             if cdata["status"] in ("validated", "canonical"):
                 concept_file = concepts_dir / f"{cid}.md"
                 body = f"# {cdata['canonical_name'].replace('-', ' ').title()}\n\nThis concept is a validated organizational knowledge node.\n\n## Learnings\n"
-                
+
                 concept_content = f"---\nconcept_id: {cid}\ncanonical_name: {cdata['canonical_name']}\nstatus: {cdata['status']}\nconfidence: {cdata['confidence']}\nevidence_count: {cdata['evidence_count']}\nsession_count: {cdata.get('session_count', 0)}\naliases: {json.dumps(cdata.get('aliases', []))}\n---\n{body}"
                 self._safe_write_concept_file(concept_file, concept_content, project)
-                self._sync_index(cdata['canonical_name'], cid, project)
+                self._sync_index(cdata["canonical_name"], cid, project)
                 materialized_log.append(cid)
-        
+
         # 5. Re-index
         self.index_all(force=True)
 
-        return {"status": "success", "message": "Registry rebuilt from events log.", "materialized": len(materialized_log)}
+        return {
+            "status": "success",
+            "message": "Registry rebuilt from events log.",
+            "materialized": len(materialized_log),
+        }
 
     def explain_concept(self, project: str | None = None, concept_id: str = "") -> dict:
         registry = self._load_registry(project)
         if concept_id not in registry:
             return {"status": "error", "message": f"Concept {concept_id} not found."}
-        
+
         cdata = registry[concept_id]
         events = self.get_events(project, concept=cdata["canonical_name"])
-        
+
         summary = {
             "concept": cdata,
             "total_events": len(events),
-            "recent_evidence": [e.get("evidence") for e in events[-5:] if e.get("evidence")]
+            "recent_evidence": [
+                e.get("evidence") for e in events[-5:] if e.get("evidence")
+            ],
         }
         return {"status": "success", "explanation": summary}
 
-    def merge_concepts(self, project: str | None = None, primary_id: str = "", secondary_id: str = "") -> dict:
+    def merge_concepts(
+        self, project: str | None = None, primary_id: str = "", secondary_id: str = ""
+    ) -> dict:
         registry = self._load_registry(project)
         if primary_id not in registry or secondary_id not in registry:
             return {"status": "error", "message": "One or both concepts not found."}
-        
+
         pdata = registry[primary_id]
         sdata = registry[secondary_id]
-        
-        new_aliases = set(pdata.get("aliases", []) + sdata.get("aliases", []) + [sdata.get("canonical_name")])
+
+        new_aliases = set(
+            pdata.get("aliases", [])
+            + sdata.get("aliases", [])
+            + [sdata.get("canonical_name")]
+        )
         pdata["aliases"] = list(new_aliases)
-        
-        pdata["evidence_count"] = pdata.get("evidence_count", 0) + sdata.get("evidence_count", 0)
-        pdata["sessions"] = list(set(pdata.get("sessions", []) + sdata.get("sessions", [])))
+
+        pdata["evidence_count"] = pdata.get("evidence_count", 0) + sdata.get(
+            "evidence_count", 0
+        )
+        pdata["sessions"] = list(
+            set(pdata.get("sessions", []) + sdata.get("sessions", []))
+        )
         pdata["session_count"] = len(pdata["sessions"])
-        
+
         del registry[secondary_id]
         self._save_registry(registry, project)
-        
+
         pdata = self.evaluate_concept_status(pdata, "merge", "system")
         registry[primary_id] = pdata
         self._save_registry(registry, project)
-        
+
         concepts_dir = self._concepts_dir(project)
         sf = concepts_dir / f"{secondary_id}.md"
         if sf.exists():
             sf.unlink()
-            
-        self._log_action(f"Merge | Merged secondary concept {secondary_id} into primary {primary_id} ({pdata['canonical_name']})", project)
-        return {"status": "success", "message": f"Merged {secondary_id} into {primary_id}", "concept": pdata}
+
+        self._log_action(
+            f"Merge | Merged secondary concept {secondary_id} into primary {primary_id} ({pdata['canonical_name']})",
+            project,
+        )
+        return {
+            "status": "success",
+            "message": f"Merged {secondary_id} into {primary_id}",
+            "concept": pdata,
+        }

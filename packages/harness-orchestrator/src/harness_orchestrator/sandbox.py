@@ -31,7 +31,11 @@ def load_permissions(workdir: str = "") -> dict:
             return json.loads(p.read_text())
         except Exception:
             pass
-    return {"allowed_dirs": [], "blocked_commands": _BLOCKED_COMMANDS, "allow_subagent_permissions_skip": True}
+    return {
+        "allowed_dirs": [],
+        "blocked_commands": _BLOCKED_COMMANDS,
+        "allow_subagent_permissions_skip": True,
+    }
 
 
 def save_permissions(perms: dict, workdir: str = ""):
@@ -42,7 +46,7 @@ def save_permissions(perms: dict, workdir: str = ""):
 
 def resolve_workdir(workdir: str, project_root: str = "") -> str:
     """Resolve a subagent workdir relative to the project root.
-    
+
     Returns None if the workdir escapes the project root (blocked).
     """
     base = Path(project_root).resolve() if project_root else Path.cwd().resolve()

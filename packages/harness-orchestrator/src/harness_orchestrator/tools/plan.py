@@ -3,19 +3,17 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import subprocess
 import time
 import uuid
-from pathlib import Path
 
-from ..client import find_opencode, safe_workdir, run_json
-from harness_tui.panels import render_panel
+from ..client import find_opencode, safe_workdir
 
 _plans: dict[str, dict] = {}
 
 
 def register(mcp: object) -> None:
     from fastmcp import FastMCP
+
     if not isinstance(mcp, FastMCP):
         return
 
@@ -31,14 +29,17 @@ def register(mcp: object) -> None:
         steps = []
         if auto_decompose:
             from ..planner import decompose
+
             sub_tasks = decompose(task)
             for idx, sub_task in enumerate(sub_tasks):
-                steps.append({
-                    "id": f"step_{idx + 1}",
-                    "intent": sub_task,
-                    "depends_on": [f"step_{idx}"] if idx > 0 else [],
-                    "status": "pending",
-                })
+                steps.append(
+                    {
+                        "id": f"step_{idx + 1}",
+                        "intent": sub_task,
+                        "depends_on": [f"step_{idx}"] if idx > 0 else [],
+                        "status": "pending",
+                    }
+                )
 
         _plans[plan_id] = {
             "id": plan_id,
@@ -47,12 +48,14 @@ def register(mcp: object) -> None:
             "status": "planning",
             "created_at": time.time(),
         }
-        return json.dumps({
-            "plan_id": plan_id,
-            "task": task,
-            "status": "planning",
-            "steps_added": len(steps),
-        })
+        return json.dumps(
+            {
+                "plan_id": plan_id,
+                "task": task,
+                "status": "planning",
+                "steps_added": len(steps),
+            }
+        )
 
     @mcp.tool()
     def harness_plan_step(plan_id: str, intent: str, depends_on: str = "") -> str:
@@ -67,13 +70,33 @@ def register(mcp: object) -> None:
         if not plan:
             return json.dumps({"error": f"Plan {plan_id} not found"})
         if plan["status"] != "planning":
-            return json.dumps({"error": f"Plan {plan_id} is already {plan['status']}, cannot add steps"})
+            return json.dumps(
+                {
+                    "error": f"Plan {plan_id} is already {plan['status']}, cannot add steps"
+                }
+            )
 
         step_id = f"step_{len(plan['steps']) + 1}"
-        deps = [d.strip() for d in depends_on.split(",") if d.strip()] if depends_on else []
-        step = {"id": step_id, "intent": intent, "depends_on": deps, "status": "pending"}
+        deps = (
+            [d.strip() for d in depends_on.split(",") if d.strip()]
+            if depends_on
+            else []
+        )
+        step = {
+            "id": step_id,
+            "intent": intent,
+            "depends_on": deps,
+            "status": "pending",
+        }
         plan["steps"].append(step)
-        return json.dumps({"plan_id": plan_id, "step_id": step_id, "intent": intent, "status": "added"})
+        return json.dumps(
+            {
+                "plan_id": plan_id,
+                "step_id": step_id,
+                "intent": intent,
+                "status": "added",
+            }
+        )
 
     @mcp.tool()
     def harness_plan_finalize(plan_id: str) -> str:
@@ -98,7 +121,9 @@ def register(mcp: object) -> None:
         return json.dumps(summary, indent=2)
 
     @mcp.tool()
-    def harness_plan_execute(plan_id: str, workdir: str = "", max_parallel: int = 2, timeout: int = 300) -> str:
+    def harness_plan_execute(
+        plan_id: str, workdir: str = "", max_parallel: int = 2, timeout: int = 300
+    ) -> str:
         """Execute a finalized plan. Steps run in dependency order with parallelizable steps running concurrently.
 
         Args:
@@ -111,7 +136,11 @@ def register(mcp: object) -> None:
         if not plan:
             return json.dumps({"error": f"Plan {plan_id} not found"})
         if plan["status"] != "finalized":
-            return json.dumps({"error": f"Plan {plan_id} must be finalized first (current: {plan['status']})"})
+            return json.dumps(
+                {
+                    "error": f"Plan {plan_id} must be finalized first (current: {plan['status']})"
+                }
+            )
 
         plan["status"] = "executing"
         start_time = time.time()
@@ -131,9 +160,16 @@ def register(mcp: object) -> None:
                     batch.append(s)
 
             if not batch and remaining:
-                return json.dumps({"error": "Circular dependency detected", "remaining": [s["id"] for s in remaining]})
+                return json.dumps(
+                    {
+                        "error": "Circular dependency detected",
+                        "remaining": [s["id"] for s in remaining],
+                    }
+                )
 
-            batch_results = asyncio.run(_run_batch(batch, workdir, max_parallel, timeout))
+            batch_results = asyncio.run(
+                _run_batch(batch, workdir, max_parallel, timeout)
+            )
 
             for s, r in zip(batch, batch_results):
                 completed[s["id"]] = r
@@ -150,16 +186,19 @@ def register(mcp: object) -> None:
                 total_tokens[k] += r.get("tokens", {}).get(k, 0)
 
         plan["status"] = "done"
-        return json.dumps({
-            "plan_id": plan_id,
-            "task": plan["task"],
-            "steps_executed": len(results),
-            "total_duration_s": round(duration, 2),
-            "total_cost": round(total_cost, 6),
-            "total_tokens": total_tokens,
-            "errors": sum(1 for r in results if r.get("error")),
-            "step_results": results,
-        }, indent=2)
+        return json.dumps(
+            {
+                "plan_id": plan_id,
+                "task": plan["task"],
+                "steps_executed": len(results),
+                "total_duration_s": round(duration, 2),
+                "total_cost": round(total_cost, 6),
+                "total_tokens": total_tokens,
+                "errors": sum(1 for r in results if r.get("error")),
+                "step_results": results,
+            },
+            indent=2,
+        )
 
     @mcp.tool()
     def harness_plan_status(plan_id: str) -> str:
@@ -170,14 +209,24 @@ def register(mcp: object) -> None:
 
         step_status = []
         for s in plan["steps"]:
-            step_status.append({"id": s["id"], "intent": s["intent"], "status": s.get("status", "pending"), "depends_on": s["depends_on"]})
-        return json.dumps({
-            "plan_id": plan["id"],
-            "task": plan["task"],
-            "status": plan["status"],
-            "steps": len(plan["steps"]),
-            "step_list": step_status,
-        }, indent=2)
+            step_status.append(
+                {
+                    "id": s["id"],
+                    "intent": s["intent"],
+                    "status": s.get("status", "pending"),
+                    "depends_on": s["depends_on"],
+                }
+            )
+        return json.dumps(
+            {
+                "plan_id": plan["id"],
+                "task": plan["task"],
+                "status": plan["status"],
+                "steps": len(plan["steps"]),
+                "step_list": step_status,
+            },
+            indent=2,
+        )
 
     @mcp.tool()
     def harness_plan_abort(plan_id: str) -> str:
@@ -192,7 +241,9 @@ def register(mcp: object) -> None:
         return json.dumps({"plan_id": plan_id, "status": "aborted"})
 
 
-async def _run_batch(batch: list[dict], workdir: str, max_parallel: int, timeout: int) -> list[dict]:
+async def _run_batch(
+    batch: list[dict], workdir: str, max_parallel: int, timeout: int
+) -> list[dict]:
     sem = asyncio.Semaphore(max_parallel)
 
     async def _exec(s: dict) -> dict:
@@ -214,19 +265,31 @@ async def _run_step(intent: str, workdir: str, timeout: int) -> dict:
     start = time.time()
     try:
         proc = await asyncio.create_subprocess_exec(
-            *args, cwd=cwd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env,
+            *args,
+            cwd=cwd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
         )
-        stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        stdout_bytes, stderr_bytes = await asyncio.wait_for(
+            proc.communicate(), timeout=timeout
+        )
     except asyncio.TimeoutError:
-        return {"error": f"timed out ({timeout}s)", "duration_s": round(time.time() - start, 2)}
+        return {
+            "error": f"timed out ({timeout}s)",
+            "duration_s": round(time.time() - start, 2),
+        }
     except Exception as e:
         return {"error": str(e), "duration_s": round(time.time() - start, 2)}
 
     duration = time.time() - start
     stdout = stdout_bytes.decode("utf-8", errors="replace").strip()
-    stderr = stderr_bytes.decode("utf-8", errors="replace").strip() if stderr_bytes else ""
+    stderr = (
+        stderr_bytes.decode("utf-8", errors="replace").strip() if stderr_bytes else ""
+    )
 
     from ..events import parse_events
+
     transcript = parse_events(stdout)
 
     text_parts = []

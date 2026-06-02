@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import shutil
 import tempfile
-import uuid
 from pathlib import Path
 
 import pytest
@@ -56,10 +54,13 @@ class TestCriteria:
             "experiment: Tried PostgreSQL with pgvector\n"
             "validation: Response time improved by 40%\n"
         )
-        result = _call("knowledge_session_commit", {
-            "project": tmp_proj,
-            "conversation_text": convo,
-        })
+        result = _call(
+            "knowledge_session_commit",
+            {
+                "project": tmp_proj,
+                "conversation_text": convo,
+            },
+        )
 
         text = result.content[0].text
         assert "Session commit succeeded" in text
@@ -74,10 +75,13 @@ class TestCriteria:
         """Verify concept materialization creates concept files."""
         _call("knowledge_init", {"project": tmp_proj})
 
-        _call("knowledge_session_commit", {
-            "project": tmp_proj,
-            "conversation_text": "decision: Use React for the frontend",
-        })
+        _call(
+            "knowledge_session_commit",
+            {
+                "project": tmp_proj,
+                "conversation_text": "decision: Use React for the frontend",
+            },
+        )
 
         result = _call("knowledge_materialize", {"project": tmp_proj})
         text = result.content[0].text
@@ -95,11 +99,15 @@ class TestCriteria:
 
         # harness_plan_step
         import json
+
         plan = json.loads(result.content[0].text)
-        result = _call("harness_plan_step", {
-            "plan_id": plan["plan_id"],
-            "intent": "first step",
-        })
+        result = _call(
+            "harness_plan_step",
+            {
+                "plan_id": plan["plan_id"],
+                "intent": "first step",
+            },
+        )
         step_data = json.loads(result.content[0].text)
         assert step_data["status"] == "added"
 
@@ -114,13 +122,18 @@ class TestCriteria:
         assert status_data["status"] == "finalized"
 
         # harness_todo_write
-        result = _call("harness_todo_write", {
-            "items": json.dumps([
-                {"content": "do something", "status": "pending"},
-                {"content": "do something else", "status": "in_progress"},
-            ]),
-            "workdir": tmp_proj,
-        })
+        result = _call(
+            "harness_todo_write",
+            {
+                "items": json.dumps(
+                    [
+                        {"content": "do something", "status": "pending"},
+                        {"content": "do something else", "status": "in_progress"},
+                    ]
+                ),
+                "workdir": tmp_proj,
+            },
+        )
         assert "Todo list updated" in result.content[0].text
 
         # harness_todo_read
@@ -128,12 +141,17 @@ class TestCriteria:
         assert "Todo list" in result.content[0].text
 
         # harness_todo_advance
-        todos = json.loads((Path(tmp_proj) / ".harness" / "state" / "todos.json").read_text())
-        result = _call("harness_todo_advance", {
-            "item_id": todos[0]["id"],
-            "status": "completed",
-            "workdir": tmp_proj,
-        })
+        todos = json.loads(
+            (Path(tmp_proj) / ".harness" / "state" / "todos.json").read_text()
+        )
+        result = _call(
+            "harness_todo_advance",
+            {
+                "item_id": todos[0]["id"],
+                "status": "completed",
+                "workdir": tmp_proj,
+            },
+        )
         assert "Updated item" in result.content[0].text
 
         # harness_db_query (read-only, may not find the DB)
@@ -146,7 +164,9 @@ class TestCriteria:
 
         # Write some state
         handoff = Path(tmp_proj) / ".harness" / "directives" / "session-handoff.md"
-        handoff.write_text("# Session Handoff\n\n## Next Action\nComplete the auth module\n")
+        handoff.write_text(
+            "# Session Handoff\n\n## Next Action\nComplete the auth module\n"
+        )
 
         result = _call("knowledge_session_start", {"project": tmp_proj})
         text = result.content[0].text
@@ -158,12 +178,18 @@ class TestCriteria:
 
         # Write todo
         import json
-        _call("harness_todo_write", {
-            "items": json.dumps([
-                {"content": "test persistence", "status": "pending"},
-            ]),
-            "workdir": tmp_proj,
-        })
+
+        _call(
+            "harness_todo_write",
+            {
+                "items": json.dumps(
+                    [
+                        {"content": "test persistence", "status": "pending"},
+                    ]
+                ),
+                "workdir": tmp_proj,
+            },
+        )
 
         # Verify file exists
         todo_file = Path(tmp_proj) / ".harness" / "state" / "todos.json"
@@ -175,10 +201,14 @@ class TestCriteria:
     def test_harness_plan_auto_decompose(self, tmp_proj):
         """Verify that auto_decompose on harness_plan_begin adds steps."""
         import json
-        result = _call("harness_plan_begin", {
-            "task": "Configure backend server and create database tables and write user tests",
-            "auto_decompose": True,
-        })
+
+        result = _call(
+            "harness_plan_begin",
+            {
+                "task": "Configure backend server and create database tables and write user tests",
+                "auto_decompose": True,
+            },
+        )
         data = json.loads(result.content[0].text)
         assert data["steps_added"] >= 2
         assert "plan_id" in data
@@ -186,15 +216,21 @@ class TestCriteria:
     def test_harness_run_tasks_parallel(self, tmp_proj):
         """Verify harness_run_tasks accepts parallel option."""
         import json
-        tasks = json.dumps([
-            {"prompt": ""},
-            {"prompt": "echo hello", "label": "t1", "timeout": 2},
-        ])
-        result = _call("harness_run_tasks", {
-            "tasks": tasks,
-            "workdir": tmp_proj,
-            "parallel": True,
-        })
+
+        tasks = json.dumps(
+            [
+                {"prompt": ""},
+                {"prompt": "echo hello", "label": "t1", "timeout": 2},
+            ]
+        )
+        result = _call(
+            "harness_run_tasks",
+            {
+                "tasks": tasks,
+                "workdir": tmp_proj,
+                "parallel": True,
+            },
+        )
         text = result.content[0].text
         assert "skipped" in text or "Error" in text or "t1" in text
 
@@ -203,7 +239,7 @@ class TestCriteria:
         import sys
         from unittest.mock import patch
         from harness_knowledge.cli import main
-        
+
         with patch.object(sys, "argv", ["harness-knowledge", "stats"]):
             with patch("harness_knowledge.cli.KnowledgeEngine") as mock_engine:
                 mock_engine.return_value.stats.return_value = {
@@ -223,10 +259,10 @@ class TestCriteria:
         concepts_dir = Path(tmp_proj) / ".harness" / "directives" / "wiki_concepts"
         concepts_dir.mkdir(parents=True, exist_ok=True)
         file_path = concepts_dir / "concept_001.md"
-        
+
         long_content = "Some initial content. " * 50
         eng._safe_write_concept_file(file_path, long_content, tmp_proj)
-        
+
         short_content = "Too short."
         with pytest.raises(ValueError, match="Truncation risk detected"):
             eng._safe_write_concept_file(file_path, short_content, tmp_proj)
@@ -243,7 +279,7 @@ class TestCriteria:
         """Verify that typed links and reciprocal links are correctly parsed and saved."""
         _call("knowledge_init", {"project": tmp_proj})
         eng = KnowledgeEngine(tmp_proj)
-        
+
         registry = eng._load_registry(tmp_proj)
         registry["concept_001"] = {
             "concept_id": "concept_001",
@@ -253,7 +289,7 @@ class TestCriteria:
             "confidence": 3,
             "evidence_count": 3,
             "session_count": 2,
-            "sessions": ["session_one"]
+            "sessions": ["session_one"],
         }
         registry["concept_002"] = {
             "concept_id": "concept_002",
@@ -263,13 +299,13 @@ class TestCriteria:
             "confidence": 3,
             "evidence_count": 3,
             "session_count": 2,
-            "sessions": ["session_two"]
+            "sessions": ["session_two"],
         }
         eng._save_registry(registry, tmp_proj)
-        
+
         concepts_dir = Path(tmp_proj) / ".harness" / "directives" / "wiki_concepts"
         concepts_dir.mkdir(parents=True, exist_ok=True)
-        
+
         c1_content = """---
 concept_id: concept_001
 canonical_name: concept-one
@@ -282,7 +318,7 @@ aliases: ["one"]
 # Concept One
 We link here: [[depends_on:concept_002|Concept Two]]."""
         (concepts_dir / "concept_001.md").write_text(c1_content)
-        
+
         c2_content = """---
 concept_id: concept_002
 canonical_name: concept-two
@@ -294,24 +330,30 @@ aliases: ["two"]
 ---
 # Concept Two"""
         (concepts_dir / "concept_002.md").write_text(c2_content)
-        
+
         eng.update_graph(tmp_proj)
-        
+
         updated_reg = eng._load_registry(tmp_proj)
-        assert any(r["type"] == "depends_on" and r["target"] == "concept_002" for r in updated_reg["concept_001"]["relationships"])
-        assert any(r["type"] == "depended_on_by" and r["target"] == "concept_001" for r in updated_reg["concept_002"]["relationships"])
-        
+        assert any(
+            r["type"] == "depends_on" and r["target"] == "concept_002"
+            for r in updated_reg["concept_001"]["relationships"]
+        )
+        assert any(
+            r["type"] == "depended_on_by" and r["target"] == "concept_001"
+            for r in updated_reg["concept_002"]["relationships"]
+        )
+
         c2_new_content = (concepts_dir / "concept_002.md").read_text()
         assert "[[depended_on_by:concept_001|" in c2_new_content
 
     def test_linter_broken_and_orphans(self, tmp_proj):
         """Verify linter detects broken links and orphans."""
         _call("knowledge_init", {"project": tmp_proj})
-        eng = KnowledgeEngine(tmp_proj)
-        
+        KnowledgeEngine(tmp_proj)
+
         concepts_dir = Path(tmp_proj) / ".harness" / "directives" / "wiki_concepts"
         concepts_dir.mkdir(parents=True, exist_ok=True)
-        
+
         c1_content = """---
 concept_id: concept_001
 canonical_name: concept-one
@@ -321,11 +363,12 @@ confidence: 3
 # Concept One
 Broken: [[concept_999]]."""
         (concepts_dir / "concept_001.md").write_text(c1_content)
-        
+
         import asyncio
         from harness_knowledge.linter import run_lint
+
         res = asyncio.run(run_lint(Path(tmp_proj)))
-        
+
         assert res["status"] == "success"
         assert len(res["broken_links"]) == 1
         assert res["broken_links"][0]["target"] == "concept_999"

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import sys
 from pathlib import Path
 
 from harness_tui.panels import render_panel
@@ -71,20 +70,30 @@ def main():
 
     if args.command == "stats":
         s = eng.stats()
-        lines = [f"Chunks: {s['total_chunks']}", f"DB size: {s['db_size_mb']:.2f} MB", f"Path: {s['harness_path']}"]
+        lines = [
+            f"Chunks: {s['total_chunks']}",
+            f"DB size: {s['db_size_mb']:.2f} MB",
+            f"Path: {s['harness_path']}",
+        ]
         print(render_panel("Stats", lines, status="stats"))
 
     elif args.command == "init":
         res = eng.init_project(args.project)
-        lines = [res["message"]] + [f"  📁 {d}" for d in res.get("created_directories", [])] + [f"  📄 {f}" for f in res.get("created_files", [])]
+        lines = (
+            [res["message"]]
+            + [f"  📁 {d}" for d in res.get("created_directories", [])]
+            + [f"  📄 {f}" for f in res.get("created_files", [])]
+        )
         print(render_panel("Init Complete", lines, status="bootstrap"))
 
     elif args.command == "search":
         e = KnowledgeEngine(args.project or None)
         results = e.search(args.query, k=args.k)
-        lines = [f"Query: \"{args.query}\"", f"Results: {len(results)}", ""]
+        lines = [f'Query: "{args.query}"', f"Results: {len(results)}", ""]
         for idx, r in enumerate(results):
-            lines.append(f"{idx+1}. [{r['metadata'].get('rel_path', 'unknown')}] (score: {r['score']:.4f})")
+            lines.append(
+                f"{idx + 1}. [{r['metadata'].get('rel_path', 'unknown')}] (score: {r['score']:.4f})"
+            )
             lines.append(f"   {r['document'][:150]}...")
             lines.append("")
         if not results:
@@ -94,62 +103,135 @@ def main():
     elif args.command == "index":
         e = KnowledgeEngine(args.project or None)
         s = e.index_all(force=args.force)
-        lines = [f"Scanned: {s['scanned']}  New: {s['new']}  Updated: {s['updated']}  Unchanged: {s['unchanged']}  Failed: {s['failed']}"]
+        lines = [
+            f"Scanned: {s['scanned']}  New: {s['new']}  Updated: {s['updated']}  Unchanged: {s['unchanged']}  Failed: {s['failed']}"
+        ]
         print(render_panel("Index Complete", lines, status="index"))
 
     elif args.command == "session-start":
         e = KnowledgeEngine(args.project)
         res = e.restore_session_state(args.project)
-        lines = [f"Goals: {len(res.get('active_goals', []))}", f"Blockers: {len(res.get('blockers', []))}", f"Files: {len(res.get('recommended_files', []))}"]
+        lines = [
+            f"Goals: {len(res.get('active_goals', []))}",
+            f"Blockers: {len(res.get('blockers', []))}",
+            f"Files: {len(res.get('recommended_files', []))}",
+        ]
         print(render_panel("Session Start", lines, status="restore"))
 
     elif args.command == "reflect":
         e = KnowledgeEngine(args.project)
         res = e.reflect_session(args.project, args.chat, args.session_id)
-        print(render_panel("Reflection Complete", [f"Report: {Path(res['report_path']).name}", f"Events: {len(res.get('knowledge_events', []))}"], status="ok"))
+        print(
+            render_panel(
+                "Reflection Complete",
+                [
+                    f"Report: {Path(res['report_path']).name}",
+                    f"Events: {len(res.get('knowledge_events', []))}",
+                ],
+                status="ok",
+            )
+        )
 
     elif args.command == "commit":
         e = KnowledgeEngine(args.project)
         res = e.session_commit(args.project, args.chat, args.session_id)
-        print(render_panel("Commit Complete", [f"Report: {Path(res['report_path']).name}", f"Materialized: {len(res.get('materialized_log', []))}", f"Links: {res.get('links_updated', 0)}"], status="ok"))
+        print(
+            render_panel(
+                "Commit Complete",
+                [
+                    f"Report: {Path(res['report_path']).name}",
+                    f"Materialized: {len(res.get('materialized_log', []))}",
+                    f"Links: {res.get('links_updated', 0)}",
+                ],
+                status="ok",
+            )
+        )
 
     elif args.command == "materialize":
         e = KnowledgeEngine(args.project)
         res = e.materialize_concepts(args.project)
-        print(render_panel("Materialize Complete", res.get("materialized", ["No changes"]), status="ok"))
+        print(
+            render_panel(
+                "Materialize Complete",
+                res.get("materialized", ["No changes"]),
+                status="ok",
+            )
+        )
 
     elif args.command == "graph":
         e = KnowledgeEngine(args.project)
         res = e.update_graph(args.project)
-        print(render_panel("Graph Updated", [f"Links: {res.get('links_updated', 0)}"], status="organize"))
+        print(
+            render_panel(
+                "Graph Updated",
+                [f"Links: {res.get('links_updated', 0)}"],
+                status="organize",
+            )
+        )
 
     elif args.command == "consolidate":
         e = KnowledgeEngine(args.project)
         res = e.consolidate(args.project)
-        print(render_panel("Consolidation", res.get("merged", ["No changes"]), status="organize"))
+        print(
+            render_panel(
+                "Consolidation", res.get("merged", ["No changes"]), status="organize"
+            )
+        )
 
     elif args.command == "rebuild":
         e = KnowledgeEngine(args.project)
         res = e.rebuild_registry(args.project)
-        print(render_panel("Registry Rebuilt", [res.get("message", ""), f"Materialized concepts: {res.get('materialized', 0)}"], status="ok"))
+        print(
+            render_panel(
+                "Registry Rebuilt",
+                [
+                    res.get("message", ""),
+                    f"Materialized concepts: {res.get('materialized', 0)}",
+                ],
+                status="ok",
+            )
+        )
 
     elif args.command == "events":
         e = KnowledgeEngine(args.project)
-        events = e.get_events(args.project, concept=args.concept, event_type=args.type, session_id=args.session_id)
-        lines = [f"Total: {len(events)}"] + [f"  [{ev['event_type'].upper()}] {ev.get('summary', '')[:80]}" for ev in events[:20]]
+        events = e.get_events(
+            args.project,
+            concept=args.concept,
+            event_type=args.type,
+            session_id=args.session_id,
+        )
+        lines = [f"Total: {len(events)}"] + [
+            f"  [{ev['event_type'].upper()}] {ev.get('summary', '')[:80]}"
+            for ev in events[:20]
+        ]
         print(render_panel("Events", lines, status="ok"))
 
     elif args.command == "event":
         e = KnowledgeEngine(args.project)
         try:
             ev = e.get_event(args.project, args.event_id)
-            print(render_panel("Event", [f"Type: {ev['event_type']}", f"Summary: {ev.get('summary', '')}", f"Evidence: {ev.get('evidence', '')}"], status="ok"))
+            print(
+                render_panel(
+                    "Event",
+                    [
+                        f"Type: {ev['event_type']}",
+                        f"Summary: {ev.get('summary', '')}",
+                        f"Evidence: {ev.get('evidence', '')}",
+                    ],
+                    status="ok",
+                )
+            )
         except KeyError:
-            print(render_panel("Not Found", [f"No event: {args.event_id}"], status="error"))
+            print(
+                render_panel(
+                    "Not Found", [f"No event: {args.event_id}"], status="error"
+                )
+            )
 
     elif args.command == "lint":
         import asyncio
         from .linter import run_lint
+
         res = asyncio.run(run_lint(Path(args.project), max_parallel=args.workers))
         if res["status"] == "error":
             print(render_panel("Lint Error", [res["message"]], status="error"))
@@ -157,13 +239,19 @@ def main():
             lines = [
                 f"Files scanned: {res.get('files_scanned', 0)}",
                 f"Broken links:  {len(res.get('broken_links', []))}",
-                f"Orphan nodes:  {len(res.get('orphans', []))}"
+                f"Orphan nodes:  {len(res.get('orphans', []))}",
             ]
             for bl in res.get("broken_links", []):
                 lines.append(f"  ❌ Broken link: {bl['source']} -> {bl['target']}")
             for op in res.get("orphans", []):
                 lines.append(f"  ⚠️ Orphan concept: {op}")
-            print(render_panel("Lint Results", lines, status="error" if res.get('broken_links') else "ok"))
+            print(
+                render_panel(
+                    "Lint Results",
+                    lines,
+                    status="error" if res.get("broken_links") else "ok",
+                )
+            )
 
 
 if __name__ == "__main__":

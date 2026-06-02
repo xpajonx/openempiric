@@ -6,7 +6,6 @@ import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 from opencode_ai import AsyncOpencode
 
@@ -16,7 +15,9 @@ from .events import SessionTranscript, parse_events
 @dataclass
 class RunResult:
     text: str
-    transcript: SessionTranscript = field(default_factory=lambda: SessionTranscript(session_id=""))
+    transcript: SessionTranscript = field(
+        default_factory=lambda: SessionTranscript(session_id="")
+    )
     session_id: str = ""
     duration_s: float = 0.0
     returncode: int | None = None
@@ -44,7 +45,12 @@ def create_async_client(server_url: str | None = None) -> AsyncOpencode:
     return AsyncOpencode(base_url=url)
 
 
-def run(prompt: str, workdir: str = "", timeout: int = 300, dangerously_skip_permissions: bool = True) -> RunResult:
+def run(
+    prompt: str,
+    workdir: str = "",
+    timeout: int = 300,
+    dangerously_skip_permissions: bool = True,
+) -> RunResult:
     cmd = find_opencode()
     cwd = safe_workdir(workdir)
     args = [cmd, "run", prompt]
@@ -57,14 +63,34 @@ def run(prompt: str, workdir: str = "", timeout: int = 300, dangerously_skip_per
     start = time.time()
     try:
         result = subprocess.run(
-            args, cwd=cwd, capture_output=True, text=True, timeout=timeout, env=env,
+            args,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=env,
         )
     except subprocess.TimeoutExpired:
-        return RunResult(text=f"Error: Timed out after {timeout}s", duration_s=time.time() - start, returncode=-1, error="timeout")
+        return RunResult(
+            text=f"Error: Timed out after {timeout}s",
+            duration_s=time.time() - start,
+            returncode=-1,
+            error="timeout",
+        )
     except FileNotFoundError:
-        return RunResult(text=f"Error: opencode CLI not found at {cmd}", duration_s=time.time() - start, returncode=-1, error="not_found")
+        return RunResult(
+            text=f"Error: opencode CLI not found at {cmd}",
+            duration_s=time.time() - start,
+            returncode=-1,
+            error="not_found",
+        )
     except Exception as e:
-        return RunResult(text=f"Error: {e}", duration_s=time.time() - start, returncode=-1, error=str(e))
+        return RunResult(
+            text=f"Error: {e}",
+            duration_s=time.time() - start,
+            returncode=-1,
+            error=str(e),
+        )
 
     duration = time.time() - start
     stdout = result.stdout.strip()
@@ -83,7 +109,12 @@ def run(prompt: str, workdir: str = "", timeout: int = 300, dangerously_skip_per
     )
 
 
-def run_json(prompt: str, workdir: str = "", timeout: int = 300, dangerously_skip_permissions: bool = True) -> RunResult:
+def run_json(
+    prompt: str,
+    workdir: str = "",
+    timeout: int = 300,
+    dangerously_skip_permissions: bool = True,
+) -> RunResult:
     cmd = find_opencode()
     cwd = safe_workdir(workdir)
     args = [cmd, "run", "--format", "json", prompt]
@@ -96,14 +127,34 @@ def run_json(prompt: str, workdir: str = "", timeout: int = 300, dangerously_ski
     start = time.time()
     try:
         result = subprocess.run(
-            args, cwd=cwd, capture_output=True, text=True, timeout=timeout, env=env,
+            args,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=env,
         )
     except subprocess.TimeoutExpired:
-        return RunResult(text=f"Error: Timed out after {timeout}s", duration_s=time.time() - start, returncode=-1, error="timeout")
+        return RunResult(
+            text=f"Error: Timed out after {timeout}s",
+            duration_s=time.time() - start,
+            returncode=-1,
+            error="timeout",
+        )
     except FileNotFoundError:
-        return RunResult(text=f"Error: opencode CLI not found at {cmd}", duration_s=time.time() - start, returncode=-1, error="not_found")
+        return RunResult(
+            text=f"Error: opencode CLI not found at {cmd}",
+            duration_s=time.time() - start,
+            returncode=-1,
+            error="not_found",
+        )
     except Exception as e:
-        return RunResult(text=f"Error: {e}", duration_s=time.time() - start, returncode=-1, error=str(e))
+        return RunResult(
+            text=f"Error: {e}",
+            duration_s=time.time() - start,
+            returncode=-1,
+            error=str(e),
+        )
 
     duration = time.time() - start
     transcript = parse_events(result.stdout)

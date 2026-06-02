@@ -10,6 +10,7 @@ from .engine import KnowledgeEngine
 
 def mount_tools(mcp: object) -> None:
     from fastmcp import FastMCP
+
     if not isinstance(mcp, FastMCP):
         return
 
@@ -22,7 +23,9 @@ def mount_tools(mcp: object) -> None:
         try:
             res = engine.init_project(target)
         except Exception as e:
-            return render_panel("Initialization Failure", [f"Error: {e}"], status="error")
+            return render_panel(
+                "Initialization Failure", [f"Error: {e}"], status="error"
+            )
 
         lines = [res["message"], "", "Created Directories:"]
         for d in res.get("created_directories", []):
@@ -49,12 +52,16 @@ def mount_tools(mcp: object) -> None:
             return render_panel("Search Failure", [f"Error: {e}"], status="error")
 
         if not results:
-            return render_panel("Search: 0 results", [f"No matches for: '{query}'"], status="search")
+            return render_panel(
+                "Search: 0 results", [f"No matches for: '{query}'"], status="search"
+            )
 
-        lines = [f"Query: \"{query}\"", f"Results: {len(results)}", ""]
+        lines = [f'Query: "{query}"', f"Results: {len(results)}", ""]
         for idx, r in enumerate(results):
             meta = r["metadata"]
-            lines.append(f"{idx+1}. [{meta.get('rel_path', 'unknown')}] (score: {r['score']:.4f})")
+            lines.append(
+                f"{idx + 1}. [{meta.get('rel_path', 'unknown')}] (score: {r['score']:.4f})"
+            )
             lines.append(f"   {r['document'][:150].replace(chr(10), ' ')}...")
             lines.append("")
         return render_panel("Knowledge Search Results", lines, status="search")
@@ -112,10 +119,16 @@ def mount_tools(mcp: object) -> None:
         try:
             res = eng.restore_session_state(project or None)
         except Exception as e:
-            return render_panel("Session Start Failure", [f"Error: {e}"], status="error")
+            return render_panel(
+                "Session Start Failure", [f"Error: {e}"], status="error"
+            )
 
         if res.get("status") == "error":
-            return render_panel("Session Start Error", [res.get("message", "Unknown error")], status="error")
+            return render_panel(
+                "Session Start Error",
+                [res.get("message", "Unknown error")],
+                status="error",
+            )
 
         lines = ["Active Goals:"]
         for g in res.get("active_goals", []):
@@ -136,7 +149,9 @@ def mount_tools(mcp: object) -> None:
         return render_panel("Session Start", lines, status="restore")
 
     @mcp.tool()
-    def knowledge_reflect(project: str = "", conversation_text: str = "", session_id: str = "") -> str:
+    def knowledge_reflect(
+        project: str = "", conversation_text: str = "", session_id: str = ""
+    ) -> str:
         """Extract structured Knowledge Events from conversation text and write a session report.
 
         Args:
@@ -151,7 +166,11 @@ def mount_tools(mcp: object) -> None:
             return render_panel("Reflection Failure", [f"Error: {e}"], status="error")
 
         events = res.get("knowledge_events", [])
-        lines = [f"Report: {Path(res.get('report_path', '')).name}", "", "Knowledge Events Extracted:"]
+        lines = [
+            f"Report: {Path(res.get('report_path', '')).name}",
+            "",
+            "Knowledge Events Extracted:",
+        ]
         for ev in events:
             lines.append(f"  - [{ev.get('type', '').upper()}] {ev.get('concept', '')}")
         if not events:
@@ -169,7 +188,9 @@ def mount_tools(mcp: object) -> None:
         try:
             res = eng.materialize_concepts(project or None)
         except Exception as e:
-            return render_panel("Materialization Failure", [f"Error: {e}"], status="error")
+            return render_panel(
+                "Materialization Failure", [f"Error: {e}"], status="error"
+            )
 
         lines = [res.get("message", "Materialization complete."), ""]
         if res.get("materialized"):
@@ -200,7 +221,9 @@ def mount_tools(mcp: object) -> None:
         return render_panel("Knowledge Graph", lines, status="organize")
 
     @mcp.tool()
-    def knowledge_session_commit(project: str = "", conversation_text: str = "", session_id: str = "") -> str:
+    def knowledge_session_commit(
+        project: str = "", conversation_text: str = "", session_id: str = ""
+    ) -> str:
         """End-of-session pipeline: reflect → materialize concepts → update graph → re-index.
 
         Args:
@@ -212,7 +235,9 @@ def mount_tools(mcp: object) -> None:
         try:
             res = eng.session_commit(project or None, conversation_text, session_id)
         except Exception as e:
-            return render_panel("Session Commit Failure", [f"Error: {e}"], status="error")
+            return render_panel(
+                "Session Commit Failure", [f"Error: {e}"], status="error"
+            )
 
         events = res.get("knowledge_events", [])
         event_counts: dict[str, int] = {}
@@ -221,7 +246,7 @@ def mount_tools(mcp: object) -> None:
             event_counts[t] = event_counts.get(t, 0) + 1
 
         lines = [
-            f"Session commit succeeded.",
+            "Session commit succeeded.",
             f"Report: {Path(res.get('report_path', '')).name}",
             "",
             "Extracted Knowledge Events:",
@@ -231,13 +256,15 @@ def mount_tools(mcp: object) -> None:
                 lines.append(f"  - {t.title()}: {c} events")
         else:
             lines.append("  - None")
-        lines.extend([
-            "",
-            "Graph & Index:",
-            f"  Materialized:   {len(res.get('materialized_log', []))} concepts",
-            f"  Links updated:  {res.get('links_updated', 0)}",
-            f"  Index: {res.get('index_stats', {}).get('new', 0)} new, {res.get('index_stats', {}).get('updated', 0)} updated",
-        ])
+        lines.extend(
+            [
+                "",
+                "Graph & Index:",
+                f"  Materialized:   {len(res.get('materialized_log', []))} concepts",
+                f"  Links updated:  {res.get('links_updated', 0)}",
+                f"  Index: {res.get('index_stats', {}).get('new', 0)} new, {res.get('index_stats', {}).get('updated', 0)} updated",
+            ]
+        )
         return render_panel("Session Commit Complete", lines, status="ok")
 
     @mcp.tool()
@@ -251,7 +278,9 @@ def mount_tools(mcp: object) -> None:
         try:
             res = eng.consolidate(project or None)
         except Exception as e:
-            return render_panel("Consolidation Failure", [f"Error: {e}"], status="error")
+            return render_panel(
+                "Consolidation Failure", [f"Error: {e}"], status="error"
+            )
 
         lines = [res.get("message", "Consolidation complete."), ""]
         for m in res.get("merged", []):
@@ -261,7 +290,9 @@ def mount_tools(mcp: object) -> None:
         return render_panel("Consolidation", lines, status="organize")
 
     @mcp.tool()
-    def knowledge_get_events(project: str = "", concept: str = "", event_type: str = "", session_id: str = "") -> str:
+    def knowledge_get_events(
+        project: str = "", concept: str = "", event_type: str = "", session_id: str = ""
+    ) -> str:
         """Query knowledge events filtered by concept, event_type, or session_id.
 
         Args:
@@ -272,13 +303,20 @@ def mount_tools(mcp: object) -> None:
         """
         eng = KnowledgeEngine(project or None)
         try:
-            events = eng.get_events(project or None, concept=concept, event_type=event_type, session_id=session_id)
+            events = eng.get_events(
+                project or None,
+                concept=concept,
+                event_type=event_type,
+                session_id=session_id,
+            )
         except Exception as e:
             return render_panel("Get Events Failure", [f"Error: {e}"], status="error")
 
         lines = [f"Total events: {len(events)}", ""]
         for idx, ev in enumerate(events):
-            lines.append(f"{idx+1}. [{ev.get('event_type', '').upper()}] {ev.get('summary', '')}")
+            lines.append(
+                f"{idx + 1}. [{ev.get('event_type', '').upper()}] {ev.get('summary', '')}"
+            )
             lines.append(f"   ID: {ev.get('event_id', '')}")
             lines.append(f"   Evidence: {ev.get('evidence', '')[:100]}")
             lines.append("")
@@ -315,7 +353,7 @@ def mount_tools(mcp: object) -> None:
     @mcp.tool()
     def knowledge_explain_concept(project: str = "", concept_id: str = "") -> str:
         """Explain a concept and its evolution based on accumulated evidence.
-        
+
         Args:
             project: Project directory path. Defaults to current directory.
             concept_id: The concept UUID
@@ -325,10 +363,12 @@ def mount_tools(mcp: object) -> None:
             res = eng.explain_concept(project or None, concept_id)
         except Exception as e:
             return render_panel("Explain Failure", [f"Error: {e}"], status="error")
-            
+
         if res.get("status") == "error":
-            return render_panel("Concept Not Found", [res.get("message", "")], status="error")
-            
+            return render_panel(
+                "Concept Not Found", [res.get("message", "")], status="error"
+            )
+
         cdata = res["explanation"]["concept"]
         lines = [
             f"Concept: {cdata.get('canonical_name', '').title()} ({cdata.get('concept_id', '')})",
@@ -337,17 +377,19 @@ def mount_tools(mcp: object) -> None:
             f"Total Events: {res['explanation'].get('total_events', 0)}",
             f"Aliases: {', '.join(cdata.get('aliases', []))}",
             "",
-            "Recent Evidence:"
+            "Recent Evidence:",
         ]
         for ev in res["explanation"].get("recent_evidence", []):
             lines.append(f"  - {ev}")
-        
+
         return render_panel("Concept Explanation", lines, status="ok")
 
     @mcp.tool()
-    def knowledge_merge_concepts(project: str = "", primary_id: str = "", secondary_id: str = "") -> str:
+    def knowledge_merge_concepts(
+        project: str = "", primary_id: str = "", secondary_id: str = ""
+    ) -> str:
         """Merge a secondary concept into a primary concept.
-        
+
         Args:
             project: Project directory path. Defaults to current directory.
             primary_id: The UUID of the concept to keep
@@ -358,16 +400,20 @@ def mount_tools(mcp: object) -> None:
             res = eng.merge_concepts(project or None, primary_id, secondary_id)
         except Exception as e:
             return render_panel("Merge Failure", [f"Error: {e}"], status="error")
-            
+
         if res.get("status") == "error":
             return render_panel("Merge Error", [res.get("message", "")], status="error")
-            
-        return render_panel("Concepts Merged", [res.get("message", "")], status="organize")
+
+        return render_panel(
+            "Concepts Merged", [res.get("message", "")], status="organize"
+        )
 
     @mcp.tool()
-    def knowledge_graph_query(project: str = "", concept_id: str = "", direction: str = "both") -> str:
+    def knowledge_graph_query(
+        project: str = "", concept_id: str = "", direction: str = "both"
+    ) -> str:
         """Query semantic relationships for a concept.
-        
+
         Args:
             project: Project directory path. Defaults to current directory.
             concept_id: Target concept ID.
@@ -378,25 +424,35 @@ def mount_tools(mcp: object) -> None:
             registry = eng._load_registry(project or None)
         except Exception as e:
             return render_panel("Query Failure", [f"Error: {e}"], status="error")
-            
+
         if concept_id not in registry:
-            return render_panel("Query Error", [f"Concept {concept_id} not found."], status="error")
-            
+            return render_panel(
+                "Query Error", [f"Concept {concept_id} not found."], status="error"
+            )
+
         cdata = registry[concept_id]
-        lines = [f"Concept: {cdata.get('canonical_name', '').title()} ({concept_id})", ""]
-        
+        lines = [
+            f"Concept: {cdata.get('canonical_name', '').title()} ({concept_id})",
+            "",
+        ]
+
         if direction in ("outgoing", "both"):
             lines.append("Outgoing Relationships:")
             outgoing = cdata.get("relationships", [])
             for rel in outgoing:
                 target_id = rel.get("target")
-                t_name = registry.get(target_id, {}).get("canonical_name", target_id).replace("-", " ").title()
+                t_name = (
+                    registry.get(target_id, {})
+                    .get("canonical_name", target_id)
+                    .replace("-", " ")
+                    .title()
+                )
                 r_type = rel.get("type", "relates_to").replace("_", " ").title()
                 lines.append(f"  - [{r_type}] -> {t_name} ({target_id})")
             if not outgoing:
                 lines.append("  - None")
             lines.append("")
-                
+
         if direction in ("incoming", "both"):
             lines.append("Incoming Relationships:")
             incoming_count = 0
@@ -405,19 +461,21 @@ def mount_tools(mcp: object) -> None:
                     continue
                 for rel in data.get("relationships", []):
                     if rel.get("target") == concept_id:
-                        t_name = data.get("canonical_name", cid).replace("-", " ").title()
+                        t_name = (
+                            data.get("canonical_name", cid).replace("-", " ").title()
+                        )
                         r_type = rel.get("type", "relates_to").replace("_", " ").title()
                         lines.append(f"  - {t_name} ({cid}) -> [{r_type}]")
                         incoming_count += 1
             if incoming_count == 0:
                 lines.append("  - None")
-                
+
         return render_panel("Graph Query Results", lines, status="organize")
 
     @mcp.tool()
     def knowledge_lint(project: str = "", max_parallel: int = 4) -> str:
         """Check the knowledge base for broken links and orphan concepts in parallel.
-        
+
         Args:
             project: Project directory path. Defaults to current directory.
             max_parallel: Concurrency limit for link validation.
@@ -425,34 +483,38 @@ def mount_tools(mcp: object) -> None:
         import asyncio
         from .linter import run_lint
         from pathlib import Path
-        
+
         target = Path(project) if project else Path.cwd()
         try:
             res = asyncio.run(run_lint(target, max_parallel=max_parallel))
         except Exception as e:
             return render_panel("Lint Failure", [f"Error: {e}"], status="error")
-            
+
         if res.get("status") == "error":
             return render_panel("Lint Error", [res.get("message", "")], status="error")
-            
+
         lines = [
             f"Files Scanned: {res.get('files_scanned', 0)}",
             f"Broken Links:  {len(res.get('broken_links', []))}",
             f"Orphan Nodes:  {len(res.get('orphans', []))}",
-            ""
+            "",
         ]
         if res.get("broken_links"):
             lines.append("Broken Links:")
             for bl in res["broken_links"]:
-                lines.append(f"  ❌ {bl['source']} -> {bl['target']} (in {Path(bl['file']).name})")
+                lines.append(
+                    f"  ❌ {bl['source']} -> {bl['target']} (in {Path(bl['file']).name})"
+                )
             lines.append("")
-            
+
         if res.get("orphans"):
             lines.append("Orphan Concepts:")
             for op in res["orphans"]:
                 lines.append(f"  ⚠️ {op}")
-                
+
         if not res.get("broken_links") and not res.get("orphans"):
             lines.append("✨ All links verified successfully and no orphans found!")
-            
-        return render_panel("Lint Results", lines, status="error" if res.get('broken_links') else "ok")
+
+        return render_panel(
+            "Lint Results", lines, status="error" if res.get("broken_links") else "ok"
+        )

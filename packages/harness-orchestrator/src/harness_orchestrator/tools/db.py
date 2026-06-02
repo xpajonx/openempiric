@@ -6,7 +6,18 @@ import subprocess
 from ..client import find_opencode
 
 _ALLOWED_PREFIXES = ("SELECT", "PRAGMA", "WITH")
-_FORBIDDEN_KEYWORDS = ("DELETE", "INSERT", "UPDATE", "DROP", "ALTER", "CREATE", "ATTACH", "DETACH", "VACUUM", "REINDEX")
+_FORBIDDEN_KEYWORDS = (
+    "DELETE",
+    "INSERT",
+    "UPDATE",
+    "DROP",
+    "ALTER",
+    "CREATE",
+    "ATTACH",
+    "DETACH",
+    "VACUUM",
+    "REINDEX",
+)
 
 
 def _is_safe(sql: str) -> tuple[bool, str]:
@@ -14,7 +25,10 @@ def _is_safe(sql: str) -> tuple[bool, str]:
     if not cleaned:
         return False, "empty query"
     if not any(cleaned.startswith(p) for p in _ALLOWED_PREFIXES):
-        return False, f"only SELECT/PRAGMA/WITH queries allowed (got: {cleaned.split()[0]})"
+        return (
+            False,
+            f"only SELECT/PRAGMA/WITH queries allowed (got: {cleaned.split()[0]})",
+        )
     for kw in _FORBIDDEN_KEYWORDS:
         if re.search(rf"\b{re.escape(kw)}\b", cleaned):
             return False, f"forbidden keyword: {kw}"
@@ -23,6 +37,7 @@ def _is_safe(sql: str) -> tuple[bool, str]:
 
 def register(mcp: object) -> None:
     from fastmcp import FastMCP
+
     if not isinstance(mcp, FastMCP):
         return
 

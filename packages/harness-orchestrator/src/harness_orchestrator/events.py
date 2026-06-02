@@ -34,7 +34,9 @@ class SessionTranscript:
     total_cost: float = 0.0
 
 
-def parse_stream(line: str, transcript: SessionTranscript | None = None) -> SessionTranscript | None:
+def parse_stream(
+    line: str, transcript: SessionTranscript | None = None
+) -> SessionTranscript | None:
     try:
         event = json.loads(line)
     except json.JSONDecodeError:
@@ -60,7 +62,9 @@ def parse_stream(line: str, transcript: SessionTranscript | None = None) -> Sess
             output=state.get("output"),
             exit_code=meta.get("exit"),
             truncated=meta.get("truncated", False),
-            duration_ms=(tim.get("end", 0) - tim.get("start", 0)) if tim.get("start") else None,
+            duration_ms=(tim.get("end", 0) - tim.get("start", 0))
+            if tim.get("start")
+            else None,
             title=state.get("title"),
         )
         transcript.tool_calls.append(tool_event)
@@ -83,7 +87,9 @@ def parse_stream(line: str, transcript: SessionTranscript | None = None) -> Sess
         for cache_key in ("write", "read"):
             cache_tokens = tokens.get("cache", {}).get(cache_key, 0)
             ck = f"cache_{cache_key}"
-            transcript.total_tokens[ck] = transcript.total_tokens.get(ck, 0) + cache_tokens
+            transcript.total_tokens[ck] = (
+                transcript.total_tokens.get(ck, 0) + cache_tokens
+            )
 
     return transcript
 
