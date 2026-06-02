@@ -64,15 +64,7 @@ uv sync
    cp openempiric/plugins/openempiric.ts ~/.config/opencode/plugins/
    ```
 
-2. **Register the Plugin:**
-   Add `"openempiric"` to the `"plugin"` array in `~/.config/opencode/opencode.jsonc`:
-   ```json
-   "plugin": [
-     "openempiric"
-   ]
-   ```
-
-The plugin dynamically registers the `openempiric` MCP server and automatically loads the required agent memory and orchestration instructions!
+OpenCode automatically loads `.ts` plugins from the plugins directory. The plugin dynamically registers the `openempiric` MCP server and loads the required memory and orchestration instructions!
 
 ---
 
