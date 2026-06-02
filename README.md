@@ -1,15 +1,14 @@
-# opencode-harness
+# opencode-harness (OpenEmpiric)
 
-A single MCP server that combines process orchestration with local-first knowledge management for [opencode](https://opencode.ai).
+> Transform human-agent collaboration into durable organizational knowledge.
 
-## What it does
+Most AI memory systems focus on remembering.
 
-- **Subagent orchestration** — spawn child opencode sessions, run tasks in parallel
-- **Session lifecycle** — create, prompt, list, export, fork sessions
-- **Plan mode** — decompose prompts into deterministic sub-tasks, batch-execute them
-- **Todo tracking** — write/read/advance persistent todo lists
-- **Knowledge graph** — hybrid vector + BM25 search over your project's session history
-- **Per-project `.harness/`** — each project keeps its own isolated vector DB and concept registry
+We believe the harder problem is learning.
+
+`opencode-harness` is an event-sourced knowledge operating system for coding agents that continuously converts conversations, experiments, decisions, successes, and failures into structured knowledge that improves over time.
+
+---
 
 ## Install
 
@@ -41,7 +40,7 @@ You no longer need to manually edit `opencode.jsonc`. The plugin will dynamicall
 
 
 
-## Tools (32 total)
+## Tools (34 total)
 
 ### Orchestrator (`harness_*`)
 
@@ -84,6 +83,8 @@ You no longer need to manually edit `opencode.jsonc`. The plugin will dynamicall
 | `knowledge_consolidate` | Consolidate similar concepts |
 | `knowledge_get_events` | List knowledge events |
 | `knowledge_get_event` | Get a single knowledge event by ID |
+| `knowledge_explain_concept` | Explain a concept and its evolution based on evidence |
+| `knowledge_merge_concepts` | Merge a secondary concept into a primary concept |
 
 ## How knowledge works
 
@@ -97,6 +98,382 @@ When you commit a session (`knowledge_session_commit`), the engine strictly foll
 6. **Re-indexes** — rebuilds the vector store for semantic search.
 
 All data lives in `.harness/` at the project root.
+
+## Why We Started This Project
+
+Today's AI agents suffer from a fundamental limitation:
+
+```text
+Conversation
+↓
+Context Window Ends
+↓
+Knowledge Disappears
+```
+
+Even when memory systems exist, they typically store:
+
+* transcripts
+* embeddings
+* retrieved snippets
+
+They remember information.
+
+They do not accumulate wisdom.
+
+As a result, agents repeatedly:
+
+* rediscover the same solutions
+* repeat failed experiments
+* forget architectural decisions
+* lose organizational learning
+
+We think there is a better approach.
+
+---
+
+## Our Thesis
+
+AI agents should not remember conversations.
+
+AI agents should remember:
+
+* validated knowledge
+* failed experiments
+* architectural decisions
+* recurring patterns
+* organizational learning
+
+Instead of storing conversations directly:
+
+```text
+Conversation
+↓
+Knowledge Events
+↓
+Concept Formation
+↓
+Knowledge Evolution
+↓
+Organizational Learning
+```
+
+The conversation becomes an input.
+
+Knowledge becomes the product.
+
+---
+
+## Architecture
+
+### Event-Sourced Knowledge Pipeline
+
+```text
+Human + Agent Collaboration
+↓
+Session Reflection
+↓
+Knowledge Events
+↓
+Event Store
+↓
+Concept Registry
+↓
+Promotion Engine
+↓
+Knowledge Wiki
+↓
+Knowledge Graph
+↓
+Workspace Intelligence
+```
+
+Unlike traditional memory systems:
+
+```text
+Conversation
+↓
+Embedding
+↓
+Retrieval
+```
+
+opencode-harness treats learning as a first-class primitive.
+
+---
+
+## Core Principles
+
+### 1. Events Are The Source Of Truth
+
+Everything begins with immutable events.
+
+Examples:
+
+```yaml
+event_type: validation
+concept: stripe-retry-architecture
+```
+
+```yaml
+event_type: failure
+concept: auto-linking
+```
+
+```yaml
+event_type: decision
+concept: event-sourced-knowledge-system
+```
+
+Events are append-only.
+
+Events are never modified.
+
+Everything else can be rebuilt from them.
+
+---
+
+### 2. Concepts Emerge From Evidence
+
+Knowledge should earn trust.
+
+Every concept progresses through a lifecycle:
+
+```text
+Candidate
+↓
+Emerging
+↓
+Validated
+↓
+Canonical
+↓
+Deprecated
+```
+
+Not every idea deserves a wiki page.
+
+Only validated knowledge becomes durable.
+
+---
+
+### 3. The Knowledge Base Is Rebuildable
+
+The system follows event-sourcing principles.
+
+```text
+events.jsonl
+↓
+Replay
+↓
+Concept Registry
+↓
+Knowledge Wiki
+```
+
+If the registry is lost.
+
+If the wiki is deleted.
+
+If the graph becomes corrupted.
+
+The system can rebuild itself from history.
+
+---
+
+### 4. Failure Is Knowledge
+
+Most memory systems only remember facts.
+
+We want agents to remember:
+
+```text
+What worked.
+What failed.
+Why decisions were made.
+```
+
+Because organizational learning comes from outcomes.
+
+Not transcripts.
+
+---
+
+## Current Status
+
+### Implemented
+
+* Event Store
+* Session Reflection Engine
+* Concept Registry
+* Concept Promotion Lifecycle
+* Replay Engine
+* Knowledge Materialization
+* Explainable Event History
+
+### In Progress
+
+* Concept Identity Resolution
+* Knowledge Evolution
+* Concept Explainability
+
+### Future
+
+* Typed Knowledge Graphs
+* Organizational Learning Layer
+* Workspace Intelligence
+* Multi-Agent Knowledge Sharing
+* Autonomous Knowledge Stewardship
+
+---
+
+## Example
+
+Instead of storing:
+
+```text
+Conversation #184
+```
+
+The system produces:
+
+```yaml
+event_type: validation
+
+concept:
+  stripe-retry-architecture
+
+evidence:
+  webhook duplication issue resolved
+```
+
+Which eventually evolves into:
+
+```markdown
+# Stripe Retry Architecture
+
+Validated retry strategy for webhook processing.
+
+Evidence:
+- Session 2026-06-01
+- Session 2026-06-12
+- Session 2026-07-02
+```
+
+The goal is not memory retrieval.
+
+The goal is durable knowledge.
+
+---
+
+## Who We're Looking For
+
+We're actively looking for contributors interested in:
+
+### AI Agents
+
+* OpenCode
+* Claude Code
+* Cursor
+* Agent frameworks
+
+### Knowledge Systems
+
+* Event sourcing
+* Knowledge graphs
+* Organizational memory
+* Information architecture
+
+### LLM Research
+
+* Concept extraction
+* Identity resolution
+* Knowledge evolution
+* Reflection systems
+
+### Systems Engineering
+
+* Local-first infrastructure
+* Indexing pipelines
+* Replay architectures
+* Distributed knowledge systems
+
+---
+
+## Open Research Problems
+
+We believe these are largely unsolved:
+
+### Concept Identity Resolution
+
+When are two concepts actually the same concept?
+
+```text
+Video Hooks
+Opening Hooks
+Hook Formats
+```
+
+One concept?
+
+Three concepts?
+
+How do we know?
+
+---
+
+### Knowledge Evolution
+
+How should concepts improve over time?
+
+How should evidence reshape knowledge?
+
+---
+
+### Organizational Learning
+
+How can agents remember:
+
+```text
+What worked?
+What failed?
+What should never be repeated?
+```
+
+across months or years of collaboration?
+
+---
+
+## Contributing
+
+We are not building another memory database.
+
+We are exploring a different question:
+
+> How can AI systems accumulate knowledge the way organizations do?
+
+If that problem excites you, we'd love your help.
+
+Open an issue.
+
+Start a discussion.
+
+Challenge the architecture.
+
+Help us build the future knowledge layer for coding agents.
+
+---
+
+
+## What it does
+
+- **Subagent orchestration** — spawn child opencode sessions, run tasks in parallel
+- **Session lifecycle** — create, prompt, list, export, fork sessions
+- **Plan mode** — decompose prompts into deterministic sub-tasks, batch-execute them
+- **Todo tracking** — write/read/advance persistent todo lists
+- **Knowledge graph** — hybrid vector + BM25 search over your project's session history
+- **Per-project `.harness/`** — each project keeps its own isolated vector DB and concept registry
+
 
 ## License
 

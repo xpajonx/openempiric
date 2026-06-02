@@ -56,13 +56,22 @@ os.environ["CUDA_VISIBLE_DEVICES"] = ""
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 class KnowledgeEvent(BaseModel):
-    event_type: str
-    concept_id: str | None = None
-    term: str | None = None
-    source: str
-    content: str | None = None
-    timestamp: float = Field(default_factory=time.time)
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    event_id: str = Field(description="UUID string for event identification")
+    timestamp: str = Field(description="ISO 8601 UTC timestamp format")
+    project: str = Field(description="Project identifier/directory name")
+    session_id: str = Field(description="Source session ID")
+    event_type: str = Field(description="Type: hypothesis, experiment, validation, failure, decision, deprecation, observation")
+    concept_candidates: list[str] = Field(default_factory=list, description="Associated concepts")
+    summary: str = Field(description="Short human-readable summary")
+    evidence: str = Field(description="Log snippet or conversation line")
+    confidence: int = Field(default=1, ge=1, le=5, description="Confidence rating (1-5)")
+    source: str = Field(description="Source of capture: chat, diff, test")
+    schema_version: int = Field(default=1)
+    
+    # Orchestrator Telemetry Integration
+    tokens: dict[str, int] | None = Field(default=None, description="Prompt token count details (input/output/total)")
+    cost: float | None = Field(default=None, description="API invocation cost in USD")
+    duration_s: float | None = Field(default=None, description="Subprocess run duration in seconds")
 
 HARNESS_DIR = ".harness"
 DEFAULT_DIRS = [
@@ -450,13 +459,20 @@ class KnowledgeEngine:
         created_files = []
 
         for fname, content in [
-            ("AGENTS.md", f"# Harness Framework — {name}\n\nMUST read at EVERY session start AND end.\n\n## Lifecycle Status\n| Phase | Status | Description |\n|---|---|---|\n| PHASE_ONE | `[ ]` Pending | Initialization and Setup |\n"),
+            ("AGENTS.md", f"# Harness Framework — {name}\n\nMUST read at EVERY session start AND end.\n\n## Lifecycle Status\n| Phase | Status | Description |\n|---|---|---|\n| PHASE_ONE | `[x]` Completed | Knowledge Event Foundation |\n| PHASE_TWO | `[x]` Completed | Concept Registry & Promotion Engine |\n| PHASE_THREE | `[x]` Completed | WSL OpenCode Plugin & Declarative YAML Orchestrator |\n| PHASE_FOUR | `[/]` In Progress | Concept Identity, Evolution & Explainability |\n"),
             ("CLAUDE.md", "# CLAUDE.md\nRefer to [AGENTS.md](AGENTS.md) for workspace lifecycle details.\n"),
             ("directives/wiki_inbox.md", "# Wiki Inbox\n\nAppend raw lessons, API observations, and style guidelines here.\n"),
             ("directives/progress.md", f"# Project Progress Log — {name}\n\n- **{time.strftime('%Y-%m-%d')}:** Harness initialized.\n"),
-            ("directives/session-handoff.md", "# Session Handoff\n\n## Next Action\nComplete phase one requirements.\n"),
-            ("state/workflow_state.json", json.dumps({"current_phase": "PHASE_ONE", "completed_steps": [], "history": []}, indent=2)),
-            ("state/feature_list.json", json.dumps({"phases": [{"id": "PHASE_ONE", "name": "System Setup", "completed": False}]}, indent=2)),
+            ("directives/session-handoff.md", "# Session Handoff\n\n## Next Action\nImplement Phase 4: Concept Identity Resolution, Knowledge Evolution, and Concept Explainability.\n"),
+            ("state/workflow_state.json", json.dumps({"current_phase": "PHASE_FOUR", "completed_steps": ["PHASE_ONE", "PHASE_TWO", "PHASE_THREE"], "history": []}, indent=2)),
+            ("state/feature_list.json", json.dumps({
+                "phases": [
+                    {"id": "PHASE_ONE", "name": "Knowledge Event Foundation", "completed": True},
+                    {"id": "PHASE_TWO", "name": "Concept Registry & Promotion Engine", "completed": True},
+                    {"id": "PHASE_THREE", "name": "WSL OpenCode Plugin & Declarative YAML Orchestrator", "completed": True},
+                    {"id": "PHASE_FOUR", "name": "Concept Identity, Evolution & Explainability", "completed": False}
+                ]
+            }, indent=2)),
         ]:
             fp = harness / fname
             if not fp.exists():
@@ -669,6 +685,7 @@ class KnowledgeEngine:
                 "source": ev.get("source", "chat"),
                 "schema_version": 1,
             }
+            print("DEBUG CANONICAL EVENT:", canonical_event)
             canonical_events.append(canonical_event)
             self._append_event(canonical_event, project)
 
