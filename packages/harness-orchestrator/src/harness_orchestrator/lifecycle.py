@@ -41,14 +41,14 @@ def on_session_start(workdir: str = "") -> str:
     return render_panel("Session State Restored", lines, status="restore")
 
 
-def on_session_end(conversation_text: str = "", session_id: str = "", workdir: str = "") -> str:
+def on_session_end(conversation_text: str = "", session_id: str = "", workdir: str = "", telemetry: dict | None = None) -> str:
     """Called automatically when a session ends. Commits conversation to the knowledge graph.
     
     This is the load-bearing integration: every CLI action is automatically a knowledge event.
     """
     eng = KnowledgeEngine(workdir or None)
     try:
-        res = eng.session_commit(workdir or None, conversation_text, session_id)
+        res = eng.session_commit(workdir or None, conversation_text, session_id, telemetry=telemetry)
     except Exception as e:
         return render_panel("Lifecycle: Session Commit", [f"Error: {e}"], status="error")
 

@@ -11,11 +11,21 @@ import time
 import uuid
 from collections import Counter
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
+
+from pydantic import BaseModel, Field
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
+class KnowledgeEvent(BaseModel):
+    event_type: str
+    concept_id: str | None = None
+    term: str | None = None
+    source: str
+    content: str | None = None
+    timestamp: float = Field(default_factory=time.time)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 HARNESS_DIR = ".harness"
 DEFAULT_DIRS = [
@@ -502,11 +512,15 @@ class KnowledgeEngine:
             return []
         return events
 
-    def _append_event(self, event: dict, project: str | None = None):
+    def _append_event(self, event: dict | KnowledgeEvent, project: str | None = None):
+        if isinstance(event, dict):
+            # Enforce validation
+            event = KnowledgeEvent(**event)
+
         p = self._events_path(project)
         p.parent.mkdir(parents=True, exist_ok=True)
         with open(p, "a") as f:
-            f.write(json.dumps(event) + "\n")
+            f.write(event.model_dump_json() + "\n")
 
     def _resolve_concept(self, term: str, registry: dict) -> tuple[str, dict]:
         term_clean = term.strip().lower()
@@ -523,7 +537,7 @@ class KnowledgeEngine:
         registry[new_id] = new_data
         return new_id, new_data
 
-    def reflect_session(self, project: str | None = None, conversation_text: str = "", session_id: str = "") -> dict:
+    def reflect_session(self, project: str | None = None, conversation_text: str = "", session_id: str = "", telemetry: dict | None = None) -> dict:
         if not session_id:
             session_id = f"session_{time.strftime('%Y%m%d_%H%M%S')}"
 
@@ -537,6 +551,16 @@ class KnowledgeEngine:
             knowledge_events.append({"type": "observation", "concept": concept, "evidence": f"Modified: {fp.name}", "confidence": 1, "source": "diff"})
 
         text_clean = conversation_text.strip()
+        if telemetry:
+            duration = telemetry.get("duration_sec", 0)
+            tool_calls = telemetry.get("total_tool_calls", 0)
+            knowledge_events.append({
+                "type": "telemetry",
+                "concept": "Session Metrics",
+                "evidence": f"Session duration: {duration}s, Tool calls: {tool_calls}",
+                "confidence": 1,
+                "source": "orchestrator"
+            })
         if text_clean.startswith("{"):
             try:
                 data = json.loads(text_clean)
@@ -813,8 +837,8 @@ aliases: {json.dumps(cdata.get('aliases', []))}
                 return ev
         raise KeyError(f"Event {event_id} not found")
 
-    def session_commit(self, project: str | None = None, conversation_text: str = "", session_id: str = "") -> dict:
-        res = self.reflect_session(project, conversation_text, session_id=session_id)
+    def session_commit(self, project: str | None = None, conversation_text: str = "", session_id: str = "", telemetry: dict | None = None) -> dict:
+        res = self.reflect_session(project, conversation_text, session_id=session_id, telemetry=telemetry)
         if res["status"] == "error":
             return res
 

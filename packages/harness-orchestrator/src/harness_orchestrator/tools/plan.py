@@ -20,17 +20,39 @@ def register(mcp: object) -> None:
         return
 
     @mcp.tool()
-    def harness_plan_begin(task: str) -> str:
-        """Start a new plan with the given task description. Returns a plan_id that subsequent plan tools use."""
+    def harness_plan_begin(task: str, auto_decompose: bool = False) -> str:
+        """Start a new plan with the given task description. Returns a plan_id that subsequent plan tools use.
+
+        Args:
+            task: Task description
+            auto_decompose: Automatically split the task into sequential steps
+        """
         plan_id = f"plan_{uuid.uuid4().hex[:8]}"
+        steps = []
+        if auto_decompose:
+            from ..planner import decompose
+            sub_tasks = decompose(task)
+            for idx, sub_task in enumerate(sub_tasks):
+                steps.append({
+                    "id": f"step_{idx + 1}",
+                    "intent": sub_task,
+                    "depends_on": [f"step_{idx}"] if idx > 0 else [],
+                    "status": "pending",
+                })
+
         _plans[plan_id] = {
             "id": plan_id,
             "task": task,
-            "steps": [],
+            "steps": steps,
             "status": "planning",
             "created_at": time.time(),
         }
-        return json.dumps({"plan_id": plan_id, "task": task, "status": "planning"})
+        return json.dumps({
+            "plan_id": plan_id,
+            "task": task,
+            "status": "planning",
+            "steps_added": len(steps),
+        })
 
     @mcp.tool()
     def harness_plan_step(plan_id: str, intent: str, depends_on: str = "") -> str:

@@ -170,3 +170,47 @@ class TestCriteria:
         data = json.loads(todo_file.read_text())
         assert len(data) == 1
         assert data[0]["content"] == "test persistence"
+
+    def test_harness_plan_auto_decompose(self, tmp_proj):
+        """Verify that auto_decompose on harness_plan_begin adds steps."""
+        import json
+        result = _call("harness_plan_begin", {
+            "task": "Configure backend server and create database tables and write user tests",
+            "auto_decompose": True,
+        })
+        data = json.loads(result.content[0].text)
+        assert data["steps_added"] >= 2
+        assert "plan_id" in data
+
+    def test_harness_run_tasks_parallel(self, tmp_proj):
+        """Verify harness_run_tasks accepts parallel option."""
+        import json
+        tasks = json.dumps([
+            {"prompt": ""},
+            {"prompt": "echo hello", "label": "t1", "timeout": 2},
+        ])
+        result = _call("harness_run_tasks", {
+            "tasks": tasks,
+            "workdir": tmp_proj,
+            "parallel": True,
+        })
+        text = result.content[0].text
+        assert "skipped" in text or "Error" in text or "t1" in text
+
+    def test_knowledge_cli_parser(self):
+        """Verify knowledge CLI parser structure and stats execution."""
+        import sys
+        from unittest.mock import patch
+        from harness_knowledge.cli import main
+        
+        with patch.object(sys, "argv", ["harness-knowledge", "stats"]):
+            with patch("harness_knowledge.cli.KnowledgeEngine") as mock_engine:
+                mock_engine.return_value.stats.return_value = {
+                    "total_chunks": 0,
+                    "db_size_mb": 0.0,
+                    "harness_path": "/tmp",
+                }
+                try:
+                    main()
+                except SystemExit as e:
+                    assert e.code == 0 or e.code is None

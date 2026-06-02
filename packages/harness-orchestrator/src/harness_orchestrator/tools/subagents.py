@@ -23,13 +23,14 @@ def register(mcp: object) -> None:
         return result.text
 
     @mcp.tool()
-    def harness_run_tasks(tasks: str, workdir: str = "") -> str:
-        """Run multiple independent opencode tasks sequentially and return all results. Useful for parallelizable work like 'fix lint errors AND add tests' where each task is independent.
+    def harness_run_tasks(tasks: str, workdir: str = "", parallel: bool = False) -> str:
+        """Run multiple independent opencode tasks (sequentially or in parallel) and return all results. Useful for parallelizable work like 'fix lint errors AND add tests' where each task is independent.
 
         Args:
             tasks: JSON array of task objects, each with a 'prompt' field. Optionally 'timeout' (default 120s).
             Example: [{"prompt": "fix lint in src/main.py"}, {"prompt": "write tests for utils.py", "timeout": 60}]
             workdir: Project directory (default: current dir)
+            parallel: Run tasks concurrently in parallel
         """
         try:
             parsed = json.loads(tasks)
@@ -38,17 +39,37 @@ def register(mcp: object) -> None:
         if not isinstance(parsed, list):
             return "Error: tasks must be a JSON array"
 
-        results = []
-        for i, task in enumerate(parsed):
-            prompt = task.get("prompt", "")
-            if not prompt:
-                results.append(f"Task {i}: skipped (no prompt)")
-                continue
-            t = task.get("timeout", 120)
-            label = task.get("label", f"Task {i}")
-            start = time.time()
-            out = run(prompt=prompt, workdir=workdir, timeout=t)
-            elapsed = time.time() - start
-            results.append(f"[{label}] ({elapsed:.1f}s)\n{out.text}")
+        if parallel:
+            import asyncio
+
+            async def _run_task_async(task: dict, idx: int) -> str:
+                prompt = task.get("prompt", "")
+                if not prompt:
+                    return f"Task {idx}: skipped (no prompt)"
+                t = task.get("timeout", 120)
+                label = task.get("label", f"Task {idx}")
+                start = time.time()
+                out = await asyncio.to_thread(run, prompt=prompt, workdir=workdir, timeout=t)
+                elapsed = time.time() - start
+                return f"[{label}] ({elapsed:.1f}s)\n{out.text}"
+
+            async def _run_all() -> list[str]:
+                coros = [_run_task_async(task, i) for i, task in enumerate(parsed)]
+                return await asyncio.gather(*coros)
+
+            results = asyncio.run(_run_all())
+        else:
+            results = []
+            for i, task in enumerate(parsed):
+                prompt = task.get("prompt", "")
+                if not prompt:
+                    results.append(f"Task {i}: skipped (no prompt)")
+                    continue
+                t = task.get("timeout", 120)
+                label = task.get("label", f"Task {i}")
+                start = time.time()
+                out = run(prompt=prompt, workdir=workdir, timeout=t)
+                elapsed = time.time() - start
+                results.append(f"[{label}] ({elapsed:.1f}s)\n{out.text}")
 
         return "\n---\n".join(results)

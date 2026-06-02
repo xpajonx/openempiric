@@ -14,17 +14,50 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("stats")
-    sub.add_parser("init").add_argument("project", type=str, help="Project name")
-    sub.add_parser("search").add_argument("query", type=str).add_argument("--k", type=int, default=3).add_argument("--project", type=str, default="")
-    sub.add_parser("index").add_argument("--force", action="store_true").add_argument("--project", type=str, default="")
-    sub.add_parser("commit").add_argument("project", type=str).add_argument("--chat", type=str, default="").add_argument("--session-id", type=str, default="")
-    sub.add_parser("materialize").add_argument("project", type=str)
-    sub.add_parser("reflect").add_argument("project", type=str).add_argument("--chat", type=str, default="").add_argument("--session-id", type=str, default="")
-    sub.add_parser("graph").add_argument("project", type=str)
-    sub.add_parser("consolidate").add_argument("project", type=str)
-    sub.add_parser("events").add_argument("project", type=str).add_argument("--concept", type=str, default="").add_argument("--type", type=str, default="").add_argument("--session-id", type=str, default="")
-    sub.add_parser("event").add_argument("project", type=str).add_argument("event_id", type=str)
-    sub.add_parser("session-start").add_argument("project", type=str)
+
+    init_parser = sub.add_parser("init")
+    init_parser.add_argument("project", type=str, help="Project name")
+
+    search_parser = sub.add_parser("search")
+    search_parser.add_argument("query", type=str)
+    search_parser.add_argument("--k", type=int, default=3)
+    search_parser.add_argument("--project", type=str, default="")
+
+    index_parser = sub.add_parser("index")
+    index_parser.add_argument("--force", action="store_true")
+    index_parser.add_argument("--project", type=str, default="")
+
+    commit_parser = sub.add_parser("commit")
+    commit_parser.add_argument("project", type=str)
+    commit_parser.add_argument("--chat", type=str, default="")
+    commit_parser.add_argument("--session-id", type=str, default="")
+
+    materialize_parser = sub.add_parser("materialize")
+    materialize_parser.add_argument("project", type=str)
+
+    reflect_parser = sub.add_parser("reflect")
+    reflect_parser.add_argument("project", type=str)
+    reflect_parser.add_argument("--chat", type=str, default="")
+    reflect_parser.add_argument("--session-id", type=str, default="")
+
+    graph_parser = sub.add_parser("graph")
+    graph_parser.add_argument("project", type=str)
+
+    consolidate_parser = sub.add_parser("consolidate")
+    consolidate_parser.add_argument("project", type=str)
+
+    events_parser = sub.add_parser("events")
+    events_parser.add_argument("project", type=str)
+    events_parser.add_argument("--concept", type=str, default="")
+    events_parser.add_argument("--type", type=str, default="")
+    events_parser.add_argument("--session-id", type=str, default="")
+
+    event_parser = sub.add_parser("event")
+    event_parser.add_argument("project", type=str)
+    event_parser.add_argument("event_id", type=str)
+
+    session_start_parser = sub.add_parser("session-start")
+    session_start_parser.add_argument("project", type=str)
 
     args = parser.parse_args()
     eng = KnowledgeEngine()
