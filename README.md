@@ -43,36 +43,53 @@ Most AI memory systems focus on *remembering*. We believe the harder and more im
 
 ## Install & Setup
 
-```bash
-git clone https://github.com/xpajonx/openempiric.git
-cd openempiric
-uv sync
-```
+### Contributors & Testers Setup
 
-## Development Environment
+1. **Clone the repository:**
+   ```bash
+   git clone https://github.com/xpajonx/openempiric.git
+   cd openempiric
+   ```
 
-OpenEmpiric uses a single UV workspace virtual environment.
+2. **Synchronize the UV workspace:**
+   Use the `--all-packages` flag to sync all workspace members and install command-line tools like `oem` in the local virtual environment:
+   ```bash
+   uv sync --all-packages --all-extras --dev
+   ```
 
-Do NOT create package-local virtual environments.
+3. **Verify the installation:**
+   Run the test suite to ensure everything is set up correctly (tests run fully offline in ~5s using a mocked embedding engine):
+   ```bash
+   uv run pytest
+   ```
 
-Correct:
-```bash
-uv sync
-uv run pytest
-```
+4. **Verify doctor check status:**
+   Validate your environment dependencies and check the embedding model cache status:
+   ```bash
+   uv run oem doctor
+   ```
 
-Incorrect:
-```bash
-cd packages/oem-knowledge
-uv venv
-```
+### Development Environment
+
+OpenEmpiric uses a single UV workspace virtual environment. Do NOT create package-local virtual environments.
+
+* **Correct:**
+  ```bash
+  uv sync --all-packages
+  uv run pytest
+  ```
+* **Incorrect:**
+  ```bash
+  cd packages/oem-knowledge
+  uv venv
+  ```
 
 ### Repository Layout
 
 ```text
 root/
-├── .venv/            ← Only Python environment
-└── packages/         ← Workspace members
+├── .venv/            ← Single shared virtual environment
+└── packages/         ← Workspace member packages (oem-knowledge, oem-tui)
 ```
 
 ---
@@ -81,17 +98,31 @@ root/
 
 `openempiric` operates as a native OpenCode plugin.
 
-1. **Install the Plugin:**
-   Symlink (recommended) or copy the plugin file to OpenCode's plugins directory:
+1. **Install/Enable the Plugin:**
+   Symlink the plugin file to OpenCode's plugins directory:
    ```bash
    mkdir -p ~/.config/opencode/plugins
-   # Recommended (symlink):
    ln -s $(pwd)/plugins/openempiric.ts ~/.config/opencode/plugins/openempiric.ts
    ```
 
 OpenCode automatically loads `.ts` plugins from the plugins directory. The plugin dynamically resolves the repository location (via symlink, environment variable `OPENEMPIRIC_DIR`, or home directory candidates) to register the `openempiric` MCP server and load the required instructions!
 
 ---
+
+## Uninstallation
+
+To completely remove OpenEmpiric from your system:
+
+1. **Remove the OpenCode plugin link:**
+   ```bash
+   rm ~/.config/opencode/plugins/openempiric.ts
+   ```
+
+2. **Clean up virtual environments and caches (optional):**
+   ```bash
+   rm -rf .venv
+   rm -rf /tmp/fastembed_cache
+   ```
 
 ## OEM CLI Usage
 
