@@ -4,6 +4,19 @@ import * as path from "path"
 import * as fs from "fs"
 import * as os from "os"
 import { fileURLToPath } from "url"
+import { execFileSync } from "child_process"
+
+// Import authoritative types from generated schema
+import type {
+  ConceptData as RegistryItem,
+  TodoItem,
+  RetrievalMetrics,
+  ContextMetrics,
+  KnowledgeUsageMetrics,
+  MetricsSchema
+} from "./generated/schemas"
+
+type Registry = Record<string, RegistryItem>;
 
 // ── Color Constants for TUI rendering ──────────────────────────────────────
 const RESET = "\x1b[0m";
@@ -15,26 +28,14 @@ const MAGENTA = "\x1b[35m";
 const CYAN = "\x1b[36m";
 
 // ── Shared SearchStrategy Specification ─────────────────────────────────────
-/**
- * SearchStrategy definition:
- * 1. Normalize query (lowercase, alphanumeric characters).
- * 2. Search concept registry first:
- *    - Score = 1.0 for exact canonical name matches.
- *    - Score = 0.85 for alias matches.
- *    - Score = 0.50 + 0.35 * similarity for fuzzy matches (SequenceMatcher/Levenshtein ratio >= 0.80).
- * 3. Filter top candidates (max 5 candidates).
- * 4. Read wiki markdown files ONLY for those top candidates.
- * 5. Boost score by +0.15 for matching query terms in file contents (TF-IDF/simple term frequency).
- * 6. Sort results descending by score and return top K.
- */
 function levenshteinDistance(s1: string, s2: string): number {
-  const m = s1.length;
-  const n = s2.length;
-  const dp: number[][] = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
-  for (let i = 0; i <= m; i++) dp[i][0] = i;
-  for (let j = 0; j <= n; j++) dp[0][j] = j;
-  for (let i = 1; i <= m; i++) {
-    for (let j = 1; j <= n; j++) {
+  const s1_len = s1.length;
+  const s2_len = s2.length;
+  const dp: number[][] = Array.from({ length: s1_len + 1 }, () => Array(s2_len + 1).fill(0));
+  for (let i = 0; i <= s1_len; i++) dp[i][0] = i;
+  for (let j = 0; j <= s2_len; j++) dp[0][j] = j;
+  for (let i = 1; i <= s1_len; i++) {
+    for (let j = 1; j <= s2_len; j++) {
       if (s1[i - 1] === s2[j - 1]) {
         dp[i][j] = dp[i - 1][j - 1];
       } else {
@@ -42,7 +43,7 @@ function levenshteinDistance(s1: string, s2: string): number {
       }
     }
   }
-  return dp[m][n];
+  return dp[s1_len][s2_len];
 }
 
 function stringSimilarity(s1: string, s2: string): number {
@@ -52,54 +53,13 @@ function stringSimilarity(s1: string, s2: string): number {
   return (maxLen - dist) / maxLen;
 }
 
-// ── Metrics Definitions & Persistence ─────────────────────────────────────────
-interface RetrievalMetrics {
-  search_count: number;
-  search_latency_total: number;
-  search_latency_min: number | null;
-  search_latency_max: number | null;
-  last_search_latency: number | null;
-  last_search_at: string | null;
-  cache_hits: number;
-  cache_misses: number;
-  concepts_retrieved: number;
-}
-
-interface ContextMetrics {
-  context_count: number;
-  context_latency_total: number;
-  context_latency_min: number | null;
-  context_latency_max: number | null;
-  last_context_latency: number | null;
-  last_context_at: string | null;
-}
-
-interface KnowledgeUsageMetrics {
-  concepts_injected: number;
-  concepts_referenced: number;
-  concepts_ignored: number;
-  agent_decisions_aligned: number;
-  last_report_at: string | null;
-}
-
-interface MetricsSchema {
-  retrieval: RetrievalMetrics;
-  context: ContextMetrics;
-  knowledge_usage: KnowledgeUsageMetrics;
-  [key: string]: any;
-}
-
+// ── Metrics Persistence (Local TS helper) ────────────────────────────────────
 function updateMetrics(projectPath: string, updates: {
   cache_hit?: boolean;
   cache_miss?: boolean;
   search_latency?: number;
   context_latency?: number;
   concepts_retrieved?: number;
-  concepts_injected?: number;
-  concepts_referenced?: number;
-  concepts_ignored?: number;
-  agent_decisions_aligned?: number;
-  last_report_at?: string | null;
 }) {
   const metricsDir = path.join(projectPath, ".oem", "state");
   const metricsPath = path.join(metricsDir, "metrics.json");
@@ -165,21 +125,6 @@ function updateMetrics(projectPath: string, updates: {
   if (updates.concepts_retrieved !== undefined) {
     data.retrieval.concepts_retrieved = (data.retrieval.concepts_retrieved || 0) + updates.concepts_retrieved;
   }
-  if (updates.concepts_injected !== undefined) {
-    data.knowledge_usage.concepts_injected = (data.knowledge_usage.concepts_injected || 0) + updates.concepts_injected;
-  }
-  if (updates.concepts_referenced !== undefined) {
-    data.knowledge_usage.concepts_referenced = (data.knowledge_usage.concepts_referenced || 0) + updates.concepts_referenced;
-  }
-  if (updates.concepts_ignored !== undefined) {
-    data.knowledge_usage.concepts_ignored = (data.knowledge_usage.concepts_ignored || 0) + updates.concepts_ignored;
-  }
-  if (updates.agent_decisions_aligned !== undefined) {
-    data.knowledge_usage.agent_decisions_aligned = (data.knowledge_usage.agent_decisions_aligned || 0) + updates.agent_decisions_aligned;
-  }
-  if (updates.last_report_at !== undefined) {
-    data.knowledge_usage.last_report_at = updates.last_report_at;
-  }
   if (updates.context_latency !== undefined) {
     const lat = updates.context_latency;
     data.context.context_count = (data.context.context_count || 0) + 1;
@@ -198,52 +143,7 @@ function updateMetrics(projectPath: string, updates: {
   }
 }
 
-// ── In-Memory RegistryCache ──────────────────────────────────────────────────
-interface RegistryItem {
-  concept_id: string;
-  canonical_name: string;
-  aliases: string[];
-  status: string;
-  confidence: number;
-  evidence_count: number;
-  session_count: number;
-  sessions: string[];
-  relationships?: Array<{ type: string; target: string; label?: string }>;
-}
-
-type Registry = Record<string, RegistryItem>;
-
-// ── Ranking Strategy Abstraction ─────────────────────────────────────────────
-interface RankingStrategy {
-  score(candidate: { id: string; item: RegistryItem; score: number }): number;
-}
-
-class Phase09RankingStrategy implements RankingStrategy {
-  score(candidate: { id: string; item: RegistryItem; score: number }): number {
-    const { item, score: similarity } = candidate;
-    const confidence = item.confidence || 1;
-    const evidence = item.evidence_count || 0;
-    const failures = (item as any).failure_count || 0;
-    const status = item.status || "candidate";
-
-    const healthBoost = 0.05 * (confidence / 5.0) + 0.03 * Math.min(evidence / 10.0, 1.0) - 0.05 * Math.min(failures / 5.0, 1.0);
-
-    let statusBoost = 0.0;
-    if (status === "global" || status === "canonical") {
-      statusBoost = 0.10;
-    } else if (status === "validated") {
-      statusBoost = 0.05;
-    }
-
-    const sessionCount = item.session_count || 0;
-    const usageBoost = 0.02 * Math.min(sessionCount / 10.0, 1.0);
-
-    return similarity + healthBoost + statusBoost + usageBoost;
-  }
-}
-
-const rankingStrategy = new Phase09RankingStrategy();
-
+// ── In-Memory RegistryCache (TS Native for retrieval performance) ───────────
 class RegistryCache {
   private cache: Map<string, { data: Registry; mtime: number }> = new Map();
 
@@ -274,6 +174,37 @@ class RegistryCache {
 }
 const registryCache = new RegistryCache();
 
+// ── Ranking Strategy Abstraction (TS Native) ───────────────────────────────
+interface RankingStrategy {
+  score(candidate: { id: string; item: RegistryItem; score: number }): number;
+}
+
+class Phase09RankingStrategy implements RankingStrategy {
+  score(candidate: { id: string; item: RegistryItem; score: number }): number {
+    const { item, score: similarity } = candidate;
+    const confidence = item.confidence || 1;
+    const evidence = item.evidence_count || 0;
+    const failures = (item as any).failure_count || 0;
+    const status = item.status || "candidate";
+
+    const healthBoost = 0.05 * (confidence / 5.0) + 0.03 * Math.min(evidence / 10.0, 1.0) - 0.05 * Math.min(failures / 5.0, 1.0);
+
+    let statusBoost = 0.0;
+    if (status === "global" || status === "canonical") {
+      statusBoost = 0.10;
+    } else if (status === "validated") {
+      statusBoost = 0.05;
+    }
+
+    const sessionCount = (item as any).session_count || 0;
+    const usageBoost = 0.02 * Math.min(sessionCount / 10.0, 1.0);
+
+    return similarity + healthBoost + statusBoost + usageBoost;
+  }
+}
+
+const rankingStrategy = new Phase09RankingStrategy();
+
 // ── TUI Render Panel Helpers ────────────────────────────────────────────────
 function statusTag(status: string): string {
   const s = status.toUpperCase();
@@ -292,7 +223,6 @@ function renderPanel(title: string, lines: string[], status: string = "OK", widt
 
   const tag = statusTag(status);
   const headerText = `  ${title} | ${tag}  `;
-  // Clean raw length for layout calculation
   const cleanHeaderLength = headerText.replace(/\x1b\[\d+m/g, "").length;
   if (cleanHeaderLength < width - 6) {
     const paddingLeft = Math.floor((width - 2 - cleanHeaderLength) / 2);
@@ -315,39 +245,7 @@ function renderPanel(title: string, lines: string[], status: string = "OK", widt
   return panelLines.join("\n");
 }
 
-// ── Todo Data Management Helpers ───────────────────────────────────────────
-interface TodoItem {
-  id: string;
-  content: string;
-  status: string;
-  created_at: string;
-}
-
-function getTodosPath(workdir: string): string {
-  const base = workdir || process.cwd();
-  return path.join(base, ".oem", "state", "todos.json");
-}
-
-function loadTodos(workdir: string): TodoItem[] {
-  const p = getTodosPath(workdir);
-  if (fs.existsSync(p)) {
-    try {
-      const data = JSON.parse(fs.readFileSync(p, "utf-8"));
-      if (Array.isArray(data)) return data;
-    } catch (e) {
-      // Ignore
-    }
-  }
-  return [];
-}
-
-function saveTodos(todos: TodoItem[], workdir: string) {
-  const p = getTodosPath(workdir);
-  fs.mkdirSync(path.dirname(p), { recursive: true });
-  fs.writeFileSync(p, JSON.stringify(todos, null, 2), "utf-8");
-}
-
-// ── Context Assembler ────────────────────────────────────────────────────────
+// ── Context Assembler (TS Native for session start performance) ─────────────
 interface ContextBudget {
   conceptCountLimit: number;
   tokenBudgetLimit: number;
@@ -494,7 +392,21 @@ class ContextAssembler {
     }
 
     // Increment injected concepts count immediately
-    updateMetrics(projectPath, { concepts_injected: injectedIds.length });
+    const injectedCount = injectedIds.length;
+    // Perform inline metrics updates directly to avoid python startup latency in config hook
+    const metricsDir = path.join(projectPath, ".oem", "state");
+    const metricsPath = path.join(metricsDir, "metrics.json");
+    try {
+      let mData = { knowledge_usage: { concepts_injected: 0 } };
+      if (fs.existsSync(metricsPath)) {
+        mData = JSON.parse(fs.readFileSync(metricsPath, "utf-8"));
+      }
+      mData.knowledge_usage = mData.knowledge_usage || { concepts_injected: 0 };
+      mData.knowledge_usage.concepts_injected = (mData.knowledge_usage.concepts_injected || 0) + injectedCount;
+      fs.writeFileSync(metricsPath, JSON.stringify(mData, null, 2), "utf-8");
+    } catch (e) {
+      // ignore
+    }
 
     return instContent;
   }
@@ -537,6 +449,20 @@ function resolveRepoDir(): string {
   return path.join(home, ".config", "opencode", "harness-mcp", "opencode-harness")
 }
 
+// ── CLI Wrapper Execution Helper ───────────────────────────────────────────
+function runOemCli(repoDir: string, args: string[], projectPath?: string): string {
+  const execArgs = ["run", "oem", ...args];
+  if (projectPath) {
+    execArgs.push("--project", projectPath);
+  }
+  try {
+    return execFileSync("uv", execArgs, { cwd: repoDir, encoding: "utf-8" }).trim();
+  } catch (e: any) {
+    const errMsg = e.stderr ? e.stderr.toString() : e.message;
+    return renderPanel("Execution Error", [`Failed to run oem CLI:`, errMsg], "error");
+  }
+}
+
 export const OpenempiricPlugin: Plugin = async ({ $ }) => {
   const repoDir = resolveRepoDir()
   return {
@@ -563,7 +489,7 @@ export const OpenempiricPlugin: Plugin = async ({ $ }) => {
         }
       }
 
-      // 2. Read context using ContextAssembler dynamically from workspace, falling back to JSON
+      // 2. Read context using ContextAssembler dynamically from workspace
       const tempInstPath = process.env.OEM_TEMP_INSTRUCTIONS ||
         path.join(os.homedir(), ".config", "opencode", "plugins", ".openempiric_temp_instructions.md")
 
@@ -573,68 +499,7 @@ export const OpenempiricPlugin: Plugin = async ({ $ }) => {
         const activeProject = config.directory || process.cwd();
         instContent = assembler.assemble(activeProject);
       } catch (e) {
-        console.error("ContextAssembler failed, falling back to legacy JSON context:", e);
-      }
-
-      // Legacy fallback
-      if (!instContent || instContent.trim() === "# openempiric Session Context\n\n## Active Concepts\n- None\n\n## Active Decisions\n- None\n\n## Relevant Failures\n- None\n\n## Open Questions\n- None") {
-        const contextPath = process.env.OEM_RUNTIME_CONTEXT_PATH ||
-          path.join(os.homedir(), ".config", "opencode", "plugins", ".oem_runtime_context.json")
-        let oemContext: any = null
-        try {
-          if (fs.existsSync(contextPath)) {
-            const content = fs.readFileSync(contextPath, "utf-8")
-            oemContext = JSON.parse(content)
-          }
-        } catch (e) {
-          // Ignore
-        }
-        if (!oemContext && config.mcp.openempiric.env?.OEM_RUNTIME_CONTEXT) {
-          try {
-            oemContext = JSON.parse(config.mcp.openempiric.env.OEM_RUNTIME_CONTEXT)
-          } catch (e) {
-            // Ignore
-          }
-        }
-
-        if (oemContext) {
-          instContent = "# openempiric Session Context\n\n";
-          instContent += "## Active Concepts\n"
-          if (oemContext.active_concepts && oemContext.active_concepts.length > 0) {
-            oemContext.active_concepts.forEach((c: any) => {
-              instContent += `- **${c.name}** (${c.id}): ${c.description || 'No description available.'}\n`
-            })
-          } else {
-            instContent += "- None\n"
-          }
-          
-          instContent += "\n## Active Decisions\n"
-          if (oemContext.active_decisions && oemContext.active_decisions.length > 0) {
-            oemContext.active_decisions.forEach((d: any) => {
-              instContent += `- ${d}\n`
-            })
-          } else {
-            instContent += "- None\n"
-          }
-          
-          instContent += "\n## Relevant Failures\n"
-          if (oemContext.relevant_failures && oemContext.relevant_failures.length > 0) {
-            oemContext.relevant_failures.forEach((f: any) => {
-              instContent += `- ${f}\n`
-            })
-          } else {
-            instContent += "- None\n"
-          }
-          
-          instContent += "\n## Open Questions\n"
-          if (oemContext.open_questions && oemContext.open_questions.length > 0) {
-            oemContext.open_questions.forEach((q: any) => {
-              instContent += `- ${q}\n`
-            })
-          } else {
-            instContent += "- None\n"
-          }
-        }
+        console.error("ContextAssembler failed:", e);
       }
 
       config.instructions = config.instructions || []
@@ -693,11 +558,9 @@ export const OpenempiricPlugin: Plugin = async ({ $ }) => {
             }
           }
 
-          // Sort and pick top 5 candidates to read from disk
           candidates.sort((a, b) => b.score - a.score);
           const topCandidates = candidates.slice(0, 5);
 
-          // Read wiki markdown files ONLY for those top candidates
           const results: Array<{ rel_path: string; snippet: string; score: number }> = [];
           for (const cand of topCandidates) {
             const wikiFile = path.join(root, ".oem", "wiki", `${cand.id}.md`);
@@ -777,7 +640,6 @@ export const OpenempiricPlugin: Plugin = async ({ $ }) => {
           const blockers = readList("state/open-issues.md");
           const discoveries = readList("state/active-decisions.md");
 
-          // Parse session-handoff
           const handoffPath = path.join(oemDir, "session-handoff.md");
           if (fs.existsSync(handoffPath)) {
             try {
@@ -819,7 +681,6 @@ export const OpenempiricPlugin: Plugin = async ({ $ }) => {
           const oemDir = path.join(root, ".oem");
           const registry = registryCache.getRegistry(root);
 
-          let chunkCount = 0;
           let dbSize = 0;
           const dbPath = path.join(oemDir, ".local_vector_db");
           if (fs.existsSync(dbPath)) {
@@ -949,6 +810,7 @@ export const OpenempiricPlugin: Plugin = async ({ $ }) => {
         }
       }),
 
+      // ── Python-delegated Authoritative Mutation Tools ──────────────────────
       oem_todo_read: tool({
         description: "Read the current todo list from .oem/state/todos.json.",
         args: {
@@ -956,16 +818,7 @@ export const OpenempiricPlugin: Plugin = async ({ $ }) => {
         },
         async execute({ workdir }, context) {
           const root = workdir || context.directory || process.cwd();
-          const todos = loadTodos(root);
-          if (todos.length === 0) {
-            return "Todo list is empty.";
-          }
-          const summary = [`Todo list (${todos.length} items):`];
-          for (const t of todos) {
-            const icon = t.status === "completed" ? "✓" : t.status === "in_progress" ? "→" : " ";
-            summary.push(`  [${icon}] ${t.content}  (id: ${t.id})`);
-          }
-          return summary.join("\n");
+          return runOemCli(repoDir, ["todo", "read"], root);
         }
       }),
 
@@ -977,27 +830,7 @@ export const OpenempiricPlugin: Plugin = async ({ $ }) => {
         },
         async execute({ items, workdir }, context) {
           const root = workdir || context.directory || process.cwd();
-          let parsed: any[];
-          try {
-            parsed = JSON.parse(items);
-          } catch (e) {
-            return `Error: invalid JSON: ${e}`;
-          }
-          if (!Array.isArray(parsed)) {
-            return "Error: items must be a JSON array";
-          }
-
-          const todos: TodoItem[] = parsed.map(item => ({
-            id: item.id || crypto.randomUUID(),
-            content: item.content || "",
-            status: item.status || "pending",
-            created_at: new Date().toISOString().slice(0, 16).replace("T", " ")
-          })).filter(t => t.content);
-
-          saveTodos(todos, root);
-
-          const summary = todos.map(t => `  [${t.status[0].toUpperCase()}] ${t.content}`);
-          return `Todo list updated (${todos.length} items):\n` + summary.join("\n");
+          return runOemCli(repoDir, ["todo", "write", items], root);
         }
       }),
 
@@ -1010,36 +843,11 @@ export const OpenempiricPlugin: Plugin = async ({ $ }) => {
         },
         async execute({ item_id, status, workdir }, context) {
           const root = workdir || context.directory || process.cwd();
-          const todos = loadTodos(root);
-          if (todos.length === 0) {
-            return "Error: No todo items found.";
-          }
-
-          const target = todos.find(t => t.id === item_id);
-          if (!target) {
-            return `Error: Item ${item_id} not found.`;
-          }
-
+          const cmdArgs = ["todo", "advance", item_id];
           if (status) {
-            target.status = status;
-          } else {
-            const nextStatus: Record<string, string> = {
-              "pending": "in_progress",
-              "in_progress": "completed",
-              "completed": "pending"
-            };
-            target.status = nextStatus[target.status] || "in_progress";
+            cmdArgs.push("--status", status);
           }
-
-          if (target.status === "completed") {
-            const nextPending = todos.find(t => t.status === "pending");
-            if (nextPending) {
-              nextPending.status = "in_progress";
-            }
-          }
-
-          saveTodos(todos, root);
-          return `Updated item ${item_id}: ${target.content} → ${target.status}`;
+          return runOemCli(repoDir, cmdArgs, root);
         }
       }),
 
@@ -1053,62 +861,14 @@ export const OpenempiricPlugin: Plugin = async ({ $ }) => {
         },
         async execute({ concepts_used, concepts_ignored, decisions, project }, context) {
           const root = project || context.directory || process.cwd();
-          
-          // 1. Read last injected concepts from session state
-          const sessionStatePath = path.join(root, ".oem", "state", "session_state.json");
-          let injectedConcepts: string[] = [];
-          if (fs.existsSync(sessionStatePath)) {
-            try {
-              const stateData = JSON.parse(fs.readFileSync(sessionStatePath, "utf-8"));
-              if (Array.isArray(stateData.last_injected_concepts)) {
-                injectedConcepts = stateData.last_injected_concepts;
-              }
-            } catch (e) {
-              // Ignore
-            }
+          const cmdArgs = ["metrics", "--report", "--used", JSON.stringify(concepts_used)];
+          if (concepts_ignored) {
+            cmdArgs.push("--ignored", JSON.stringify(concepts_ignored));
           }
-
-          // 2. Auto-derive ignored concepts if not provided
-          let ignored = concepts_ignored || [];
-          if (!concepts_ignored) {
-            ignored = injectedConcepts.filter(cid => !concepts_used.includes(cid));
+          if (decisions) {
+            cmdArgs.push("--decisions", JSON.stringify(decisions));
           }
-
-          // 3. Update metrics
-          const nowStr = new Date().toISOString();
-          updateMetrics(root, {
-            concepts_referenced: concepts_used.length,
-            concepts_ignored: ignored.length,
-            agent_decisions_aligned: (decisions || []).length,
-            last_report_at: nowStr
-          });
-
-          // 4. Append to usage_log.jsonl
-          const logPath = path.join(root, ".oem", "state", "usage_log.jsonl");
-          const logEntry = {
-            timestamp: nowStr,
-            concepts_used,
-            concepts_ignored: ignored,
-            decisions: decisions || [],
-            session_concepts_injected: injectedConcepts
-          };
-          try {
-            fs.mkdirSync(path.dirname(logPath), { recursive: true });
-            fs.appendFileSync(logPath, JSON.stringify(logEntry) + "\n", "utf-8");
-          } catch (e) {
-            console.error("Failed to write to usage_log.jsonl:", e);
-          }
-
-          const lines = [
-            `Report Timestamp: ${nowStr}`,
-            `Concepts Used:    [${concepts_used.join(", ") || "None"}]`,
-            `Concepts Ignored: [${ignored.join(", ") || "None"}]`,
-            `Decisions Aligned: ${(decisions || []).length}`,
-            "",
-            "Note: This is experimental telemetry for establishing pipelines.",
-            "Roadmap decisions are not made on this reported usage."
-          ];
-          return renderPanel("Knowledge Usage Report Received", lines, "ok");
+          return runOemCli(repoDir, cmdArgs, root);
         }
       })
     }

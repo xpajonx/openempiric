@@ -16,6 +16,10 @@ def mount_tools(mcp: object) -> None:
 
     engine = KnowledgeEngine()
 
+    from oem_knowledge.tools import todos, metrics
+    todos.register(mcp)
+    metrics.register(mcp)
+
     @mcp.tool()
     def knowledge_init(project: str = "") -> str:
         """Bootstrap the .harness/ framework in a project directory. If project is empty, uses current directory."""

@@ -256,6 +256,25 @@ def _setup_parser() -> argparse.ArgumentParser:
     metrics_p.add_argument("--reset", action="store_true", help="Reset all metrics to default")
     metrics_p.add_argument("--export", type=str, help="Export raw metrics JSON to file path")
     metrics_p.add_argument("--usage-log", type=int, nargs="?", const=10, help="Print recent entries from usage_log.jsonl (default 10)")
+    metrics_p.add_argument("--report", action="store_true", help="Report concept usage and decisions")
+    metrics_p.add_argument("--used", type=str, default="[]", help="JSON array of referenced concept IDs")
+    metrics_p.add_argument("--ignored", type=str, default="[]", help="JSON array of ignored concept IDs")
+    metrics_p.add_argument("--decisions", type=str, default="[]", help="JSON array of decisions aligned")
+
+    todo_p = sub.add_parser("todo", help="Manage session todo list")
+    todo_sub = todo_p.add_subparsers(dest="todo_action", required=True)
+
+    todo_read_p = todo_sub.add_parser("read")
+    todo_read_p.add_argument("--project", type=str, default="")
+
+    todo_write_p = todo_sub.add_parser("write")
+    todo_write_p.add_argument("items", type=str)
+    todo_write_p.add_argument("--project", type=str, default="")
+
+    todo_advance_p = todo_sub.add_parser("advance")
+    todo_advance_p.add_argument("item_id", type=str)
+    todo_advance_p.add_argument("--status", type=str, default="")
+    todo_advance_p.add_argument("--project", type=str, default="")
 
     doctor_p = sub.add_parser("doctor", help="Check workspace health and configuration")
     doctor_p.add_argument("--project", type=str, default="")
@@ -572,7 +591,29 @@ def main():
         elif args.command == "run":
             run_agent(args.agent, eng)
 
+        elif args.command == "todo":
+            from oem_knowledge.tools.todos import oem_todo_read, oem_todo_write, oem_todo_advance
+            if args.todo_action == "read":
+                print(oem_todo_read(project or ""))
+            elif args.todo_action == "write":
+                print(oem_todo_write(args.items, project or ""))
+            elif args.todo_action == "advance":
+                print(oem_todo_advance(args.item_id, args.status, project or ""))
+
         elif args.command == "metrics":
+            if getattr(args, "report", False):
+                from oem_knowledge.tools.metrics import report_usage
+                try:
+                    used = json.loads(args.used)
+                    ignored = json.loads(args.ignored) if args.ignored else None
+                    decisions = json.loads(args.decisions) if args.decisions else None
+                except Exception as e:
+                    print(render_panel("Report Error", [f"Invalid arguments: {e}"], status="error"))
+                    sys.exit(1)
+                
+                print(report_usage(used, ignored, decisions, project))
+                return
+
             metrics_file = eng._resolve_harness(project) / "state" / "metrics.json"
             if args.usage_log is not None:
                 try:

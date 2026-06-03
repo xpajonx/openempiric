@@ -52,3 +52,45 @@ class KnowledgeEvent(BaseModel):
     duration_s: float | None = Field(
         default=None, description="Subprocess run duration in seconds"
     )
+
+
+class TodoItem(BaseModel):
+    id: str = Field(description="UUID string for todo identification")
+    content: str
+    status: Literal["pending", "in_progress", "completed"] = "pending"
+    created_at: str
+
+
+class RetrievalMetrics(BaseModel):
+    search_count: int = 0
+    search_latency_total: float = 0.0
+    search_latency_min: float | None = None
+    search_latency_max: float | None = None
+    last_search_latency: float | None = None
+    last_search_at: str | None = None
+    cache_hits: int = 0
+    cache_misses: int = 0
+    concepts_retrieved: int = 0
+
+
+class ContextMetrics(BaseModel):
+    context_count: int = 0
+    context_latency_total: float = 0.0
+    context_latency_min: float | None = None
+    context_latency_max: float | None = None
+    last_context_latency: float | None = None
+    last_context_at: str | None = None
+
+
+class KnowledgeUsageMetrics(BaseModel):
+    concepts_injected: int = 0
+    concepts_referenced: int = 0
+    concepts_ignored: int = 0
+    agent_decisions_aligned: int = 0
+    last_report_at: str | None = None
+
+
+class MetricsSchema(BaseModel):
+    retrieval: RetrievalMetrics = Field(default_factory=RetrievalMetrics)
+    context: ContextMetrics = Field(default_factory=ContextMetrics)
+    knowledge_usage: KnowledgeUsageMetrics = Field(default_factory=KnowledgeUsageMetrics)
