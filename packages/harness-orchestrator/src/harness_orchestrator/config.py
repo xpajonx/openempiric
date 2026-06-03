@@ -1,6 +1,8 @@
 import yaml
 from pathlib import Path
 
+from harness_knowledge.engine import HARNESS_DIR
+
 SKILL_PATH = Path.home() / ".config" / "opencode" / "skills" / "harness-orchestrator" / "SKILL.md"
 
 
@@ -9,7 +11,7 @@ def load_harness_config() -> dict:
         "subagent_model": "gemini-3.5-flash",
         "enable_telemetry": True,
         "max_parallel_tasks": 4,
-        "knowledge_path": ".harness",
+        "knowledge_path": HARNESS_DIR,
         "auto_reflect": True,
         "dangerously_skip_permissions": True,
     }

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 
-from harness_knowledge.engine import KnowledgeEngine
+from harness_knowledge.engine import KnowledgeEngine, HARNESS_DIR
 from harness_tui.panels import render_panel
 
 
@@ -70,7 +70,7 @@ def on_session_end(
         t = ev.get("type", "observation")
         event_counts[t] = event_counts.get(t, 0) + 1
 
-    lines = ["Committed to .harness/ knowledge graph.", ""]
+    lines = [f"Committed to {HARNESS_DIR}/ knowledge graph.", ""]
     if event_counts:
         lines.append("Knowledge Events:")
         for t, c in sorted(event_counts.items()):

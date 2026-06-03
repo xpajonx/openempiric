@@ -6,9 +6,12 @@ import uuid
 from pathlib import Path
 
 
+from harness_knowledge.engine import HARNESS_DIR
+
+
 def _todos_path(workdir: str = "") -> Path:
     base = Path(workdir) if workdir else Path.cwd()
-    return base / ".harness" / "state" / "todos.json"
+    return base / HARNESS_DIR / "state" / "todos.json"
 
 
 def _load_todos(workdir: str = "") -> list[dict]:

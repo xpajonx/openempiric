@@ -103,35 +103,96 @@ class SecureFileSystem:
             verified.unlink()
 
 
-HARNESS_DIR = ".harness"
+HARNESS_DIR = ".oem"
 DEFAULT_DIRS = [
-    "directives",
-    "directives/wiki_concepts",
-    "execution/core",
-    "execution/utils",
-    "execution/scratch",
+    "wiki",
+    "sessions",
     "state",
-    "project",
+    "graph",
 ]
 
 
+def migrate_harness_to_oem(project_dir: Path):
+    old_dir = project_dir / ".harness"
+    new_dir = project_dir / ".oem"
+    if old_dir.is_dir() and not new_dir.exists():
+        old_dir.rename(new_dir)
+        
+        old_wiki = new_dir / "directives" / "wiki_concepts"
+        new_wiki = new_dir / "wiki"
+        if old_wiki.is_dir():
+            new_wiki.parent.mkdir(parents=True, exist_ok=True)
+            old_wiki.rename(new_wiki)
+            
+        old_sess = new_dir / "directives" / "sessions"
+        new_sess = new_dir / "sessions"
+        if old_sess.is_dir():
+            new_sess.parent.mkdir(parents=True, exist_ok=True)
+            old_sess.rename(new_sess)
+            
+        old_reg = new_dir / "state" / "concept_registry.json"
+        new_reg = new_dir / "concept_registry.json"
+        if old_reg.exists():
+            old_reg.rename(new_reg)
+            
+        old_events = new_dir / "state" / "events.jsonl"
+        new_events = new_dir / "events.jsonl"
+        if old_events.exists():
+            old_events.rename(new_events)
+            
+        old_inbox = new_dir / "directives" / "wiki_inbox.md"
+        new_inbox = new_dir / "wiki" / "inbox.md"
+        if old_inbox.exists():
+            new_inbox.parent.mkdir(parents=True, exist_ok=True)
+            old_inbox.rename(new_inbox)
+            
+        old_idx = new_dir / "directives" / "index.md"
+        new_idx = new_dir / "wiki" / "index.md"
+        if old_idx.exists():
+            new_idx.parent.mkdir(parents=True, exist_ok=True)
+            old_idx.rename(new_idx)
+
+        old_log = new_dir / "directives" / "log.md"
+        new_log = new_dir / "wiki" / "log.md"
+        if old_log.exists():
+            new_log.parent.mkdir(parents=True, exist_ok=True)
+            old_log.rename(new_log)
+
+        old_prog = new_dir / "directives" / "progress.md"
+        new_prog = new_dir / "progress.md"
+        if old_prog.exists():
+            old_prog.rename(new_prog)
+
+        old_handoff = new_dir / "directives" / "session-handoff.md"
+        new_handoff = new_dir / "session-handoff.md"
+        if old_handoff.exists():
+            old_handoff.rename(new_handoff)
+
+        directives_dir = new_dir / "directives"
+        if directives_dir.is_dir() and not any(directives_dir.iterdir()):
+            try:
+                directives_dir.rmdir()
+            except Exception:
+                pass
+
+
 def find_harness_root(path: str | Path) -> Path | None:
-    """Walk up from path looking for .harness/ directory."""
+    """Walk up from path looking for .oem/ or .harness/ directory."""
     p = Path(path).resolve()
     for parent in [p] + list(p.parents):
-        if (parent / HARNESS_DIR).is_dir():
+        if (parent / ".oem").is_dir() or (parent / ".harness").is_dir():
             return parent
     return None
 
 
 def find_all_projects(base_dir: str | Path | None = None) -> list[Path]:
-    """Find all projects with .harness/ directories."""
+    """Find all projects with .oem/ or .harness/ directories."""
     if base_dir is None:
         base_dir = Path.home() / "projects"
     base = Path(base_dir)
     if not base.is_dir():
         return []
-    return [d for d in base.iterdir() if d.is_dir() and (d / HARNESS_DIR).is_dir()]
+    return [d for d in base.iterdir() if d.is_dir() and ((d / ".oem").is_dir() or (d / ".harness").is_dir())]
 
 
 class KnowledgeEngine:
@@ -148,18 +209,19 @@ class KnowledgeEngine:
 
     def _resolve_harness(self, project_path: str | Path | None = None) -> Path:
         p = Path(project_path or self.project_path or ".").resolve()
-        harness = p / HARNESS_DIR
+        
+        # Resolve root and run migration
+        root = find_harness_root(p) or p
+        migrate_harness_to_oem(root)
+        
+        harness = root / HARNESS_DIR
         if not harness.exists():
-            root = find_harness_root(p)
-            if root:
-                harness = root / HARNESS_DIR
-            else:
-                harness.mkdir(parents=True, exist_ok=True)
-                self._bootstrap_harness(p)
+            harness.mkdir(parents=True, exist_ok=True)
+            self._bootstrap_harness(root)
         return harness
 
     def _bootstrap_harness(self, project_path: Path):
-        """Create a minimal .harness/ structure."""
+        """Create a minimal .oem/ structure."""
         harness = project_path / HARNESS_DIR
         for d in DEFAULT_DIRS:
             (harness / d).mkdir(parents=True, exist_ok=True)
@@ -167,15 +229,15 @@ class KnowledgeEngine:
         for fname, content in [
             (
                 "AGENTS.md",
-                f"# Harness Framework — {project_path.name}\n\nMUST read at EVERY session.\n",
+                f"# OpenEmpiric Framework — {project_path.name}\n\nMUST read at EVERY session.\n",
             ),
             ("CLAUDE.md", "# CLAUDE.md\nRefer to [AGENTS.md](AGENTS.md)\n"),
             (
-                "directives/progress.md",
+                "progress.md",
                 f"# Progress — {project_path.name}\n- **{time.strftime('%Y-%m-%d')}:** Initialized.\n",
             ),
             (
-                "directives/session-handoff.md",
+                "session-handoff.md",
                 "# Session Handoff\n\n## Next Action\nComplete phase one.\n",
             ),
         ]:
@@ -212,35 +274,26 @@ class KnowledgeEngine:
 
     def _registry_path(self, project: str | None = None) -> Path:
         h = self._resolve_harness(project)
-        return h / "state" / "concept_registry.json"
+        return h / "concept_registry.json"
 
     def _events_path(self, project: str | None = None) -> Path:
         h = self._resolve_harness(project)
-        return h / "state" / "events.jsonl"
+        return h / "events.jsonl"
 
     def _sessions_dir(self, project: str | None = None) -> Path:
         h = self._resolve_harness(project)
-        return h / "directives" / "sessions"
+        return h / "sessions"
 
     def _concepts_dir(self, project: str | None = None) -> Path:
         h = self._resolve_harness(project)
-        return h / "directives" / "wiki_concepts"
+        return h / "wiki"
 
     def _wiki_paths(self, project: str | None = None) -> dict:
         h = self._resolve_harness(project)
-        directives = h / "directives"
-        design_concepts = directives / "design_wiki_concepts"
-        wiki_concepts = directives / "wiki_concepts"
-
-        if design_concepts.exists():
-            return {
-                "inbox": directives / "design_wiki.md",
-                "concepts": design_concepts,
-                "variant": "design_wiki",
-            }
+        wiki_dir = h / "wiki"
         return {
-            "inbox": directives / "wiki_inbox.md",
-            "concepts": wiki_concepts,
+            "inbox": wiki_dir / "inbox.md",
+            "concepts": wiki_dir,
             "variant": "wiki",
         }
 
@@ -305,17 +358,20 @@ class KnowledgeEngine:
             return "critical"
         if "scratch" in lower:
             return "low"
-        if "directives" in lower and "concepts" not in lower:
+        # Root markdown files (no slash/backslash in rel_path) are high importance
+        if "/" not in rel_path and "\\" not in rel_path:
             return "high"
         return "medium"
 
     def index_all(self, force: bool = False) -> dict:
         harness = self._resolve_harness()
-        directives = harness / "directives"
-        if not directives.exists():
-            return {"scanned": 0, "new": 0, "updated": 0, "unchanged": 0, "failed": 0}
+        wiki_dir = harness / "wiki"
+        
+        md_files = list(wiki_dir.rglob("*.md")) if wiki_dir.exists() else []
+        for f in harness.glob("*.md"):
+            if f.is_file():
+                md_files.append(f)
 
-        md_files = list(directives.rglob("*.md"))
         registry = {}
         reg_path = harness / "state" / "file_registry.json"
         if reg_path.exists():
@@ -545,6 +601,8 @@ class KnowledgeEngine:
         else:
             base = Path.cwd() if not self.project_path else self.project_path
             project_dir = base / name if not (base / name).exists() else base
+
+        migrate_harness_to_oem(project_dir)
         harness = project_dir / HARNESS_DIR
 
         created_dirs = []
@@ -559,30 +617,30 @@ class KnowledgeEngine:
         for fname, content in [
             (
                 "AGENTS.md",
-                f"# Harness Framework — {name}\n\nMUST read at EVERY session start AND end.\n\n## Lifecycle Status\n| Phase | Status | Description |\n|---|---|---|\n| PHASE_ONE | `[x]` Completed | Knowledge Event Foundation |\n| PHASE_TWO | `[x]` Completed | Concept Registry & Promotion Engine |\n| PHASE_THREE | `[x]` Completed | WSL OpenCode Plugin & Declarative YAML Orchestrator |\n| PHASE_FOUR | `[/]` In Progress | Concept Identity, Evolution & Explainability |\n",
+                f"# OpenEmpiric Framework — {name}\n\nMUST read at EVERY session start AND end.\n\n## Lifecycle Status\n| Phase | Status | Description |\n|---|---|---|\n| PHASE_ONE | `[x]` Completed | Knowledge Event Foundation |\n| PHASE_TWO | `[x]` Completed | Concept Registry & Promotion Engine |\n| PHASE_THREE | `[x]` Completed | WSL OpenCode Plugin & Declarative YAML Orchestrator |\n| PHASE_FOUR | `[x]` Completed | Concept Identity, Evolution & Explainability |\n| PHASE_FIVE | `[x]` Completed | Typed Graphs, Wiki Linter & Safety Guards |\n",
             ),
             (
                 "CLAUDE.md",
                 "# CLAUDE.md\nRefer to [AGENTS.md](AGENTS.md) for workspace lifecycle details.\n",
             ),
             (
-                "directives/wiki_inbox.md",
+                "wiki/inbox.md",
                 "# Wiki Inbox\n\nAppend raw lessons, API observations, and style guidelines here.\n",
             ),
             (
-                "directives/progress.md",
-                f"# Project Progress Log — {name}\n\n- **{time.strftime('%Y-%m-%d')}:** Harness initialized.\n",
+                "progress.md",
+                f"# Project Progress Log — {name}\n\n- **{time.strftime('%Y-%m-%d')}:** OpenEmpiric initialized.\n",
             ),
             (
-                "directives/session-handoff.md",
-                "# Session Handoff\n\n## Next Action\nImplement Phase 4: Concept Identity Resolution, Knowledge Evolution, and Concept Explainability.\n",
+                "session-handoff.md",
+                "# Session Handoff\n\n## Next Action\nImplement OpenEmpiric Runtime Overhaul commands.\n",
             ),
             (
                 "state/workflow_state.json",
                 json.dumps(
                     {
-                        "current_phase": "PHASE_FOUR",
-                        "completed_steps": ["PHASE_ONE", "PHASE_TWO", "PHASE_THREE"],
+                        "current_phase": "PHASE_FIVE",
+                        "completed_steps": ["PHASE_ONE", "PHASE_TWO", "PHASE_THREE", "PHASE_FOUR", "PHASE_FIVE"],
                         "history": [],
                     },
                     indent=2,
@@ -611,7 +669,12 @@ class KnowledgeEngine:
                             {
                                 "id": "PHASE_FOUR",
                                 "name": "Concept Identity, Evolution & Explainability",
-                                "completed": False,
+                                "completed": True,
+                            },
+                            {
+                                "id": "PHASE_FIVE",
+                                "name": "Typed Graphs, Wiki Linter & Safety Guards",
+                                "completed": True,
                             },
                         ]
                     },
@@ -627,21 +690,20 @@ class KnowledgeEngine:
 
         return {
             "status": "success",
-            "message": f"Harness initialized in {project_dir}",
+            "message": f"OpenEmpiric initialized in {project_dir}",
             "created_directories": created_dirs,
             "created_files": created_files,
         }
 
     def restore_session_state(self, project: str | None = None) -> dict:
         h = self._resolve_harness(project)
-        directives = h / "directives"
-        state = h / "state"
+        state_dir = h / "state"
 
-        progress = directives / "progress.md"
-        handoff = directives / "session-handoff.md"
-        goals = state / "current-goals.md"
-        issues = state / "open-issues.md"
-        decisions = state / "active-decisions.md"
+        progress = h / "progress.md"
+        handoff = h / "session-handoff.md"
+        goals = state_dir / "current-goals.md"
+        issues = state_dir / "open-issues.md"
+        decisions = state_dir / "active-decisions.md"
 
         active_goals = []
         blockers = []
@@ -767,7 +829,7 @@ class KnowledgeEngine:
 
     def _log_action(self, message: str, project: str | None = None):
         harness = self._resolve_harness(project)
-        log_file = harness / "directives" / "log.md"
+        log_file = harness / "wiki" / "log.md"
         date_str = time.strftime("%Y-%m-%d %H:%M")
         entry = f"- **[{date_str}]**: {message}\n"
 
@@ -781,7 +843,7 @@ class KnowledgeEngine:
         self, canonical_name: str, concept_id: str, project: str | None = None
     ):
         harness = self._resolve_harness(project)
-        index_file = harness / "directives" / "index.md"
+        index_file = harness / "wiki" / "index.md"
         sfs = self._sfs(project)
 
         if not sfs.exists(index_file):

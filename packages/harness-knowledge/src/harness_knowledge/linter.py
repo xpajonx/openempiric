@@ -53,10 +53,10 @@ def normalize(name: str) -> str:
 async def run_lint(
     project_path: Path, max_parallel: int = 4, fix: bool = False
 ) -> dict:
-    concepts_dir = project_path / ".harness" / "directives" / "wiki_concepts"
-    index_file = project_path / ".harness" / "directives" / "index.md"
-
     engine = KnowledgeEngine(project_path)
+    harness_dir = engine._resolve_harness(project_path)
+    concepts_dir = harness_dir / "wiki"
+    index_file = harness_dir / "wiki" / "index.md"
     sfs = engine._sfs(project_path)
 
     if not sfs.exists(concepts_dir):

@@ -10,5 +10,8 @@ dependencies = [
     "harness-tui",
 ]
 
+[project.scripts]
+oem = "harness_knowledge.cli:main"
+
 [tool.uv]
 dev-dependencies = ["pytest>=8"]

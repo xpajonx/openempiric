@@ -1,77 +1,166 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
+import json
+import os
+import re
+import shutil
+import subprocess
+import time
 from pathlib import Path
 
 from harness_tui.panels import render_panel
+from .engine import KnowledgeEngine, migrate_harness_to_oem
+from .linter import run_lint
 
-from .engine import KnowledgeEngine
+
+def run_agent(agent_name: str, project_dir: str):
+    # 1. Resolve repository root
+    repo_root = Path(__file__).resolve().parent.parent.parent.parent.parent
+    plugin_src = repo_root / "plugins" / "openempiric.ts"
+    
+    # 2. Ensure plugin is symlinked/copied to plugins folder
+    plugin_dest_dir = Path.home() / ".config" / "opencode" / "plugins"
+    plugin_dest_dir.mkdir(parents=True, exist_ok=True)
+    plugin_dest = plugin_dest_dir / "openempiric.ts"
+    
+    if plugin_src.exists() and not plugin_dest.exists():
+        try:
+            plugin_dest.symlink_to(plugin_src)
+        except Exception:
+            try:
+                shutil.copy(plugin_src, plugin_dest)
+            except Exception as e:
+                print(f"Warning: Failed to copy plugin file to {plugin_dest}: {e}")
+
+    # 3. Handle opencode.jsonc modification (Option A)
+    config_path = Path.home() / ".config" / "opencode" / "opencode.jsonc"
+    config_backup_path = Path.home() / ".config" / "opencode" / "opencode.jsonc.bak"
+    config_modified = False
+
+    if config_path.exists():
+        try:
+            # Backup
+            shutil.copy(config_path, config_backup_path)
+            
+            # Read and parse
+            text = config_path.read_text(encoding="utf-8")
+            # Simple comment stripping
+            cleaned = re.sub(r"//.*", "", text)
+            cleaned = re.sub(r"/\*.*?\*/", "", cleaned, flags=re.DOTALL)
+            config_data = json.loads(cleaned)
+            
+            # Update plugin array
+            plugins = config_data.setdefault("plugin", [])
+            if "openempiric" not in plugins and ["openempiric", {}] not in plugins:
+                plugins.append("openempiric")
+                config_modified = True
+                
+            if config_modified:
+                # Write updated json
+                config_path.write_text(json.dumps(config_data, indent=2), encoding="utf-8")
+        except Exception as e:
+            print(f"Warning: Failed to temporarily modify config at {config_path}: {e}")
+
+    # 4. Spawn the coding agent
+    print(f"Spawning coding agent: {agent_name}...")
+    try:
+        # Execute the agent command
+        if agent_name == "opencode":
+            subprocess.run(["opencode"], check=True)
+        elif agent_name == "claude-code":
+            subprocess.run(["claude"], check=True)
+        elif agent_name == "cursor":
+            subprocess.run(["cursor", "."], check=True)
+        else:
+            subprocess.run(agent_name.split(), check=True)
+    except Exception as e:
+        print(f"Agent session finished or returned: {e}")
+    finally:
+        # 5. Restore config on exit
+        if config_modified and config_backup_path.exists():
+            try:
+                shutil.move(config_backup_path, config_path)
+            except Exception as e:
+                print(f"Warning: Failed to restore config at {config_path}: {e}")
+        elif config_backup_path.exists():
+            try:
+                config_backup_path.unlink()
+            except Exception:
+                pass
 
 
 def main():
-    parser = argparse.ArgumentParser(description="harness-knowledge CLI")
+    parser = argparse.ArgumentParser(description="OpenEmpiric (oem) CLI")
     sub = parser.add_subparsers(dest="command", required=True)
 
+    # status / stats
+    sub.add_parser("status")
     sub.add_parser("stats")
 
+    # init
     init_parser = sub.add_parser("init")
-    init_parser.add_argument("project", type=str, help="Project name")
+    init_parser.add_argument("project", type=str, nargs="?", default=".")
 
+    # search
     search_parser = sub.add_parser("search")
     search_parser.add_argument("query", type=str)
     search_parser.add_argument("--k", type=int, default=3)
     search_parser.add_argument("--project", type=str, default="")
 
-    index_parser = sub.add_parser("index")
-    index_parser.add_argument("--force", action="store_true")
-    index_parser.add_argument("--project", type=str, default="")
-
-    commit_parser = sub.add_parser("commit")
-    commit_parser.add_argument("project", type=str)
-    commit_parser.add_argument("--chat", type=str, default="")
-    commit_parser.add_argument("--session-id", type=str, default="")
-
-    materialize_parser = sub.add_parser("materialize")
-    materialize_parser.add_argument("project", type=str)
-
-    reflect_parser = sub.add_parser("reflect")
-    reflect_parser.add_argument("project", type=str)
-    reflect_parser.add_argument("--chat", type=str, default="")
-    reflect_parser.add_argument("--session-id", type=str, default="")
-
-    graph_parser = sub.add_parser("graph")
-    graph_parser.add_argument("project", type=str)
-
-    consolidate_parser = sub.add_parser("consolidate")
-    consolidate_parser.add_argument("project", type=str)
-
+    # rebuild
     rebuild_parser = sub.add_parser("rebuild")
-    rebuild_parser.add_argument("project", type=str)
+    rebuild_parser.add_argument("--project", type=str, default="")
 
+    # events
     events_parser = sub.add_parser("events")
-    events_parser.add_argument("project", type=str)
+    events_parser.add_argument("--project", type=str, default="")
     events_parser.add_argument("--concept", type=str, default="")
     events_parser.add_argument("--type", type=str, default="")
     events_parser.add_argument("--session-id", type=str, default="")
 
+    # event
     event_parser = sub.add_parser("event")
-    event_parser.add_argument("project", type=str)
     event_parser.add_argument("event_id", type=str)
+    event_parser.add_argument("--project", type=str, default="")
 
-    session_start_parser = sub.add_parser("session-start")
-    session_start_parser.add_argument("project", type=str)
+    # explain
+    explain_parser = sub.add_parser("explain")
+    explain_parser.add_argument("type", choices=["concept", "event"])
+    explain_parser.add_argument("id", type=str)
+    explain_parser.add_argument("--project", type=str, default="")
 
+    # lint
     lint_parser = sub.add_parser("lint")
-    lint_parser.add_argument("project", type=str)
+    lint_parser.add_argument("--project", type=str, default="")
     lint_parser.add_argument("--workers", type=int, default=4)
     lint_parser.add_argument(
         "--fix", action="store_true", help="Automatically heal links"
     )
 
-    args = parser.parse_args()
-    eng = KnowledgeEngine()
+    # session-start
+    session_start_parser = sub.add_parser("session-start")
+    session_start_parser.add_argument("--project", type=str, default="")
 
-    if args.command == "stats":
+    # session-end
+    session_end_parser = sub.add_parser("session-end")
+    session_end_parser.add_argument("--project", type=str, default="")
+    session_end_parser.add_argument("--chat", type=str, default="")
+    session_end_parser.add_argument("--session-id", type=str, default="")
+
+    # run
+    run_parser = sub.add_parser("run")
+    run_parser.add_argument("agent", type=str, help="opencode, claude-code, cursor, or custom command")
+    run_parser.add_argument("--project", type=str, default="")
+
+    args = parser.parse_args()
+    
+    # We instantiate KnowledgeEngine
+    project_dir = args.project if hasattr(args, "project") and args.project else "."
+    eng = KnowledgeEngine(project_dir if project_dir != "." else None)
+
+    if args.command in ("status", "stats"):
         s = eng.stats()
         lines = [
             f"Chunks: {s['total_chunks']}",
@@ -90,8 +179,7 @@ def main():
         print(render_panel("Init Complete", lines, status="bootstrap"))
 
     elif args.command == "search":
-        e = KnowledgeEngine(args.project or None)
-        results = e.search(args.query, k=args.k)
+        results = eng.search(args.query, k=args.k)
         lines = [f'Query: "{args.query}"', f"Results: {len(results)}", ""]
         for idx, r in enumerate(results):
             lines.append(
@@ -103,17 +191,8 @@ def main():
             lines = [f"No matches for: '{args.query}'"]
         print(render_panel("Search Results", lines, status="search"))
 
-    elif args.command == "index":
-        e = KnowledgeEngine(args.project or None)
-        s = e.index_all(force=args.force)
-        lines = [
-            f"Scanned: {s['scanned']}  New: {s['new']}  Updated: {s['updated']}  Unchanged: {s['unchanged']}  Failed: {s['failed']}"
-        ]
-        print(render_panel("Index Complete", lines, status="index"))
-
     elif args.command == "session-start":
-        e = KnowledgeEngine(args.project)
-        res = e.restore_session_state(args.project)
+        res = eng.restore_session_state(args.project or None)
         lines = [
             f"Goals: {len(res.get('active_goals', []))}",
             f"Blockers: {len(res.get('blockers', []))}",
@@ -121,26 +200,11 @@ def main():
         ]
         print(render_panel("Session Start", lines, status="restore"))
 
-    elif args.command == "reflect":
-        e = KnowledgeEngine(args.project)
-        res = e.reflect_session(args.project, args.chat, args.session_id)
+    elif args.command == "session-end":
+        res = eng.session_commit(args.project or None, args.chat, args.session_id)
         print(
             render_panel(
-                "Reflection Complete",
-                [
-                    f"Report: {Path(res['report_path']).name}",
-                    f"Events: {len(res.get('knowledge_events', []))}",
-                ],
-                status="ok",
-            )
-        )
-
-    elif args.command == "commit":
-        e = KnowledgeEngine(args.project)
-        res = e.session_commit(args.project, args.chat, args.session_id)
-        print(
-            render_panel(
-                "Commit Complete",
+                "Session End Complete",
                 [
                     f"Report: {Path(res['report_path']).name}",
                     f"Materialized: {len(res.get('materialized_log', []))}",
@@ -150,40 +214,8 @@ def main():
             )
         )
 
-    elif args.command == "materialize":
-        e = KnowledgeEngine(args.project)
-        res = e.materialize_concepts(args.project)
-        print(
-            render_panel(
-                "Materialize Complete",
-                res.get("materialized", ["No changes"]),
-                status="ok",
-            )
-        )
-
-    elif args.command == "graph":
-        e = KnowledgeEngine(args.project)
-        res = e.update_graph(args.project)
-        print(
-            render_panel(
-                "Graph Updated",
-                [f"Links: {res.get('links_updated', 0)}"],
-                status="organize",
-            )
-        )
-
-    elif args.command == "consolidate":
-        e = KnowledgeEngine(args.project)
-        res = e.consolidate(args.project)
-        print(
-            render_panel(
-                "Consolidation", res.get("merged", ["No changes"]), status="organize"
-            )
-        )
-
     elif args.command == "rebuild":
-        e = KnowledgeEngine(args.project)
-        res = e.rebuild_registry(args.project)
+        res = eng.rebuild_registry(args.project or None)
         print(
             render_panel(
                 "Registry Rebuilt",
@@ -196,9 +228,8 @@ def main():
         )
 
     elif args.command == "events":
-        e = KnowledgeEngine(args.project)
-        events = e.get_events(
-            args.project,
+        events = eng.get_events(
+            args.project or None,
             concept=args.concept,
             event_type=args.type,
             session_id=args.session_id,
@@ -210,9 +241,8 @@ def main():
         print(render_panel("Events", lines, status="ok"))
 
     elif args.command == "event":
-        e = KnowledgeEngine(args.project)
         try:
-            ev = e.get_event(args.project, args.event_id)
+            ev = eng.get_event(args.project or None, args.event_id)
             print(
                 render_panel(
                     "Event",
@@ -231,12 +261,42 @@ def main():
                 )
             )
 
-    elif args.command == "lint":
-        import asyncio
-        from .linter import run_lint
+    elif args.command == "explain":
+        if args.type == "concept":
+            res = eng.explain_concept(args.project or None, args.id)
+            if res.get("status") == "error":
+                print(render_panel("Concept Not Found", [res.get("message", "")], status="error"))
+            else:
+                cdata = res["explanation"]["concept"]
+                lines = [
+                    f"Concept: {cdata.get('canonical_name', '').title()} ({cdata.get('concept_id', '')})",
+                    f"Status: {cdata.get('status', '').upper()}",
+                    f"Confidence: {cdata.get('confidence', '')}/5",
+                    f"Total Events: {res['explanation'].get('total_events', 0)}",
+                    f"Aliases: {', '.join(cdata.get('aliases', []))}",
+                    "",
+                    "Recent Evidence:",
+                ]
+                for ev in res["explanation"].get("recent_evidence", []):
+                    lines.append(f"  - {ev}")
+                print(render_panel("Concept Explanation", lines, status="ok"))
+        else:
+            try:
+                ev = eng.get_event(args.project or None, args.id)
+                lines = [
+                    f"Event ID: {ev.get('event_id')}",
+                    f"Type:     {ev.get('event_type')}",
+                    f"Summary:  {ev.get('summary')}",
+                    f"Evidence: {ev.get('evidence')}",
+                ]
+                print(render_panel("Event Explanation", lines, status="ok"))
+            except KeyError:
+                print(render_panel("Event Not Found", [f"No event: {args.id}"], status="error"))
 
+    elif args.command == "lint":
+        target = Path(args.project) if args.project else Path.cwd()
         res = asyncio.run(
-            run_lint(Path(args.project), max_parallel=args.workers, fix=args.fix)
+            run_lint(target, max_parallel=args.workers, fix=args.fix)
         )
         if res["status"] == "error":
             print(render_panel("Lint Error", [res["message"]], status="error"))
@@ -271,6 +331,9 @@ def main():
                     status="error" if res.get("broken_links") else "ok",
                 )
             )
+
+    elif args.command == "run":
+        run_agent(args.agent, project_dir)
 
 
 if __name__ == "__main__":

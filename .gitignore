@@ -18,6 +18,7 @@ Thumbs.db
 
 # Agent runtime state
 .harness/
+.oem/
 .local_vector_db/
 
 # Agent scaffolding

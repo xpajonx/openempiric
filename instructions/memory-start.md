@@ -13,7 +13,7 @@ At the start of every session, you **MUST** verify that the `openempiric` plugin
 
 ### 3. Session End & Organization
 - When the session is completed or the user signals session-end, you **MUST** call `knowledge_session_commit(project="<path>")`.
-- This runs the reflection pipeline (reflect → materialize → graph rebuild → re-index) to durably save learnings in the `.harness/` directory.
+- This runs the reflection pipeline (reflect → materialize → graph rebuild → re-index) to durably save learnings in the `.oem/` directory.
 
 ### 4. Orchestration Rule
 - You **MUST** use the `harness-orchestrator` tools (`harness_run_opencode`, `harness_run_tasks`) for any parallel subtasks, self-healing, or subagent tasks to ensure structured execution telemetry is captured.

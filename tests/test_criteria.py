@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from harness_orchestrator.server import mcp
-from harness_knowledge.engine import KnowledgeEngine
+from harness_knowledge.engine import KnowledgeEngine, HARNESS_DIR
 
 
 @pytest.fixture
@@ -30,11 +30,11 @@ class TestCriteria:
     """7 success criteria for harness-mcp."""
 
     def test_c1_knowledge_init_creates_harness(self, tmp_proj):
-        """C2: knowledge_init creates a .harness/ tree."""
+        """C2: knowledge_init creates a .oem/ tree."""
         result = _call("knowledge_init", {"project": tmp_proj})
-        assert (Path(tmp_proj) / ".harness").is_dir()
-        assert (Path(tmp_proj) / ".harness" / "directives").is_dir()
-        assert (Path(tmp_proj) / ".harness" / "state").is_dir()
+        assert (Path(tmp_proj) / HARNESS_DIR).is_dir()
+        assert (Path(tmp_proj) / HARNESS_DIR / "wiki").is_dir()
+        assert (Path(tmp_proj) / HARNESS_DIR / "state").is_dir()
         assert "Harness Initialized" in result.content[0].text
 
     def test_c2_knowledge_search_returns_results(self, tmp_proj):
@@ -67,7 +67,7 @@ class TestCriteria:
         assert "Commit Complete" in text
 
         # Check session report was written
-        sessions_dir = Path(tmp_proj) / ".harness" / "directives" / "sessions"
+        sessions_dir = Path(tmp_proj) / HARNESS_DIR / "sessions"
         assert sessions_dir.is_dir()
         assert len(list(sessions_dir.glob("*.md"))) >= 1
 
@@ -142,7 +142,7 @@ class TestCriteria:
 
         # harness_todo_advance
         todos = json.loads(
-            (Path(tmp_proj) / ".harness" / "state" / "todos.json").read_text()
+            (Path(tmp_proj) / HARNESS_DIR / "state" / "todos.json").read_text()
         )
         result = _call(
             "harness_todo_advance",
@@ -163,7 +163,7 @@ class TestCriteria:
         _call("knowledge_init", {"project": tmp_proj})
 
         # Write some state
-        handoff = Path(tmp_proj) / ".harness" / "directives" / "session-handoff.md"
+        handoff = Path(tmp_proj) / HARNESS_DIR / "session-handoff.md"
         handoff.write_text(
             "# Session Handoff\n\n## Next Action\nComplete the auth module\n"
         )
@@ -192,7 +192,7 @@ class TestCriteria:
         )
 
         # Verify file exists
-        todo_file = Path(tmp_proj) / ".harness" / "state" / "todos.json"
+        todo_file = Path(tmp_proj) / HARNESS_DIR / "state" / "todos.json"
         assert todo_file.exists()
         data = json.loads(todo_file.read_text())
         assert len(data) == 1
@@ -256,7 +256,7 @@ class TestCriteria:
         """Verify that truncation guard blocks heavily truncated updates."""
         _call("knowledge_init", {"project": tmp_proj})
         eng = KnowledgeEngine(tmp_proj)
-        concepts_dir = Path(tmp_proj) / ".harness" / "directives" / "wiki_concepts"
+        concepts_dir = Path(tmp_proj) / HARNESS_DIR / "wiki"
         concepts_dir.mkdir(parents=True, exist_ok=True)
         file_path = concepts_dir / "concept_001.md"
 
@@ -303,7 +303,7 @@ class TestCriteria:
         }
         eng._save_registry(registry, tmp_proj)
 
-        concepts_dir = Path(tmp_proj) / ".harness" / "directives" / "wiki_concepts"
+        concepts_dir = Path(tmp_proj) / HARNESS_DIR / "wiki"
         concepts_dir.mkdir(parents=True, exist_ok=True)
 
         c1_content = """---
@@ -350,7 +350,7 @@ aliases: ["two"]
         """Verify linter detects broken links and orphans."""
         _call("knowledge_init", {"project": tmp_proj})
 
-        concepts_dir = Path(tmp_proj) / ".harness" / "directives" / "wiki_concepts"
+        concepts_dir = Path(tmp_proj) / HARNESS_DIR / "wiki"
         concepts_dir.mkdir(parents=True, exist_ok=True)
 
         c1_content = """---
@@ -392,7 +392,7 @@ Broken: [[concept_999]]."""
         }
         eng._save_registry(registry, tmp_proj)
 
-        concepts_dir = Path(tmp_proj) / ".harness" / "directives" / "wiki_concepts"
+        concepts_dir = Path(tmp_proj) / HARNESS_DIR / "wiki"
         concepts_dir.mkdir(parents=True, exist_ok=True)
 
         c1_content = """---

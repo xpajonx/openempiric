@@ -19,9 +19,12 @@ _BLOCKED_COMMANDS = [
 ]
 
 
+from harness_knowledge.engine import HARNESS_DIR
+
+
 def _permissions_path(workdir: str = "") -> Path:
     base = Path(workdir) if workdir else Path.cwd()
-    return base / ".harness" / "state" / "permissions.json"
+    return base / HARNESS_DIR / "state" / "permissions.json"
 
 
 def load_permissions(workdir: str = "") -> dict:
