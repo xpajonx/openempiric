@@ -25,7 +25,12 @@ def run_agent(agent_name: str, project_dir: str):
     plugin_dest_dir.mkdir(parents=True, exist_ok=True)
     plugin_dest = plugin_dest_dir / "openempiric.ts"
     
-    if plugin_src.exists() and not plugin_dest.exists():
+    if plugin_src.exists():
+        if plugin_dest.exists() or plugin_dest.is_symlink():
+            try:
+                plugin_dest.unlink()
+            except Exception:
+                pass
         try:
             plugin_dest.symlink_to(plugin_src)
         except Exception:
