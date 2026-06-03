@@ -1,7 +1,7 @@
 import yaml
 from pathlib import Path
 
-SKILL_PATH = Path("/home/xpajonx/.config/opencode/skills/harness-orchestrator/SKILL.md")
+SKILL_PATH = Path.home() / ".config" / "opencode" / "skills" / "harness-orchestrator" / "SKILL.md"
 
 
 def load_harness_config() -> dict:

@@ -58,13 +58,17 @@ uv sync
 `openempiric` operates as a native OpenCode plugin.
 
 1. **Install the Plugin:**
-   Copy the plugin file to OpenCode's plugins directory.
+   Symlink (recommended) or copy the plugin file to OpenCode's plugins directory:
    ```bash
    mkdir -p ~/.config/opencode/plugins
-   cp openempiric/plugins/openempiric.ts ~/.config/opencode/plugins/
+   # Recommended (symlink):
+   ln -s $(pwd)/plugins/openempiric.ts ~/.config/opencode/plugins/openempiric.ts
+   
+   # Alternative (copy):
+   # cp plugins/openempiric.ts ~/.config/opencode/plugins/
    ```
 
-OpenCode automatically loads `.ts` plugins from the plugins directory. The plugin dynamically registers the `openempiric` MCP server and loads the required memory and orchestration instructions!
+OpenCode automatically loads `.ts` plugins from the plugins directory. The plugin dynamically resolves the repository location (via symlink, environment variable `OPENEMPIRIC_DIR`, or home directory candidates) to register the `openempiric` MCP server and load the required instructions!
 
 ---
 
