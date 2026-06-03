@@ -66,21 +66,33 @@ export const OpenempiricPlugin: Plugin = async ({ $ }) => {
         }
       }
 
-      // 2. Register Instructions (OEMRuntimeContext prompt injection)
-      config.instructions = config.instructions || []
-      
-      const tempInstPath = path.join(os.homedir(), ".config", "opencode", "plugins", ".openempiric_temp_instructions.md")
-      let instContent = "# openempiric Session Context\n\n"
-      
+      // 2. Read OEMRuntimeContext from well-known file (primary) or env var (fallback)
+      const contextPath = process.env.OEM_RUNTIME_CONTEXT_PATH ||
+        path.join(os.homedir(), ".config", "opencode", "plugins", ".oem_runtime_context.json")
+      const tempInstPath = process.env.OEM_TEMP_INSTRUCTIONS ||
+        path.join(os.homedir(), ".config", "opencode", "plugins", ".openempiric_temp_instructions.md")
+
       let oemContext: any = null
-      if (config.mcp.openempiric.env?.OEM_RUNTIME_CONTEXT) {
+      try {
+        if (fs.existsSync(contextPath)) {
+          const content = fs.readFileSync(contextPath, "utf-8")
+          oemContext = JSON.parse(content)
+        }
+      } catch (e) {
+        console.error("Failed to read OEM runtime context from file:", e)
+      }
+      if (!oemContext && config.mcp.openempiric.env?.OEM_RUNTIME_CONTEXT) {
         try {
           oemContext = JSON.parse(config.mcp.openempiric.env.OEM_RUNTIME_CONTEXT)
         } catch (e) {
           console.error("Failed to parse OEM_RUNTIME_CONTEXT JSON:", e)
         }
       }
-      
+
+      // 3. Register Instructions (OEMRuntimeContext prompt injection)
+      config.instructions = config.instructions || []
+      let instContent = "# openempiric Session Context\n\n"
+
       if (oemContext) {
         instContent += "## Active Concepts\n"
         if (oemContext.active_concepts && oemContext.active_concepts.length > 0) {

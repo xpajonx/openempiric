@@ -7,39 +7,37 @@ import os
 import re
 import shutil
 import subprocess
-import time
 from pathlib import Path
 
 from harness_tui.panels import render_panel
 from .engine import KnowledgeEngine, migrate_harness_to_oem
 from .linter import run_lint
 
+# ── Configurable paths (via env vars with sensible defaults) ────────────────
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
+_OPENCODE_PLUGINS_DIR = Path(
+    os.environ.get(
+        "OPENCODE_PLUGINS_DIR",
+        Path.home() / ".config" / "opencode" / "plugins",
+    )
+)
+_OEM_RUNTIME_CONTEXT_PATH = Path(
+    os.environ.get(
+        "OEM_RUNTIME_CONTEXT_PATH",
+        _OPENCODE_PLUGINS_DIR / ".oem_runtime_context.json",
+    )
+)
+_OEM_TEMP_INSTRUCTIONS = Path(
+    os.environ.get(
+        "OEM_TEMP_INSTRUCTIONS",
+        _OPENCODE_PLUGINS_DIR / ".openempiric_temp_instructions.md",
+    )
+)
+# ────────────────────────────────────────────────────────────────────────────
 
-def run_agent(agent_name: str, project_dir: str, eng: KnowledgeEngine):
-    # 1. Resolve repository root
-    repo_root = Path(__file__).resolve().parent.parent.parent.parent.parent
-    plugin_src = repo_root / "plugins" / "openempiric.ts"
-    
-    # 2. Ensure plugin is symlinked/copied to plugins folder
-    plugin_dest_dir = Path.home() / ".config" / "opencode" / "plugins"
-    plugin_dest_dir.mkdir(parents=True, exist_ok=True)
-    plugin_dest = plugin_dest_dir / "openempiric.ts"
-    
-    if plugin_src.exists():
-        if plugin_dest.exists() or plugin_dest.is_symlink():
-            try:
-                plugin_dest.unlink()
-            except Exception:
-                pass
-        try:
-            plugin_dest.symlink_to(plugin_src)
-        except Exception:
-            try:
-                shutil.copy(plugin_src, plugin_dest)
-            except Exception as e:
-                print(f"Warning: Failed to copy plugin file to {plugin_dest}: {e}")
 
-    # 3. Compile OEMRuntimeContext
+def _compile_oem_context(eng: KnowledgeEngine) -> dict:
+    """Build the OEMRuntimeContext dict from the engine's registry and events."""
     active_concepts = []
     try:
         registry = eng._load_registry()
@@ -50,7 +48,9 @@ def run_agent(agent_name: str, project_dir: str, eng: KnowledgeEngine):
                 if wiki_file.exists():
                     try:
                         text = wiki_file.read_text(encoding="utf-8")
-                        body_match = re.search(r"^---\s*\n.*?\n---\s*\n(.*)$", text, re.DOTALL)
+                        body_match = re.search(
+                            r"^---\s*\n.*?\n---\s*\n(.*)$", text, re.DOTALL
+                        )
                         body = body_match.group(1).strip() if body_match else text.strip()
                         body = re.sub(r"^#.*?\n", "", body).strip()
                         desc = body.split("\n")[0][:150].strip()
@@ -59,7 +59,7 @@ def run_agent(agent_name: str, project_dir: str, eng: KnowledgeEngine):
                 active_concepts.append({
                     "id": cid,
                     "name": cdata.get("canonical_name", cid),
-                    "description": desc
+                    "description": desc,
                 })
     except Exception as e:
         print(f"Warning: Failed to compile active concepts: {e}")
@@ -68,8 +68,6 @@ def run_agent(agent_name: str, project_dir: str, eng: KnowledgeEngine):
     relevant_failures = []
     try:
         events = eng._load_events()
-        
-        # Gather decisions
         seen_decisions = set()
         for ev in reversed(events):
             if ev.get("event_type") == "decision":
@@ -80,8 +78,6 @@ def run_agent(agent_name: str, project_dir: str, eng: KnowledgeEngine):
                     if len(active_decisions) >= 5:
                         break
         active_decisions.reverse()
-
-        # Gather failures
         seen_failures = set()
         for ev in reversed(events):
             if ev.get("event_type") == "failure":
@@ -102,53 +98,45 @@ def run_agent(agent_name: str, project_dir: str, eng: KnowledgeEngine):
     except Exception as e:
         print(f"Warning: Failed to compile active goals: {e}")
 
-    oem_context = {
+    return {
         "active_concepts": active_concepts,
         "active_decisions": active_decisions,
         "relevant_failures": relevant_failures,
-        "open_questions": open_questions
+        "open_questions": open_questions,
     }
 
-    # 4. Inject OEMRuntimeContext into opencode.jsonc
-    config_path = Path.home() / ".config" / "opencode" / "opencode.jsonc"
-    orig_content = ""
-    if config_path.exists():
+
+def run_agent(agent_name: str, project_dir: str, eng: KnowledgeEngine):
+    # 1. Ensure plugin is available in opencode plugins dir
+    plugin_src = _REPO_ROOT / "plugins" / "openempiric.ts"
+    _OPENCODE_PLUGINS_DIR.mkdir(parents=True, exist_ok=True)
+    plugin_dest = _OPENCODE_PLUGINS_DIR / "openempiric.ts"
+
+    if plugin_src.exists():
+        if plugin_dest.exists() or plugin_dest.is_symlink():
+            try:
+                plugin_dest.unlink()
+            except Exception:
+                pass
         try:
-            orig_content = config_path.read_text(encoding="utf-8")
-        except Exception as e:
-            print(f"Warning: Failed to read opencode.jsonc: {e}")
+            plugin_dest.symlink_to(plugin_src)
+        except Exception:
+            try:
+                shutil.copy(plugin_src, plugin_dest)
+            except Exception as e:
+                print(f"Warning: Failed to copy plugin file to {plugin_dest}: {e}")
 
-    def clean_jsonc(text: str) -> str:
-        text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
-        text = re.sub(r"(?<!:)//.*", "", text)
-        return text.strip()
+    # 2. Compile OEMRuntimeContext and write to well-known file
+    context = _compile_oem_context(eng)
+    try:
+        _OEM_RUNTIME_CONTEXT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _OEM_RUNTIME_CONTEXT_PATH.write_text(
+            json.dumps(context, indent=2), encoding="utf-8"
+        )
+    except Exception as e:
+        print(f"Warning: Failed to write runtime context to {_OEM_RUNTIME_CONTEXT_PATH}: {e}")
 
-    if orig_content:
-        try:
-            cleaned = clean_jsonc(orig_content)
-            config = json.loads(cleaned)
-            config.setdefault("mcp", {})
-            config["mcp"].setdefault("openempiric", {
-                "type": "local",
-                "command": [
-                    "uv",
-                    "run",
-                    "--directory",
-                    str(repo_root),
-                    "python",
-                    "-m",
-                    "harness_knowledge.server"
-                ],
-                "enabled": True,
-                "timeout": 60000
-            })
-            config["mcp"]["openempiric"].setdefault("env", {})
-            config["mcp"]["openempiric"]["env"]["OEM_RUNTIME_CONTEXT"] = json.dumps(oem_context)
-            config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
-        except Exception as e:
-            print(f"Warning: Failed to inject context into opencode.jsonc: {e}")
-
-    # 5. Spawn the coding agent
+    # 3. Spawn the coding agent
     print(f"Spawning coding agent: {agent_name}...")
     try:
         if agent_name == "opencode":
@@ -162,20 +150,13 @@ def run_agent(agent_name: str, project_dir: str, eng: KnowledgeEngine):
     except Exception as e:
         print(f"Agent session finished or returned: {e}")
     finally:
-        # Restore configuration
-        if orig_content:
-            try:
-                config_path.write_text(orig_content, encoding="utf-8")
-            except Exception as e:
-                print(f"Warning: Failed to restore opencode.jsonc: {e}")
-        
-        # Delete transient instruction file
-        temp_inst = Path.home() / ".config" / "opencode" / "plugins" / ".openempiric_temp_instructions.md"
-        if temp_inst.exists():
-            try:
-                temp_inst.unlink()
-            except Exception:
-                pass
+        # Clean up transient files
+        for p in [_OEM_RUNTIME_CONTEXT_PATH, _OEM_TEMP_INSTRUCTIONS]:
+            if p.exists():
+                try:
+                    p.unlink()
+                except Exception:
+                    pass
 
 
 def main():

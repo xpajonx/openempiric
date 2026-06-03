@@ -68,9 +68,19 @@ def test_oem_session_end(tmp_proj):
 
 
 def test_oem_run(tmp_proj):
-    """Verify that 'oem run' spawns the specified command and handles config."""
-    # We patch subprocess.run to avoid actual execution or execute a mock command like 'echo'
+    """Verify that 'oem run' spawns the specified command writes context to file (not config)."""
+    from harness_knowledge.cli import _OEM_RUNTIME_CONTEXT_PATH, _OEM_TEMP_INSTRUCTIONS
+
     with patch("harness_knowledge.cli.subprocess.run") as mock_run:
         with patch.object(sys, "argv", ["oem", "run", "mock-agent", "--project", tmp_proj]):
+            # Context file should not exist before run
+            assert not _OEM_RUNTIME_CONTEXT_PATH.exists()
+            assert not _OEM_TEMP_INSTRUCTIONS.exists()
+
             main()
+
             mock_run.assert_called_once_with(["mock-agent"], check=True)
+
+    # Both transient files should be cleaned up after run finishes
+    assert not _OEM_RUNTIME_CONTEXT_PATH.exists()
+    assert not _OEM_TEMP_INSTRUCTIONS.exists()
