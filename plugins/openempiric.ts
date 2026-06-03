@@ -55,7 +55,7 @@ export const OpenempiricPlugin: Plugin = async ({ $ }) => {
           repoDir,
           "python",
           "-m",
-          "harness_orchestrator.server"
+          "harness_knowledge.server"
         ],
         enabled: true,
         timeout: 60000

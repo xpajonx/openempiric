@@ -16,6 +16,9 @@ def mount_tools(mcp: object) -> None:
 
     engine = KnowledgeEngine()
 
+    from .tools import todos
+    todos.register(mcp)
+
     @mcp.tool()
     def knowledge_init(project: str = "") -> str:
         """Bootstrap the .harness/ framework in a project directory. If project is empty, uses current directory."""
@@ -540,3 +543,14 @@ def mount_tools(mcp: object) -> None:
             lines,
             status="error" if res.get("broken_links") else "ok",
         )
+
+
+def main() -> None:
+    from fastmcp import FastMCP
+    mcp = FastMCP("openempiric")
+    mount_tools(mcp)
+    mcp.run()
+
+
+if __name__ == "__main__":
+    main()

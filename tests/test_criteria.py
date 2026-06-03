@@ -7,8 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from harness_orchestrator.server import mcp
+from fastmcp import FastMCP
 from harness_knowledge.engine import KnowledgeEngine, HARNESS_DIR
+from harness_knowledge.server import mount_tools
+
+mcp = FastMCP("openempiric")
+mount_tools(mcp)
 
 
 @pytest.fixture
@@ -87,39 +91,10 @@ class TestCriteria:
         text = result.content[0].text
         assert "Materialization" in text or "materialized" in text.lower()
 
-    def test_c5_orchestrator_tools(self, tmp_proj):
-        """C5: Orchestrator tools return without error."""
-        # harness_list_projects
-        result = _call("harness_list_projects")
-        assert result.content[0].text is not None
-
-        # harness_plan_begin
-        result = _call("harness_plan_begin", {"task": "test plan"})
-        assert "plan_id" in result.content[0].text
-
-        # harness_plan_step
+    def test_c5_todo_tools(self, tmp_proj):
+        """C5: Todo tools return without error."""
         import json
-
-        plan = json.loads(result.content[0].text)
-        result = _call(
-            "harness_plan_step",
-            {
-                "plan_id": plan["plan_id"],
-                "intent": "first step",
-            },
-        )
-        step_data = json.loads(result.content[0].text)
-        assert step_data["status"] == "added"
-
-        # harness_plan_finalize
-        result = _call("harness_plan_finalize", {"plan_id": plan["plan_id"]})
-        final_data = json.loads(result.content[0].text)
-        assert final_data["status"] == "finalized"
-
-        # harness_plan_status
-        result = _call("harness_plan_status", {"plan_id": plan["plan_id"]})
-        status_data = json.loads(result.content[0].text)
-        assert status_data["status"] == "finalized"
+        _call("knowledge_init", {"project": tmp_proj})
 
         # harness_todo_write
         result = _call(
@@ -153,10 +128,6 @@ class TestCriteria:
             },
         )
         assert "Updated item" in result.content[0].text
-
-        # harness_db_query (read-only, may not find the DB)
-        result = _call("harness_db_query", {"query": "SELECT 1"})
-        assert "Error" not in result.content[0].text
 
     def test_c6_knowledge_session_start(self, tmp_proj):
         """C6: knowledge_session_start reads state and returns pre-injection context."""
@@ -197,42 +168,6 @@ class TestCriteria:
         data = json.loads(todo_file.read_text())
         assert len(data) == 1
         assert data[0]["content"] == "test persistence"
-
-    def test_harness_plan_auto_decompose(self, tmp_proj):
-        """Verify that auto_decompose on harness_plan_begin adds steps."""
-        import json
-
-        result = _call(
-            "harness_plan_begin",
-            {
-                "task": "Configure backend server and create database tables and write user tests",
-                "auto_decompose": True,
-            },
-        )
-        data = json.loads(result.content[0].text)
-        assert data["steps_added"] >= 2
-        assert "plan_id" in data
-
-    def test_harness_run_tasks_parallel(self, tmp_proj):
-        """Verify harness_run_tasks accepts parallel option."""
-        import json
-
-        tasks = json.dumps(
-            [
-                {"prompt": ""},
-                {"prompt": "echo hello", "label": "t1", "timeout": 2},
-            ]
-        )
-        result = _call(
-            "harness_run_tasks",
-            {
-                "tasks": tasks,
-                "workdir": tmp_proj,
-                "parallel": True,
-            },
-        )
-        text = result.content[0].text
-        assert "skipped" in text or "Error" in text or "t1" in text
 
     def test_knowledge_cli_parser(self):
         """Verify knowledge CLI parser structure and stats execution."""

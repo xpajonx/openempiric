@@ -5,8 +5,7 @@ import time
 import uuid
 from pathlib import Path
 
-
-from harness_knowledge.engine import HARNESS_DIR
+from ..engine import HARNESS_DIR
 
 
 def _todos_path(workdir: str = "") -> Path:
@@ -40,7 +39,7 @@ def register(mcp: object) -> None:
 
     @mcp.tool()
     def harness_todo_write(items: str, workdir: str = "") -> str:
-        """Replace the current todo list with new items. Persists to .harness/state/todos.json.
+        """Replace the current todo list with new items. Persists to .oem/state/todos.json.
 
         Args:
             items: JSON array of item objects. Each item: {"content": "description", "status": "pending"}.
@@ -76,7 +75,7 @@ def register(mcp: object) -> None:
 
     @mcp.tool()
     def harness_todo_read(workdir: str = "") -> str:
-        """Read the current todo list from .harness/state/todos.json."""
+        """Read the current todo list from .oem/state/todos.json."""
         todos = _load_todos(workdir)
         if not todos:
             return "Todo list is empty."

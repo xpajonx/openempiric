@@ -8,6 +8,7 @@ dependencies = [
     "fastembed",
     "watchdog",
     "harness-tui",
+    "fastmcp>=3.2",
 ]
 
 [project.scripts]
