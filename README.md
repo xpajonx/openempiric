@@ -157,13 +157,13 @@ Today's AI agents suffer from a fundamental limitation: **context window boundar
 
 ## Mounted MCP Tools
 
-### Todo Tools (`harness_todo_*`)
+### Todo Tools (`oem_todo_*`)
 
 | Tool | Purpose |
 |---|---|
-| `harness_todo_write` | Write/replace the todo list |
-| `harness_todo_read` | Read the todo list |
-| `harness_todo_advance` | Advance/update a todo item status |
+| `oem_todo_write` | Write/replace the todo list |
+| `oem_todo_read` | Read the todo list |
+| `oem_todo_advance` | Advance/update a todo item status |
 
 ### Knowledge Tools (`knowledge_*`)
 
@@ -184,6 +184,8 @@ Today's AI agents suffer from a fundamental limitation: **context window boundar
 | `knowledge_explain_concept` | Explain a concept and its evolution based on evidence |
 | `knowledge_merge_concepts` | Merge a secondary concept into a primary concept |
 | `knowledge_lint` | Check the knowledge base for broken links and orphan concepts |
+| `knowledge_graph_query` | Query semantic relationships for a concept |
+| `knowledge_usage_report` | Report concept usage and decision alignment for the session |
 
 ---
 
