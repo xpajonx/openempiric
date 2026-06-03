@@ -49,6 +49,32 @@ cd openempiric
 uv sync
 ```
 
+## Development Environment
+
+OpenEmpiric uses a single UV workspace virtual environment.
+
+Do NOT create package-local virtual environments.
+
+Correct:
+```bash
+uv sync
+uv run pytest
+```
+
+Incorrect:
+```bash
+cd packages/oem-knowledge
+uv venv
+```
+
+### Repository Layout
+
+```text
+root/
+├── .venv/            ← Only Python environment
+└── packages/         ← Workspace members
+```
+
 ---
 
 ## Configure as OpenCode Plugin (WSL)

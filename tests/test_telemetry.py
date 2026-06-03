@@ -102,3 +102,32 @@ def test_reset_cleans_telemetry(tmp_proj):
     assert data["retrieval"]["concepts_retrieved"] == 0
     assert data["knowledge_usage"]["concepts_injected"] == 0
     assert data["knowledge_usage"]["last_report_at"] is None
+
+
+def test_doctor_cmd(tmp_proj):
+    """Verify oem doctor command detection."""
+    # Write virtual pyproject.toml
+    pyproject = Path(tmp_proj) / "pyproject.toml"
+    pyproject.write_text("[tool.uv.workspace]\nmembers = []\n", encoding="utf-8")
+    
+    # Create fake .venv
+    venv = Path(tmp_proj) / ".venv"
+    venv.mkdir()
+
+    # Call main with doctor
+    with patch.object(sys, "argv", ["oem", "doctor", "--project", tmp_proj]):
+        try:
+            main()
+        except SystemExit as e:
+            assert e.code == 0 or e.code is None
+
+    # Now create nested venv and assert it exits with error (code 1)
+    packages_dir = Path(tmp_proj) / "packages"
+    sub_package = packages_dir / "oem-knowledge"
+    sub_venv = sub_package / ".venv"
+    sub_venv.mkdir(parents=True)
+
+    with patch.object(sys, "argv", ["oem", "doctor", "--project", tmp_proj]):
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 1

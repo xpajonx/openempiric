@@ -31,3 +31,26 @@ We're actively looking for contributors interested in:
 - Asynchronous parallel linters.
 - Boundary protection & traversal validation (sandboxing).
 - Cross-platform CLI utilities.
+
+---
+
+## Environment Setup
+
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/xpajonx/openempiric.git
+   cd openempiric
+   ```
+2. Install `uv`.
+3. Initialize the workspace and install all dependencies:
+   ```bash
+   uv sync
+   ```
+4. Verify the setup by running the test suite:
+   ```bash
+   uv run pytest
+   ```
+
+> [!WARNING]
+> Never run `uv sync` or `uv venv` inside `packages/oem-knowledge` or other sub-packages. All packages must be managed from the repository root workspace.
+

@@ -4,8 +4,7 @@ version = "0.1.0"
 description = "Monorepo for OpenEmpiric OEM MCP workspace"
 requires-python = ">=3.12"
 
-[workspace]
+[tool.uv.workspace]
 members = [
-    "packages/oem-knowledge",
-    "packages/oem-tui",
+    "packages/*",
 ]

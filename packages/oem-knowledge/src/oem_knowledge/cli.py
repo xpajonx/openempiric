@@ -257,6 +257,9 @@ def _setup_parser() -> argparse.ArgumentParser:
     metrics_p.add_argument("--export", type=str, help="Export raw metrics JSON to file path")
     metrics_p.add_argument("--usage-log", type=int, nargs="?", const=10, help="Print recent entries from usage_log.jsonl (default 10)")
 
+    doctor_p = sub.add_parser("doctor", help="Check workspace health and configuration")
+    doctor_p.add_argument("--project", type=str, default="")
+
     return parser
 
 
@@ -736,6 +739,79 @@ def main():
                         print(render_panel("Retrieval Metrics", lines, status="info"))
                     except Exception as e:
                         print(render_panel("Metrics Error", [f"Failed to read metrics: {e}"], status="error"))
+        elif args.command == "doctor":
+            try:
+                resolved_dir = eng._resolve_harness(project)
+                workspace_root = resolved_dir
+            except Exception:
+                workspace_root = Path(project or ".")
+
+            # Walk up to find workspace root containing pyproject.toml
+            while workspace_root.parent != workspace_root:
+                if (workspace_root / "pyproject.toml").exists():
+                    break
+                workspace_root = workspace_root.parent
+
+            pyproject_path = workspace_root / "pyproject.toml"
+            root_venv_path = workspace_root / ".venv"
+            
+            lines = []
+            status = "ok"
+
+            # 1. Root workspace check
+            if pyproject_path.exists():
+                lines.append("✓ Root workspace detected")
+            else:
+                lines.append("✗ Root workspace pyproject.toml not found")
+                status = "error"
+
+            # 2. Root venv check
+            if root_venv_path.exists():
+                lines.append("✓ Root .venv exists")
+            else:
+                lines.append("✗ Root .venv not found")
+                status = "error"
+
+            # 3. UV workspace health check
+            if pyproject_path.exists():
+                try:
+                    content = pyproject_path.read_text(encoding="utf-8")
+                    if "[tool.uv.workspace]" in content:
+                        lines.append("✓ UV workspace healthy")
+                    else:
+                        lines.append("✗ [tool.uv.workspace] missing in root pyproject.toml")
+                        status = "error"
+                except Exception as e:
+                    lines.append(f"✗ Failed to read root pyproject.toml: {e}")
+                    status = "error"
+            else:
+                lines.append("✗ UV workspace health check failed")
+                status = "error"
+
+            # 4. Nested virtualenvs scan
+            nested_venvs = []
+            packages_dir = workspace_root / "packages"
+            if packages_dir.exists() and packages_dir.is_dir():
+                for p in packages_dir.iterdir():
+                    if p.is_dir():
+                        sub_venv = p / ".venv"
+                        if sub_venv.exists():
+                            nested_venvs.append(str(sub_venv.relative_to(workspace_root)))
+
+            if nested_venvs:
+                status = "error"
+                for nv in nested_venvs:
+                    lines.append(f"✗ Nested virtualenv detected: {nv}")
+                lines.append("")
+                lines.append("Suggested Fix:")
+                lines.append(f"  rm -rf {Path(packages_dir.relative_to(workspace_root)) / '*/.venv'}")
+                lines.append("  uv sync")
+            else:
+                lines.append("✓ No nested virtualenvs detected")
+
+            print(render_panel("OEM Environment Check", lines, status=status))
+            if status == "error":
+                sys.exit(1)
 
     except Exception as e:
         logging.exception("Unhandled error in command '%s'", args.command)

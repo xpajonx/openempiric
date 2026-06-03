@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  validate-workspace:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for nested virtualenvs
+        run: |
+          if find packages -name ".venv" | grep .; then
+            echo "Nested .venv detected in packages directory!"
+            exit 1
+          else
+            echo "No nested virtualenvs detected."
+          fi

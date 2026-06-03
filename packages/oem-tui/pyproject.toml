@@ -4,3 +4,6 @@ version = "0.1.0"
 description = "Shared TUI primitives for OEM panels and styling"
 requires-python = ">=3.12"
 dependencies = []
+
+[tool.uv]
+package = true
