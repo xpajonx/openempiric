@@ -1163,6 +1163,7 @@ project: {project or "default"}
             confidence = min(5, confidence + 1)
         elif e_type == "failure":
             confidence = max(1, confidence - 1)
+            cdata["failure_count"] = cdata.get("failure_count", 0) + 1
         cdata["confidence"] = confidence
 
         current_status = cdata.get("status", "candidate")
@@ -1177,6 +1178,15 @@ project: {project or "default"}
             new_status = "emerging"
         else:
             new_status = "candidate"
+
+        if new_status != current_status:
+            cdata.setdefault("promotion_history", []).append({
+                "from_status": current_status,
+                "to_status": new_status,
+                "trigger_event": e_type,
+                "session_id": session_id,
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            })
 
         cdata["status"] = new_status
         return cdata
@@ -1620,9 +1630,15 @@ aliases: {json.dumps(cdata.get("aliases", []))}
         cdata = registry[concept_id]
         events = self.get_events(project, concept=cdata["canonical_name"])
 
+        from harness_knowledge.health import calculate_concept_health
+        health_score = calculate_concept_health(cdata)
+
         summary = {
             "concept": cdata,
             "total_events": len(events),
+            "supporting_events": events,
+            "promotion_history": cdata.get("promotion_history", []),
+            "health_score": health_score,
             "recent_evidence": [
                 e.get("evidence") for e in events[-5:] if e.get("evidence")
             ],

@@ -98,8 +98,26 @@ def main():
 
     # vault
     vault_parser = sub.add_parser("vault")
-    vault_parser.add_argument("action", choices=["sync"])
+    vault_parser.add_argument("action", choices=["sync", "candidates", "promote", "demote"])
+    vault_parser.add_argument("concept_id", type=str, nargs="?", default="")
     vault_parser.add_argument("--project", type=str, default="")
+
+    # identity
+    identity_parser = sub.add_parser("identity")
+    identity_parser.add_argument("action", choices=["scan", "review"])
+    identity_parser.add_argument("concept_a", type=str, nargs="?", default="")
+    identity_parser.add_argument("concept_b", type=str, nargs="?", default="")
+    identity_parser.add_argument("--project", type=str, default="")
+
+    # concept
+    concept_parser = sub.add_parser("concept")
+    concept_parser.add_argument("action", choices=["evolve", "health"])
+    concept_parser.add_argument("concept_id", type=str, nargs="?", default="")
+    concept_parser.add_argument("--project", type=str, default="")
+
+    # contradictions
+    contradictions_parser = sub.add_parser("contradictions")
+    contradictions_parser.add_argument("--project", type=str, default="")
 
     # merge
     merge_parser = sub.add_parser("merge")
@@ -325,16 +343,116 @@ def main():
             )
 
     elif args.command == "vault":
+        from harness_knowledge.vault import GlobalVault
+        vault = GlobalVault()
         if args.action == "sync":
             try:
-                from harness_knowledge.vault import GlobalVault
-                vault = GlobalVault()
                 local_reg = eng._load_registry(args.project or None)
                 concepts_dir = eng._concepts_dir(args.project or None)
                 vault.sync_from_registry(local_reg, concepts_dir)
                 print(render_panel("Vault Sync", ["Global vault synchronized successfully."], status="ok"))
             except Exception as e:
                 print(render_panel("Vault Sync Failure", [f"Error: {e}"], status="error"))
+        elif args.action == "candidates":
+            candidates = vault.vault_candidates(args.project or None)
+            lines = [f"Candidates: {len(candidates)}", ""]
+            for c in candidates:
+                lines.append(f"  - {c['concept_id']} ({c['canonical_name']}) - Evidences: {c['evidence_count']}, Occurrences: {c['project_occurrences']}")
+            print(render_panel("Global Vault Candidates", lines, status="ok"))
+        elif args.action == "promote":
+            if not args.concept_id:
+                print(render_panel("Error", ["Concept ID required for promotion."], status="error"))
+            else:
+                try:
+                    vault.promote_to_global(args.concept_id, args.project or None)
+                    print(render_panel("Vault Promotion", [f"Successfully promoted {args.concept_id} to Global Vault."], status="ok"))
+                except Exception as e:
+                    print(render_panel("Error", [f"Promotion failed: {e}"], status="error"))
+        elif args.action == "demote":
+            if not args.concept_id:
+                print(render_panel("Error", ["Concept ID required for demotion."], status="error"))
+            else:
+                try:
+                    vault.demote_from_global(args.concept_id, args.project or None)
+                    print(render_panel("Vault Demotion", [f"Successfully demoted {args.concept_id} from Global Vault."], status="ok"))
+                except Exception as e:
+                    print(render_panel("Error", [f"Demotion failed: {e}"], status="error"))
+
+    elif args.command == "identity":
+        from harness_knowledge.identity_resolver import SemanticIdentityResolver
+        resolver = SemanticIdentityResolver(eng)
+        if args.action == "scan":
+            duplicates = resolver.scan_duplicates(args.project or None)
+            lines = [f"Potential duplicates found: {len(duplicates)}", ""]
+            for d in duplicates:
+                lines.append(f"  - Pair: {d['concept_a']} & {d['concept_b']}")
+                lines.append(f"    Names: {d['name_a']} | {d['name_b']}")
+                lines.append(f"    Similarity: {d['similarity']:.4f}")
+                lines.append("")
+            print(render_panel("Identity Scan", lines, status="ok"))
+        elif args.action == "review":
+            if not args.concept_a or not args.concept_b:
+                print(render_panel("Error", ["Two concept IDs required for review."], status="error"))
+            else:
+                registry = eng._load_registry(args.project or None)
+                if args.concept_a not in registry or args.concept_b not in registry:
+                    print(render_panel("Error", ["One or both concepts not found in registry."], status="error"))
+                else:
+                    lines = [
+                        f"Reviewing similarity for {args.concept_a} and {args.concept_b}:",
+                        f"  Concept A: {registry[args.concept_a].get('canonical_name')}",
+                        f"  Concept B: {registry[args.concept_b].get('canonical_name')}",
+                    ]
+                    print(render_panel("Identity Review", lines, status="ok"))
+
+    elif args.command == "concept":
+        if args.action == "evolve":
+            if not args.concept_id:
+                print(render_panel("Error", ["Concept ID required for evolution."], status="error"))
+            else:
+                from harness_knowledge.evolution import ConceptEvolutionEngine
+                evolve_engine = ConceptEvolutionEngine(eng)
+                res = evolve_engine.evolve_concept(args.concept_id, args.project or None)
+                if res.get("status") == "error":
+                    print(render_panel("Evolution Failure", [res.get("message", "")], status="error"))
+                else:
+                    print(render_panel("Concept Evolved", [res.get("message", "")], status="ok"))
+        elif args.action == "health":
+            registry = eng._load_registry(args.project or None)
+            from harness_knowledge.health import calculate_concept_health
+            if args.concept_id:
+                if args.concept_id not in registry:
+                    print(render_panel("Error", [f"Concept {args.concept_id} not found."], status="error"))
+                else:
+                    cdata = registry[args.concept_id]
+                    score = calculate_concept_health(cdata)
+                    lines = [
+                        f"Concept: {cdata.get('canonical_name')} ({args.concept_id})",
+                        f"Health Score: {score}/100",
+                        f"  Confidence: {cdata.get('confidence', 1)}/5",
+                        f"  Evidence Count: {cdata.get('evidence_count', 0)}",
+                        f"  Failure Count: {cdata.get('failure_count', 0)}",
+                        f"  Status: {cdata.get('status', 'candidate')}",
+                    ]
+                    print(render_panel("Concept Health Breakdown", lines, status="ok"))
+            else:
+                lines = [f"Total concepts scanned: {len(registry)}", ""]
+                for cid, cdata in registry.items():
+                    score = calculate_concept_health(cdata)
+                    lines.append(f"  - {cid} ({cdata.get('canonical_name')}) -> Health: {score}/100 (Status: {cdata.get('status')})")
+                print(render_panel("System Health Summary", lines, status="ok"))
+
+    elif args.command == "contradictions":
+        from harness_knowledge.evolution import ContradictionDetector
+        detector = ContradictionDetector(eng)
+        contradictions = detector.detect_contradictions(args.project or None)
+        lines = [f"Contradictions detected: {len(contradictions)}", ""]
+        for c in contradictions:
+            lines.append(f"  ❌ Conflict between {c['concept_a']} and {c['concept_b']}")
+            lines.append(f"     Names: {c['name_a']} | {c['name_b']}")
+            lines.append(f"     Description: {c['description']}")
+            lines.append("")
+        print(render_panel("Contradiction Scan", lines, status="error" if contradictions else "ok"))
 
     elif args.command == "merge":
         res = eng.merge_concepts(args.project or None, args.primary_id, args.secondary_id)

@@ -1,0 +1,58 @@
+from __future__ import annotations
+
+import tempfile
+import shutil
+from pathlib import Path
+import pytest
+
+from harness_knowledge.engine import KnowledgeEngine
+from harness_knowledge.identity_resolver import SemanticIdentityResolver
+
+
+@pytest.fixture
+def tmp_proj():
+    d = tempfile.mkdtemp()
+    yield d
+    shutil.rmtree(d)
+
+
+def test_semantic_identity_resolution(tmp_proj):
+    eng = KnowledgeEngine(tmp_proj)
+    eng.init_project(tmp_proj)
+
+    registry = eng._load_registry(tmp_proj)
+    # Create two duplicate-like concepts
+    registry["concept_001"] = {
+        "concept_id": "concept_001",
+        "canonical_name": "database-migration-tool",
+        "aliases": ["db migration", "schema upgrade"],
+        "status": "validated",
+        "confidence": 3,
+        "evidence_count": 3
+    }
+    registry["concept_002"] = {
+        "concept_id": "concept_002",
+        "canonical_name": "db-schema-upgrader",
+        "aliases": ["db migration", "schema migration"],
+        "status": "validated",
+        "confidence": 3,
+        "evidence_count": 3
+    }
+    # A non-duplicate concept
+    registry["concept_003"] = {
+        "concept_id": "concept_003",
+        "canonical_name": "authentication-handler",
+        "aliases": ["user auth", "oauth"],
+        "status": "validated",
+        "confidence": 3,
+        "evidence_count": 3
+    }
+    eng._save_registry(registry, tmp_proj)
+
+    resolver = SemanticIdentityResolver(eng)
+    duplicates = resolver.scan_duplicates(tmp_proj, threshold=0.70)
+
+    # We expect concept_001 and concept_002 to be identified as potential duplicates
+    assert len(duplicates) >= 1
+    pair = duplicates[0]
+    assert {pair["concept_a"], pair["concept_b"]} == {"concept_001", "concept_002"}
