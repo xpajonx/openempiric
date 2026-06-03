@@ -673,6 +673,26 @@ export const OpenempiricPlugin: Plugin = async ({ $ }) => {
         }
       }),
 
+      knowledge_session_commit: tool({
+        description: "End-of-session pipeline: reflect → materialize concepts → update graph → re-index.",
+        args: {
+          project: tool.schema.string().optional().describe("Project directory path"),
+          chat: tool.schema.string().optional().default("").describe("Raw conversation/chat history text"),
+          session_id: tool.schema.string().optional().describe("Optional session ID for correlation")
+        },
+        async execute({ project, chat, session_id }, context) {
+          const root = project || context.directory || process.cwd();
+          const cmdArgs = ["session-end"];
+          if (chat) {
+            cmdArgs.push("--chat", chat);
+          }
+          if (session_id) {
+            cmdArgs.push("--session-id", session_id);
+          }
+          return runOemCli(repoDir, cmdArgs, root);
+        }
+      }),
+
       knowledge_stats: tool({
         description: "Show oem/ knowledge statistics.",
         args: {

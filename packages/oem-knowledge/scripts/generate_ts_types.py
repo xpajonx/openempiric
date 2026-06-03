@@ -55,6 +55,7 @@ def generate_ts() -> str:
         models.MetricsSchema,
         models.OutcomeMetrics,
         models.OutcomeRecord,
+        models.ConceptFitness,
     ]
 
     lines = [

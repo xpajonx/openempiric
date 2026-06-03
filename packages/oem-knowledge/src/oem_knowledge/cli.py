@@ -221,8 +221,9 @@ def _setup_parser() -> argparse.ArgumentParser:
     identity_p.add_argument("--project", type=str, default="")
 
     concept_p = sub.add_parser("concept")
-    concept_p.add_argument("action", choices=["evolve", "health"])
+    concept_p.add_argument("action", choices=["evolve", "health", "fitness"])
     concept_p.add_argument("concept_id", type=str, nargs="?", default="")
+    concept_p.add_argument("--format", choices=["text", "yaml", "json"], default="text")
     concept_p.add_argument("--project", type=str, default="")
 
     contradictions_p = sub.add_parser("contradictions")
@@ -576,6 +577,79 @@ def main():
                         score = calculate_concept_health(cdata)
                         lines.append(f"  - {cid} ({cdata.get('canonical_name')}) -> Health: {score}/100 (Status: {cdata.get('status')})")
                     print(render_panel("System Health Summary", lines, status="ok"))
+
+            elif args.action == "fitness":
+                def dict_to_yaml(d: dict, indent: int = 0) -> str:
+                    lines_yaml = []
+                    for k, v in d.items():
+                        prefix = " " * indent
+                        if isinstance(v, dict):
+                            lines_yaml.append(f"{prefix}{k}:")
+                            lines_yaml.append(dict_to_yaml(v, indent + 2))
+                        elif isinstance(v, list):
+                            lines_yaml.append(f"{prefix}{k}:")
+                            for item in v:
+                                lines_yaml.append(f"{prefix}- {item}")
+                        else:
+                            if v is None:
+                                lines_yaml.append(f"{prefix}{k}: null")
+                            elif isinstance(v, bool):
+                                lines_yaml.append(f"{prefix}{k}: {str(v).lower()}")
+                            else:
+                                lines_yaml.append(f"{prefix}{k}: {v}")
+                    return "\n".join(lines_yaml)
+
+                fitness_data = eng.calculate_fitness(project)
+                report = {}
+                for cid, fit in fitness_data.items():
+                    report[cid] = {
+                        "retrieved": fit.retrieved,
+                        "referenced": fit.referenced,
+                        "ignored": fit.ignored,
+                        "successful_sessions": fit.successful_sessions,
+                        "failed_sessions": fit.failed_sessions,
+                        "evidence_count": fit.evidence_count,
+                        "fitness_score": fit.fitness_score,
+                    }
+
+                if args.concept_id:
+                    if args.concept_id not in report:
+                        resolved_id = eng.fitness_service._find_concept_id(args.concept_id, eng._load_registry(project))
+                        if resolved_id in report:
+                            report = {resolved_id: report[resolved_id]}
+                        else:
+                            print(render_panel("Error", [f"Concept '{args.concept_id}' not found in fitness statistics."], status="error"))
+                            sys.exit(1)
+                    else:
+                        report = {args.concept_id: report[args.concept_id]}
+
+                if args.format == "json":
+                    print(json.dumps(report, indent=2))
+                elif args.format == "yaml":
+                    print(dict_to_yaml(report))
+                else:
+                    lines = [
+                        "Note: Outcome metrics indicate correlation, not direct causation.",
+                        "Concepts sorted by active usage count (referenced sessions).",
+                        "",
+                        f"{'Concept Name (ID)':<30} | {'Retr':<5} | {'Ref':<5} | {'Ign':<5} | {'Succ':<5} | {'Fail':<5} | {'Evid':<5} | {'Fitness':<7}",
+                        "-" * 88
+                    ]
+                    sorted_concepts = sorted(
+                        report.items(),
+                        key=lambda x: (x[1]["referenced"], x[1]["retrieved"]),
+                        reverse=True
+                    )
+                    registry = eng._load_registry(project)
+                    for cid, m in sorted_concepts:
+                        name = registry.get(cid, {}).get("canonical_name", cid)
+                        label = f"{name} ({cid})"
+                        if len(label) > 30:
+                            label = label[:27] + "..."
+                        lines.append(
+                            f"{label:<30} | {m['retrieved']:<5} | {m['referenced']:<5} | {m['ignored']:<5} | {m['successful_sessions']:<5} | {m['failed_sessions']:<5} | {m['evidence_count']:<5} | {m['fitness_score']:.4f}"
+                        )
+                    print(render_panel("Knowledge Fitness Telemetry", lines, status="stats"))
 
         elif args.command == "contradictions":
             from oem_knowledge.evolution import ContradictionDetector

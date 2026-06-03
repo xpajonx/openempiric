@@ -12,7 +12,7 @@ import uuid
 from collections import Counter
 from pathlib import Path
 
-from oem_knowledge.models import ConceptData, KnowledgeEvent
+from oem_knowledge.models import ConceptData, KnowledgeEvent, ConceptFitness
 
 # Import service classes
 from oem_knowledge.services.search import SearchService
@@ -20,6 +20,7 @@ from oem_knowledge.services.materialization import MaterializationService
 from oem_knowledge.services.reflection import ReflectionService
 from oem_knowledge.services.state import StateService
 from oem_knowledge.services.event_migration import EventMigrator
+from oem_knowledge.services.fitness import FitnessService
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -215,6 +216,7 @@ class KnowledgeEngine:
         self.reflection_service = ReflectionService(self)
         self.state_service = StateService(self)
         self.event_migrator = EventMigrator(self)
+        self.fitness_service = FitnessService(self)
 
     def _sfs(self, project: str | Path | None = None) -> SecureFileSystem:
         p = Path(project or self.project_path or ".").resolve()
@@ -699,3 +701,6 @@ class KnowledgeEngine:
         return self.state_service.record_outcome(
             outcome, referenced_concepts, reason, session_id, project
         )
+
+    def calculate_fitness(self, project: str | None = None) -> dict[str, ConceptFitness]:
+        return self.fitness_service.calculate_fitness(project)

@@ -390,6 +390,7 @@ class StateService:
             "session_id": resolved_session_id,
             "outcome": outcome,
             "referenced_concepts": referenced_concepts,
+            "retrieved_concepts": injected_concepts,
             "reason": reason,
             "metrics": {
                 "concepts_injected": concepts_injected,
@@ -412,6 +413,7 @@ class StateService:
             "session_id": resolved_session_id,
             "outcome": outcome,
             "referenced_concepts": referenced_concepts,
+            "retrieved_concepts": injected_concepts,
             "reason": reason,
             "metrics": log_entry["metrics"],
         }

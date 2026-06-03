@@ -107,6 +107,20 @@ class OutcomeRecord(BaseModel):
     session_id: str
     outcome: Literal["success", "failure", "abandoned"]
     referenced_concepts: list[str] = Field(default_factory=list)
+    retrieved_concepts: list[str] = Field(default_factory=list)
     reason: str | None = None
     metrics: OutcomeMetrics = Field(default_factory=OutcomeMetrics)
     timestamp: str
+
+
+class ConceptFitness(BaseModel):
+    concept_id: str
+    canonical_name: str
+    retrieved: int = 0
+    referenced: int = 0
+    ignored: int = 0
+    successful_sessions: int = 0
+    failed_sessions: int = 0
+    evidence_count: int = 0
+    fitness_score: float = 0.0
+

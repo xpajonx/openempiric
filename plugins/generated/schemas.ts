@@ -89,7 +89,20 @@ export interface OutcomeRecord {
   session_id: string;
   outcome: "success" | "failure" | "abandoned";
   referenced_concepts: string[];
+  retrieved_concepts: string[];
   reason?: string | null;
   metrics: OutcomeMetrics;
   timestamp: string;
+}
+
+export interface ConceptFitness {
+  concept_id: string;
+  canonical_name: string;
+  retrieved: number;
+  referenced: number;
+  ignored: number;
+  successful_sessions: number;
+  failed_sessions: number;
+  evidence_count: number;
+  fitness_score: number;
 }
