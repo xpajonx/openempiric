@@ -8,3 +8,7 @@ requires-python = ">=3.12"
 members = [
     "packages/*",
 ]
+
+[tool.pytest.ini_options]
+addopts = "--import-mode=importlib"
+
