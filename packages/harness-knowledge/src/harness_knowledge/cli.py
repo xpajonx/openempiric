@@ -46,8 +46,8 @@ def run_agent(agent_name: str, project_dir: str):
             
             # Read and parse
             text = config_path.read_text(encoding="utf-8")
-            # Simple comment stripping
-            cleaned = re.sub(r"//.*", "", text)
+            # Simple comment stripping (ignoring URL schemes like https://)
+            cleaned = re.sub(r"(?<!:)\/\/.*", "", text)
             cleaned = re.sub(r"/\*.*?\*/", "", cleaned, flags=re.DOTALL)
             config_data = json.loads(cleaned)
             
