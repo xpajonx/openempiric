@@ -338,3 +338,80 @@ class StateService:
             "message": f"Merged {secondary_id} into {primary_id}",
             "concept": pdata,
         }
+
+    def record_outcome(
+        self,
+        outcome: str,
+        referenced_concepts: list[str] | None = None,
+        reason: str | None = None,
+        session_id: str | None = None,
+        project: str | None = None,
+    ) -> dict:
+        harness = self.engine._resolve_harness(project)
+        state_dir = harness / "state"
+        state_dir.mkdir(parents=True, exist_ok=True)
+
+        session_state_path = state_dir / "session_state.json"
+        injected_concepts = []
+        resolved_session_id = session_id
+
+        if session_state_path.exists():
+            try:
+                state_data = json.loads(session_state_path.read_text(encoding="utf-8"))
+                if not resolved_session_id:
+                    resolved_session_id = state_data.get("session_id")
+                injected_concepts = state_data.get("last_injected_concepts", [])
+            except Exception:
+                pass
+
+        if not resolved_session_id:
+            resolved_session_id = f"session_{int(time.time() * 1000)}"
+
+        if referenced_concepts is None:
+            referenced_concepts = injected_concepts
+
+        # Read metrics if available
+        metrics_file = state_dir / "metrics.json"
+        concepts_injected = 0
+        concepts_referenced = 0
+        search_count = 0
+        if metrics_file.exists():
+            try:
+                metrics_data = json.loads(metrics_file.read_text(encoding="utf-8"))
+                concepts_injected = metrics_data.get("knowledge_usage", {}).get("concepts_injected", 0)
+                concepts_referenced = metrics_data.get("knowledge_usage", {}).get("concepts_referenced", 0)
+                search_count = metrics_data.get("retrieval", {}).get("search_count", 0)
+            except Exception:
+                pass
+
+        outcomes_file = state_dir / "outcomes.jsonl"
+        log_entry = {
+            "schema_version": 1,
+            "session_id": resolved_session_id,
+            "outcome": outcome,
+            "referenced_concepts": referenced_concepts,
+            "reason": reason,
+            "metrics": {
+                "concepts_injected": concepts_injected,
+                "concepts_referenced": concepts_referenced,
+                "search_count": search_count,
+            },
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+
+        with open(outcomes_file, "a", encoding="utf-8") as f:
+            f.write(json.dumps(log_entry) + "\n")
+
+        self.engine._log_action(
+            f"Outcome | Logged session outcome '{outcome}' for {resolved_session_id}",
+            project,
+        )
+
+        return {
+            "status": "success",
+            "session_id": resolved_session_id,
+            "outcome": outcome,
+            "referenced_concepts": referenced_concepts,
+            "reason": reason,
+            "metrics": log_entry["metrics"],
+        }

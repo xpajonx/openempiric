@@ -383,7 +383,9 @@ class ContextAssembler {
     const sessionStatePath = path.join(projectPath, ".oem", "state", "session_state.json");
     try {
       fs.mkdirSync(path.dirname(sessionStatePath), { recursive: true });
+      const sessionId = `session_${Date.now()}`;
       fs.writeFileSync(sessionStatePath, JSON.stringify({
+        session_id: sessionId,
         last_injected_concepts: injectedIds,
         last_injected_at: new Date().toISOString()
       }, null, 2), "utf-8");

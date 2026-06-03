@@ -687,3 +687,15 @@ class KnowledgeEngine:
             "links_updated": graph_res.get("links_updated", 0),
             "index_stats": idx_res,
         }
+
+    def record_outcome(
+        self,
+        outcome: str,
+        referenced_concepts: list[str] | None = None,
+        reason: str | None = None,
+        session_id: str | None = None,
+        project: str | None = None,
+    ) -> dict:
+        return self.state_service.record_outcome(
+            outcome, referenced_concepts, reason, session_id, project
+        )

@@ -77,3 +77,19 @@ export interface MetricsSchema {
   context: ContextMetrics;
   knowledge_usage: KnowledgeUsageMetrics;
 }
+
+export interface OutcomeMetrics {
+  concepts_injected: number;
+  concepts_referenced: number;
+  search_count: number;
+}
+
+export interface OutcomeRecord {
+  schema_version: number;
+  session_id: string;
+  outcome: "success" | "failure" | "abandoned";
+  referenced_concepts: string[];
+  reason?: string | null;
+  metrics: OutcomeMetrics;
+  timestamp: string;
+}

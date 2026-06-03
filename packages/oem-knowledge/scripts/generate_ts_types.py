@@ -53,6 +53,8 @@ def generate_ts() -> str:
         models.ContextMetrics,
         models.KnowledgeUsageMetrics,
         models.MetricsSchema,
+        models.OutcomeMetrics,
+        models.OutcomeRecord,
     ]
 
     lines = [

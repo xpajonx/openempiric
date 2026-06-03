@@ -94,3 +94,19 @@ class MetricsSchema(BaseModel):
     retrieval: RetrievalMetrics = Field(default_factory=RetrievalMetrics)
     context: ContextMetrics = Field(default_factory=ContextMetrics)
     knowledge_usage: KnowledgeUsageMetrics = Field(default_factory=KnowledgeUsageMetrics)
+
+
+class OutcomeMetrics(BaseModel):
+    concepts_injected: int = 0
+    concepts_referenced: int = 0
+    search_count: int = 0
+
+
+class OutcomeRecord(BaseModel):
+    schema_version: int = 1
+    session_id: str
+    outcome: Literal["success", "failure", "abandoned"]
+    referenced_concepts: list[str] = Field(default_factory=list)
+    reason: str | None = None
+    metrics: OutcomeMetrics = Field(default_factory=OutcomeMetrics)
+    timestamp: str

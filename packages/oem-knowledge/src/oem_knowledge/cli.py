@@ -262,6 +262,14 @@ def _setup_parser() -> argparse.ArgumentParser:
     metrics_p.add_argument("--decisions", type=str, default="[]", help="JSON array of decisions aligned")
 
     todo_p = sub.add_parser("todo", help="Manage session todo list")
+    
+    outcome_p = sub.add_parser("outcome", help="Record session outcome")
+    outcome_p.add_argument("status", choices=["success", "failure", "abandoned"])
+    outcome_p.add_argument("referenced_concepts", type=str, nargs="*", default=[])
+    outcome_p.add_argument("--reason", type=str, default="")
+    outcome_p.add_argument("--session-id", type=str, default="")
+    outcome_p.add_argument("--project", type=str, default="")
+
     todo_sub = todo_p.add_subparsers(dest="todo_action", required=True)
 
     todo_read_p = todo_sub.add_parser("read")
@@ -599,6 +607,28 @@ def main():
                 print(oem_todo_write(args.items, project or ""))
             elif args.todo_action == "advance":
                 print(oem_todo_advance(args.item_id, args.status, project or ""))
+
+        elif args.command == "outcome":
+            referenced = args.referenced_concepts if args.referenced_concepts else None
+            reason = args.reason if args.reason else None
+            session_id = args.session_id if args.session_id else None
+            res = eng.record_outcome(
+                args.status,
+                referenced_concepts=referenced,
+                reason=reason,
+                session_id=session_id,
+                project=project,
+            )
+            lines = [
+                f"Session ID:  {res['session_id']}",
+                f"Outcome:     {res['outcome'].upper()}",
+                f"Concepts:    {', '.join(res['referenced_concepts']) if res['referenced_concepts'] else 'None'}",
+            ]
+            if res["reason"]:
+                lines.append(f"Reason:      {res['reason']}")
+            lines.append("")
+            lines.append(f"Metrics (Injected/Referenced): {res['metrics']['concepts_injected']}/{res['metrics']['concepts_referenced']}")
+            print(render_panel("Outcome Logged", lines, status="ok"))
 
         elif args.command == "metrics":
             if getattr(args, "report", False):
