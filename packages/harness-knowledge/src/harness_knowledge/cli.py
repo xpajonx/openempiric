@@ -34,36 +34,7 @@ def run_agent(agent_name: str, project_dir: str):
             except Exception as e:
                 print(f"Warning: Failed to copy plugin file to {plugin_dest}: {e}")
 
-    # 3. Handle opencode.jsonc modification (Option A)
-    config_path = Path.home() / ".config" / "opencode" / "opencode.jsonc"
-    config_backup_path = Path.home() / ".config" / "opencode" / "opencode.jsonc.bak"
-    config_modified = False
-
-    if config_path.exists():
-        try:
-            # Backup
-            shutil.copy(config_path, config_backup_path)
-            
-            # Read and parse
-            text = config_path.read_text(encoding="utf-8")
-            # Simple comment stripping (ignoring URL schemes like https://)
-            cleaned = re.sub(r"(?<!:)\/\/.*", "", text)
-            cleaned = re.sub(r"/\*.*?\*/", "", cleaned, flags=re.DOTALL)
-            config_data = json.loads(cleaned)
-            
-            # Update plugin array
-            plugins = config_data.setdefault("plugin", [])
-            if "openempiric" not in plugins and ["openempiric", {}] not in plugins:
-                plugins.append("openempiric")
-                config_modified = True
-                
-            if config_modified:
-                # Write updated json
-                config_path.write_text(json.dumps(config_data, indent=2), encoding="utf-8")
-        except Exception as e:
-            print(f"Warning: Failed to temporarily modify config at {config_path}: {e}")
-
-    # 4. Spawn the coding agent
+    # 3. Spawn the coding agent
     print(f"Spawning coding agent: {agent_name}...")
     try:
         # Execute the agent command
@@ -77,18 +48,6 @@ def run_agent(agent_name: str, project_dir: str):
             subprocess.run(agent_name.split(), check=True)
     except Exception as e:
         print(f"Agent session finished or returned: {e}")
-    finally:
-        # 5. Restore config on exit
-        if config_modified and config_backup_path.exists():
-            try:
-                shutil.move(config_backup_path, config_path)
-            except Exception as e:
-                print(f"Warning: Failed to restore config at {config_path}: {e}")
-        elif config_backup_path.exists():
-            try:
-                config_backup_path.unlink()
-            except Exception:
-                pass
 
 
 def main():
