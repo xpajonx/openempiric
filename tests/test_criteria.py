@@ -14,6 +14,49 @@ from oem_knowledge.server import mount_tools
 mcp = FastMCP("openempiric")
 mount_tools(mcp)
 
+# Register the migrated tools on the test FastMCP instance to support existing tests
+from oem_knowledge.tools import todos
+todos.register(mcp)
+
+@mcp.tool()
+def knowledge_search(query: str, k: int = 3, project: str = "") -> str:
+    from oem_knowledge.engine import KnowledgeEngine
+    from oem_tui.panels import render_panel
+    eng = KnowledgeEngine(project or None)
+    results = eng.search(query, k=k)
+    if not results:
+        return render_panel("Search: 0 results", [f"No matches for: '{query}'"], status="search")
+    lines = [f'Query: "{query}"', f"Results: {len(results)}", ""]
+    for idx, r in enumerate(results):
+        meta = r["metadata"]
+        lines.append(f"{idx + 1}. [{meta.get('rel_path', 'unknown')}] (score: {r['score']:.4f})")
+        lines.append(f"   {r['document'][:150].replace(chr(10), ' ')}...")
+        lines.append("")
+    return render_panel("Knowledge Search Results", lines, status="search")
+
+@mcp.tool()
+def knowledge_session_start(project: str = "") -> str:
+    from oem_knowledge.engine import KnowledgeEngine
+    from oem_tui.panels import render_panel
+    eng = KnowledgeEngine(project or None)
+    res = eng.restore_session_state(project or None)
+    lines = ["Active Goals:"]
+    for g in res.get("active_goals", []):
+        lines.append(f"  🎯 {g}")
+    lines.append("")
+    lines.append("Blockers / Open Issues:")
+    for b in res.get("blockers", []):
+        lines.append(f"  ⚠️ {b}")
+    lines.append("")
+    lines.append("Recent Discoveries:")
+    for d in res.get("recent_discoveries", []):
+        lines.append(f"  💡 {d}")
+    lines.append("")
+    lines.append("Pre-fetched Memory Concepts:")
+    for f in res.get("recommended_files", []):
+        lines.append(f"  📄 {f}")
+    return render_panel("Session Start", lines, status="restore")
+
 
 @pytest.fixture
 def tmp_proj():

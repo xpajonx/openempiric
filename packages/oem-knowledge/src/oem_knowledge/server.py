@@ -16,9 +16,6 @@ def mount_tools(mcp: object) -> None:
 
     engine = KnowledgeEngine()
 
-    from .tools import todos
-    todos.register(mcp)
-
     @mcp.tool()
     def knowledge_init(project: str = "") -> str:
         """Bootstrap the .harness/ framework in a project directory. If project is empty, uses current directory."""
@@ -39,51 +36,7 @@ def mount_tools(mcp: object) -> None:
             lines.append(f"  📄 {f}")
         return render_panel("OpenEmpiric Initialized", lines, status="bootstrap")
 
-    @mcp.tool()
-    def knowledge_search(query: str, k: int = 3, project: str = "") -> str:
-        """Hybrid BM25 + dense semantic search across indexed wiki files in the project's .harness/ tree.
 
-        Args:
-            query: Search query
-            k: Number of results to return (default 3)
-            project: Project directory path. Defaults to current directory.
-        """
-        eng = KnowledgeEngine(project or None)
-        try:
-            results = eng.search(query, k=k)
-        except Exception as e:
-            return render_panel("Search Failure", [f"Error: {e}"], status="error")
-
-        if not results:
-            return render_panel(
-                "Search: 0 results", [f"No matches for: '{query}'"], status="search"
-            )
-
-        lines = [f'Query: "{query}"', f"Results: {len(results)}", ""]
-        for idx, r in enumerate(results):
-            meta = r["metadata"]
-            lines.append(
-                f"{idx + 1}. [{meta.get('rel_path', 'unknown')}] (score: {r['score']:.4f})"
-            )
-            lines.append(f"   {r['document'][:150].replace(chr(10), ' ')}...")
-            lines.append("")
-        return render_panel("Knowledge Search Results", lines, status="search")
-
-    @mcp.tool()
-    def knowledge_stats(project: str = "") -> str:
-        """Show .harness/ knowledge statistics: chunk count, vector DB size, harness path."""
-        eng = KnowledgeEngine(project or None)
-        try:
-            s = eng.stats()
-        except Exception as e:
-            return render_panel("Stats Failure", [f"Error: {e}"], status="error")
-
-        lines = [
-            f"Total Vector Chunks:  {s['total_chunks']}",
-            f"Vector DB Size:       {s['db_size_mb']:.2f} MB",
-            f"OEM Path:             {s['harness_path']}",
-        ]
-        return render_panel("Knowledge Stats", lines, status="stats")
 
     @mcp.tool()
     def knowledge_index(force: bool = False, project: str = "") -> str:
@@ -111,45 +64,7 @@ def mount_tools(mcp: object) -> None:
         ]
         return render_panel("Knowledge Index", lines, status="index")
 
-    @mcp.tool()
-    def knowledge_session_start(project: str = "") -> str:
-        """Read the project's .harness/ state files and return pre-injection context for the session.
 
-        Args:
-            project: Project directory path. Defaults to current directory.
-        """
-        eng = KnowledgeEngine(project or None)
-        try:
-            res = eng.restore_session_state(project or None)
-        except Exception as e:
-            return render_panel(
-                "Session Start Failure", [f"Error: {e}"], status="error"
-            )
-
-        if res.get("status") == "error":
-            return render_panel(
-                "Session Start Error",
-                [res.get("message", "Unknown error")],
-                status="error",
-            )
-
-        lines = ["Active Goals:"]
-        for g in res.get("active_goals", []):
-            lines.append(f"  🎯 {g}")
-        lines.append("")
-        lines.append("Blockers / Open Issues:")
-        for b in res.get("blockers", []):
-            lines.append(f"  ⚠️ {b}")
-        lines.append("")
-        lines.append("Recent Discoveries:")
-        for d in res.get("recent_discoveries", []):
-            lines.append(f"  💡 {d}")
-        lines.append("")
-        lines.append("Pre-fetched Memory Concepts:")
-        for f in res.get("recommended_files", []):
-            lines.append(f"  📄 {f}")
-
-        return render_panel("Session Start", lines, status="restore")
 
     @mcp.tool()
     def knowledge_reflect(
@@ -353,39 +268,7 @@ def mount_tools(mcp: object) -> None:
         ]
         return render_panel("Knowledge Event Detail", lines, status="ok")
 
-    @mcp.tool()
-    def knowledge_explain_concept(project: str = "", concept_id: str = "") -> str:
-        """Explain a concept and its evolution based on accumulated evidence.
 
-        Args:
-            project: Project directory path. Defaults to current directory.
-            concept_id: The concept UUID
-        """
-        eng = KnowledgeEngine(project or None)
-        try:
-            res = eng.explain_concept(project or None, concept_id)
-        except Exception as e:
-            return render_panel("Explain Failure", [f"Error: {e}"], status="error")
-
-        if res.get("status") == "error":
-            return render_panel(
-                "Concept Not Found", [res.get("message", "")], status="error"
-            )
-
-        cdata = res["explanation"]["concept"]
-        lines = [
-            f"Concept: {cdata.get('canonical_name', '').title()} ({cdata.get('concept_id', '')})",
-            f"Status: {cdata.get('status', '').upper()}",
-            f"Confidence: {cdata.get('confidence', '')}/5",
-            f"Total Events: {res['explanation'].get('total_events', 0)}",
-            f"Aliases: {', '.join(cdata.get('aliases', []))}",
-            "",
-            "Recent Evidence:",
-        ]
-        for ev in res["explanation"].get("recent_evidence", []):
-            lines.append(f"  - {ev}")
-
-        return render_panel("Concept Explanation", lines, status="ok")
 
     @mcp.tool()
     def knowledge_merge_concepts(
@@ -411,69 +294,7 @@ def mount_tools(mcp: object) -> None:
             "Concepts Merged", [res.get("message", "")], status="organize"
         )
 
-    @mcp.tool()
-    def knowledge_graph_query(
-        project: str = "", concept_id: str = "", direction: str = "both"
-    ) -> str:
-        """Query semantic relationships for a concept.
 
-        Args:
-            project: Project directory path. Defaults to current directory.
-            concept_id: Target concept ID.
-            direction: Query direction: incoming, outgoing, or both.
-        """
-        eng = KnowledgeEngine(project or None)
-        try:
-            registry = eng._load_registry(project or None)
-        except Exception as e:
-            return render_panel("Query Failure", [f"Error: {e}"], status="error")
-
-        if concept_id not in registry:
-            return render_panel(
-                "Query Error", [f"Concept {concept_id} not found."], status="error"
-            )
-
-        cdata = registry[concept_id]
-        lines = [
-            f"Concept: {cdata.get('canonical_name', '').title()} ({concept_id})",
-            "",
-        ]
-
-        if direction in ("outgoing", "both"):
-            lines.append("Outgoing Relationships:")
-            outgoing = cdata.get("relationships", [])
-            for rel in outgoing:
-                target_id = rel.get("target")
-                t_name = (
-                    registry.get(target_id, {})
-                    .get("canonical_name", target_id)
-                    .replace("-", " ")
-                    .title()
-                )
-                r_type = rel.get("type", "relates_to").replace("_", " ").title()
-                lines.append(f"  - [{r_type}] -> {t_name} ({target_id})")
-            if not outgoing:
-                lines.append("  - None")
-            lines.append("")
-
-        if direction in ("incoming", "both"):
-            lines.append("Incoming Relationships:")
-            incoming_count = 0
-            for cid, data in registry.items():
-                if cid == concept_id:
-                    continue
-                for rel in data.get("relationships", []):
-                    if rel.get("target") == concept_id:
-                        t_name = (
-                            data.get("canonical_name", cid).replace("-", " ").title()
-                        )
-                        r_type = rel.get("type", "relates_to").replace("_", " ").title()
-                        lines.append(f"  - {t_name} ({cid}) -> [{r_type}]")
-                        incoming_count += 1
-            if incoming_count == 0:
-                lines.append("  - None")
-
-        return render_panel("Graph Query Results", lines, status="organize")
 
     @mcp.tool()
     def knowledge_lint(
