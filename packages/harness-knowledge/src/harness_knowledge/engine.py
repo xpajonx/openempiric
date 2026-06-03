@@ -753,6 +753,14 @@ class KnowledgeEngine:
             except Exception:
                 pass
 
+        global_concepts = []
+        try:
+            from .vault import GlobalVault
+            vault = GlobalVault()
+            global_concepts = vault.get_global_context()
+        except Exception:
+            pass
+
         return {
             "status": "success",
             "active_goals": active_goals[:5],
@@ -760,6 +768,7 @@ class KnowledgeEngine:
             "recent_discoveries": discoveries[:5],
             "recommended_files": rec_files,
             "query_context": keywords[:60],
+            "global_concepts": global_concepts,
         }
 
     def _load_registry(self, project: str | None = None) -> dict:
@@ -809,6 +818,64 @@ class KnowledgeEngine:
         with FileLock(lock_path):
             sfs.append_text(p, event.model_dump_json() + "\n")
 
+    def _write_revision_log(self, file_path: Path, new_content: str, project: str | None = None):
+        """Append a revision entry to .oem/wiki/.history.jsonl."""
+        sfs = self._sfs(project)
+        history_file = self._concepts_dir(project) / ".history.jsonl"
+        
+        old_content = ""
+        if sfs.exists(file_path):
+            try:
+                old_content = sfs.read_text(file_path)
+            except Exception:
+                pass
+                
+        diff_str = ""
+        if old_content:
+            diff_lines = list(difflib.unified_diff(
+                old_content.splitlines(),
+                new_content.splitlines(),
+                fromfile="old_" + file_path.name,
+                tofile="new_" + file_path.name,
+                lineterm=""
+            ))
+            diff_str = "\n".join(diff_lines)
+            
+        concept_id = file_path.stem
+        m = re.search(r"concept_id:\s*([^\n\r]+)", new_content)
+        if m:
+            concept_id = m.group(1).strip().strip("\"'")
+            
+        entry = {
+            "concept_id": concept_id,
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "file_name": file_path.name,
+            "diff": diff_str,
+            "content": new_content
+        }
+        
+        try:
+            sfs.append_text(history_file, json.dumps(entry) + "\n")
+        except Exception:
+            pass
+
+    def get_concept_history(self, concept_id: str, project: str | None = None) -> list[dict]:
+        """Read all revision log entries for a given concept_id."""
+        sfs = self._sfs(project)
+        history_file = self._concepts_dir(project) / ".history.jsonl"
+        history = []
+        if sfs.exists(history_file):
+            try:
+                for line in sfs.read_text(history_file).strip().splitlines():
+                    if not line.strip():
+                        continue
+                    entry = json.loads(line)
+                    if entry.get("concept_id") == concept_id:
+                        history.append(entry)
+            except Exception:
+                pass
+        return history
+
     def _safe_write_concept_file(
         self, file_path: Path, content: str, project: str | None = None
     ) -> bool:
@@ -824,6 +891,7 @@ class KnowledgeEngine:
                 f"Security Abort: Path traversal attempted -> {file_path}"
             )
 
+        self._write_revision_log(file_path, content, project)
         sfs = self._sfs(project)
         return sfs.write_text(file_path, content)
 
@@ -1405,6 +1473,15 @@ aliases: {json.dumps(cdata.get("aliases", []))}
         idx_res = {"new": 0, "updated": 0, "scanned": 0, "unchanged": 0, "failed": 0}
         try:
             idx_res = self.index_all()
+        except Exception:
+            pass
+
+        try:
+            from .vault import GlobalVault
+            vault = GlobalVault()
+            local_reg = self._load_registry(project)
+            concepts_dir = self._concepts_dir(project)
+            vault.sync_from_registry(local_reg, concepts_dir)
         except Exception:
             pass
 

@@ -93,7 +93,20 @@ def main():
     explain_parser = sub.add_parser("explain")
     explain_parser.add_argument("type", choices=["concept", "event"])
     explain_parser.add_argument("id", type=str)
+    explain_parser.add_argument("--history", action="store_true", help="Show revision history")
     explain_parser.add_argument("--project", type=str, default="")
+
+    # vault
+    vault_parser = sub.add_parser("vault")
+    vault_parser.add_argument("action", choices=["sync"])
+    vault_parser.add_argument("--project", type=str, default="")
+
+    # merge
+    merge_parser = sub.add_parser("merge")
+    merge_parser.add_argument("primary_id", type=str)
+    merge_parser.add_argument("secondary_id", type=str)
+    merge_parser.add_argument("--auto", action="store_true", help="Automatically merge")
+    merge_parser.add_argument("--project", type=str, default="")
 
     # lint
     lint_parser = sub.add_parser("lint")
@@ -161,6 +174,7 @@ def main():
             f"Goals: {len(res.get('active_goals', []))}",
             f"Blockers: {len(res.get('blockers', []))}",
             f"Files: {len(res.get('recommended_files', []))}",
+            f"Global Concepts: {len(res.get('global_concepts', []))}",
         ]
         print(render_panel("Session Start", lines, status="restore"))
 
@@ -227,23 +241,37 @@ def main():
 
     elif args.command == "explain":
         if args.type == "concept":
-            res = eng.explain_concept(args.project or None, args.id)
-            if res.get("status") == "error":
-                print(render_panel("Concept Not Found", [res.get("message", "")], status="error"))
+            if hasattr(args, "history") and args.history:
+                history = eng.get_concept_history(args.id, args.project or None)
+                lines = [f"Revision History for Concept: {args.id}", ""]
+                for entry in history:
+                    lines.append(f"📅 [{entry.get('timestamp')}] - File: {entry.get('file_name')}")
+                    if entry.get("diff"):
+                        lines.append("Diff:")
+                        for diff_line in entry.get("diff").splitlines():
+                            lines.append(f"  {diff_line}")
+                    lines.append("")
+                if not history:
+                    lines.append("No revision history found.")
+                print(render_panel("Concept History", lines, status="ok"))
             else:
-                cdata = res["explanation"]["concept"]
-                lines = [
-                    f"Concept: {cdata.get('canonical_name', '').title()} ({cdata.get('concept_id', '')})",
-                    f"Status: {cdata.get('status', '').upper()}",
-                    f"Confidence: {cdata.get('confidence', '')}/5",
-                    f"Total Events: {res['explanation'].get('total_events', 0)}",
-                    f"Aliases: {', '.join(cdata.get('aliases', []))}",
-                    "",
-                    "Recent Evidence:",
-                ]
-                for ev in res["explanation"].get("recent_evidence", []):
-                    lines.append(f"  - {ev}")
-                print(render_panel("Concept Explanation", lines, status="ok"))
+                res = eng.explain_concept(args.project or None, args.id)
+                if res.get("status") == "error":
+                    print(render_panel("Concept Not Found", [res.get("message", "")], status="error"))
+                else:
+                    cdata = res["explanation"]["concept"]
+                    lines = [
+                        f"Concept: {cdata.get('canonical_name', '').title()} ({cdata.get('concept_id', '')})",
+                        f"Status: {cdata.get('status', '').upper()}",
+                        f"Confidence: {cdata.get('confidence', '')}/5",
+                        f"Total Events: {res['explanation'].get('total_events', 0)}",
+                        f"Aliases: {', '.join(cdata.get('aliases', []))}",
+                        "",
+                        "Recent Evidence:",
+                    ]
+                    for ev in res["explanation"].get("recent_evidence", []):
+                        lines.append(f"  - {ev}")
+                    print(render_panel("Concept Explanation", lines, status="ok"))
         else:
             try:
                 ev = eng.get_event(args.project or None, args.id)
@@ -295,6 +323,25 @@ def main():
                     status="error" if res.get("broken_links") else "ok",
                 )
             )
+
+    elif args.command == "vault":
+        if args.action == "sync":
+            try:
+                from harness_knowledge.vault import GlobalVault
+                vault = GlobalVault()
+                local_reg = eng._load_registry(args.project or None)
+                concepts_dir = eng._concepts_dir(args.project or None)
+                vault.sync_from_registry(local_reg, concepts_dir)
+                print(render_panel("Vault Sync", ["Global vault synchronized successfully."], status="ok"))
+            except Exception as e:
+                print(render_panel("Vault Sync Failure", [f"Error: {e}"], status="error"))
+
+    elif args.command == "merge":
+        res = eng.merge_concepts(args.project or None, args.primary_id, args.secondary_id)
+        if res.get("status") == "error":
+            print(render_panel("Merge Failure", [res.get("message", "")], status="error"))
+        else:
+            print(render_panel("Concepts Merged", [res.get("message", "")], status="ok"))
 
     elif args.command == "run":
         run_agent(args.agent, project_dir)
