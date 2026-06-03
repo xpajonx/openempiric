@@ -20,7 +20,6 @@ def tmp_proj():
 
 @pytest.fixture
 def mock_home(tmp_proj, monkeypatch):
-    # Mock Path.home() to return a temporary directory instead of the actual user home
     fake_home = Path(tmp_proj) / "fake_home"
     fake_home.mkdir()
     monkeypatch.setattr(Path, "home", lambda: fake_home)
@@ -42,12 +41,11 @@ def test_oem_runtime_context_injection(tmp_proj, mock_home):
     }
     eng._save_registry(registry, tmp_proj)
 
-    # Write a wiki markdown file to verify description extraction
     concepts_dir = Path(tmp_proj) / HARNESS_DIR / "wiki"
     wiki_file = concepts_dir / "concept_001.md"
     wiki_file.write_text("---\nstatus: canonical\n---\n# Database Guidelines\nUse PostgreSQL for storage.", encoding="utf-8")
 
-    # 2. Seed events (decisions and failures)
+    # 2. Seed events
     eng._append_event({
         "event_id": "dec-1",
         "timestamp": "2026-06-03T12:00:00Z",
@@ -80,51 +78,33 @@ def test_oem_runtime_context_injection(tmp_proj, mock_home):
     handoff_file = Path(tmp_proj) / HARNESS_DIR / "session-handoff.md"
     handoff_file.write_text("# Session Handoff\n\n## Next Action\nImplement security keys.\n", encoding="utf-8")
 
-    # 4. Create dummy opencode.jsonc in fake home
-    opencode_dir = mock_home / ".config" / "opencode"
-    opencode_dir.mkdir(parents=True)
-    config_file = opencode_dir / "opencode.jsonc"
-    config_file.write_text('// some comment\n{\n  "instructions": []\n}', encoding="utf-8")
-
-    # Create dummy plugins folder for temp inst file validation
-    plugins_dir = opencode_dir / "plugins"
+    # 4. Create dummy plugins folder in fake home
+    plugins_dir = mock_home / ".config" / "opencode" / "plugins"
     plugins_dir.mkdir(parents=True)
 
-    # Mock subprocess.run so we don't start a real process
+    # 5. Mock subprocess.run and capture context file state
+    from harness_knowledge.cli import _OEM_RUNTIME_CONTEXT_PATH, _OEM_TEMP_INSTRUCTIONS
+    context_file = _OEM_RUNTIME_CONTEXT_PATH
+
     with patch("subprocess.run") as mock_run:
-        # We need to capture the state of opencode.jsonc during subprocess.run
-        def capture_config(*args, **kwargs):
-            assert config_file.exists()
-            config_data = json.loads(config_file.read_text(encoding="utf-8"))
-            assert "openempiric" in config_data["mcp"]
-            assert "env" in config_data["mcp"]["openempiric"]
-            assert "OEM_RUNTIME_CONTEXT" in config_data["mcp"]["openempiric"]["env"]
-            
-            oem = json.loads(config_data["mcp"]["openempiric"]["env"]["OEM_RUNTIME_CONTEXT"])
-            # Verify active concepts
+        def capture_context(*args, **kwargs):
+            assert context_file.exists()
+            with open(context_file) as f:
+                oem = json.load(f)
+
             assert len(oem["active_concepts"]) == 1
             assert oem["active_concepts"][0]["id"] == "concept_001"
             assert oem["active_concepts"][0]["name"] == "database-guidelines"
             assert oem["active_concepts"][0]["description"] == "Use PostgreSQL for storage."
 
-            # Verify decisions & failures
             assert oem["active_decisions"] == ["Use PostgreSQL for storage."]
             assert oem["relevant_failures"] == ["Do not set timeout too low."]
-
-            # Verify open questions
             assert oem["open_questions"] == ["Implement security keys."]
 
-        mock_run.side_effect = capture_config
-
-        # Run the agent
-        run_agent("opencode", tmp_proj, eng)
-
-        # Assert subprocess was called
+        mock_run.side_effect = capture_context
+        run_agent("opencode", eng)
         mock_run.assert_called_once()
 
-    # 5. Verify cleanup
-    # Config file restored to original comments
-    assert config_file.read_text(encoding="utf-8") == '// some comment\n{\n  "instructions": []\n}'
-    # Transient instructions file deleted
-    temp_inst = plugins_dir / ".openempiric_temp_instructions.md"
-    assert not temp_inst.exists()
+    # 6. Verify cleanup – transient files should be removed
+    assert not context_file.exists()
+    assert not _OEM_TEMP_INSTRUCTIONS.exists()
