@@ -53,9 +53,14 @@ class DenseSearch:
 
     def _lazy_model(self):
         if self._model is None:
+            import sys
             from fastembed import TextEmbedding
-
-            self._model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
+            try:
+                self._model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5", local_files_only=True)
+            except Exception:
+                print("\n[OEM] Embedding model 'BAAI/bge-small-en-v1.5' not found in cache.", file=sys.stderr)
+                print("[OEM] Downloading model (~67 MB)...", file=sys.stderr)
+                self._model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5", local_files_only=False)
         return self._model
 
     def embed(self, texts: list[str]) -> list[list[float]]:

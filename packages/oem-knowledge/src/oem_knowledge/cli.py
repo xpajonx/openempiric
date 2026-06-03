@@ -865,6 +865,14 @@ def main():
                 lines.append(f"✗ Events schema check failed: {e}")
                 status = "error"
 
+            # 6. Embedding model cache check
+            try:
+                from fastembed import TextEmbedding
+                TextEmbedding(model_name="BAAI/bge-small-en-v1.5", local_files_only=True)
+                lines.append("✓ Embedding model (BAAI/bge-small-en-v1.5) is cached locally")
+            except Exception:
+                lines.append("⚠ Embedding model (BAAI/bge-small-en-v1.5) is not cached (will download on first run)")
+
             print(render_panel("OEM Environment Check", lines, status=status))
             if status == "error":
                 sys.exit(1)
