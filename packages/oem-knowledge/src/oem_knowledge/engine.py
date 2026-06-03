@@ -19,6 +19,7 @@ from oem_knowledge.services.search import SearchService
 from oem_knowledge.services.materialization import MaterializationService
 from oem_knowledge.services.reflection import ReflectionService
 from oem_knowledge.services.state import StateService
+from oem_knowledge.services.event_migration import EventMigrator
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -213,6 +214,7 @@ class KnowledgeEngine:
         self.materialization_service = MaterializationService(self)
         self.reflection_service = ReflectionService(self)
         self.state_service = StateService(self)
+        self.event_migrator = EventMigrator(self)
 
     def _sfs(self, project: str | Path | None = None) -> SecureFileSystem:
         p = Path(project or self.project_path or ".").resolve()
@@ -340,7 +342,8 @@ class KnowledgeEngine:
                 for line in sfs.read_text(p).splitlines():
                     line = line.strip()
                     if line:
-                        events.append(json.loads(line))
+                        ev_dict = json.loads(line)
+                        events.append(self.event_migrator.upcast(ev_dict))
             except Exception:
                 return []
             return events
@@ -434,6 +437,9 @@ class KnowledgeEngine:
 
     def merge_concepts(self, project: str | None = None, primary_id: str = "", secondary_id: str = "") -> dict:
         return self.state_service.merge_concepts(project, primary_id, secondary_id)
+
+    def migrate_events(self, project: str | None = None) -> dict:
+        return self.event_migrator.migrate_file(project)
 
     # --- Orchestrator Level Methods kept on engine ---
 

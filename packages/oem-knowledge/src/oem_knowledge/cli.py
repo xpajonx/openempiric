@@ -809,6 +809,21 @@ def main():
             else:
                 lines.append("✓ No nested virtualenvs detected")
 
+            # 5. Events log schema version check
+            try:
+                schema_status = eng.event_migrator.get_schema_status(project)
+                if schema_status["status"] == "up_to_date":
+                    lines.append(f"✓ Events schema up to date ({schema_status['message']})")
+                elif schema_status["status"] == "outdated":
+                    lines.append(f"✗ Events schema outdated: {schema_status['message']}")
+                    status = "error"
+                else:
+                    lines.append(f"✗ Events schema check: {schema_status.get('message')}")
+                    status = "error"
+            except Exception as e:
+                lines.append(f"✗ Events schema check failed: {e}")
+                status = "error"
+
             print(render_panel("OEM Environment Check", lines, status=status))
             if status == "error":
                 sys.exit(1)

@@ -115,36 +115,92 @@ class StateService:
                 "merged": [],
             }
 
-        contents = {}
-        for f in md_files:
+        registry = self._load_registry(project)
+        if not registry:
+            return {
+                "status": "success",
+                "message": "Empty registry. No consolidation needed.",
+                "merged": [],
+            }
+
+        from oem_knowledge.identity_resolver import SemanticIdentityResolver
+        resolver = SemanticIdentityResolver(self.engine)
+        duplicates = resolver.scan_duplicates(project, threshold=0.82)
+
+        if not duplicates:
+            return {
+                "status": "success",
+                "message": "No duplicates found.",
+                "merged": [],
+            }
+
+        import difflib
+        status_ranks = {"canonical": 5, "validated": 4, "emerging": 3, "candidate": 2, "deprecated": 1}
+
+        def get_quality_score(cid: str, data: dict) -> tuple[int, int, float]:
+            status_val = status_ranks.get(data.get("status", "candidate"), 2)
+            ev_count = data.get("evidence_count", 0)
+            from oem_knowledge.health import calculate_concept_health
             try:
-                contents[f] = sfs.read_text(f)
+                h_score = calculate_concept_health(data)
             except Exception:
-                pass
+                h_score = 0.0
+            return (status_val, ev_count, h_score)
 
         merged = []
         already_merged = set()
-        for i in range(len(md_files)):
-            f1 = md_files[i]
-            if f1 in already_merged or f1 not in contents:
-                continue
-            for j in range(i + 1, len(md_files)):
-                f2 = md_files[j]
-                if f2 in already_merged or f2 not in contents:
-                    continue
 
-                w1 = set(re.findall(r"\w+", f1.stem.lower()))
-                w2 = set(re.findall(r"\w+", f2.stem.lower()))
-                common = w1 & w2
-                if common and len(common) >= min(len(w1), len(w2)):
-                    if len(f1.name) > len(f2.name):
-                        f1, f2 = f2, f1
-                    merged_content = f"{contents[f1].strip()}\n\n## Consolidated: {f2.stem.replace('_', ' ').title()}\n{contents[f2].strip()}"
-                    sfs.write_text(f1, merged_content, force_allow_truncation=True)
-                    sfs.unlink(f2)
-                    already_merged.add(f2)
-                    contents[f1] = merged_content
-                    merged.append(f"Merged {f2.name} -> {f1.name}")
+        for d in duplicates:
+            cid_a = d["concept_a"]
+            cid_b = d["concept_b"]
+
+            if cid_a in already_merged or cid_b in already_merged:
+                continue
+
+            f1_path = concepts_dir / f"{cid_a}.md"
+            f2_path = concepts_dir / f"{cid_b}.md"
+            if not f1_path.exists() or not f2_path.exists():
+                continue
+
+            # Second validation step to reduce false positives
+            name_a = registry[cid_a].get("canonical_name", "").lower()
+            name_b = registry[cid_b].get("canonical_name", "").lower()
+            name_similarity = difflib.SequenceMatcher(None, name_a, name_b).ratio()
+
+            words_a = set(re.findall(r"\w+", name_a))
+            words_b = set(re.findall(r"\w+", name_b))
+            has_overlap = bool(words_a & words_b)
+
+            if name_similarity < 0.4 and not has_overlap:
+                continue
+
+            # Determine primary vs secondary based on concept quality
+            score_a = get_quality_score(cid_a, registry[cid_a])
+            score_b = get_quality_score(cid_b, registry[cid_b])
+
+            if score_a >= score_b:
+                cid_primary, cid_secondary = cid_a, cid_b
+                f_primary, f_secondary = f1_path, f2_path
+            else:
+                cid_primary, cid_secondary = cid_b, cid_a
+                f_primary, f_secondary = f2_path, f1_path
+
+            try:
+                content_primary = sfs.read_text(f_primary)
+                content_secondary = sfs.read_text(f_secondary)
+            except Exception:
+                continue
+
+            # Merge markdown contents
+            secondary_name = registry[cid_secondary].get("canonical_name", cid_secondary).replace("-", " ").title()
+            merged_content = f"{content_primary.strip()}\n\n## Consolidated: {secondary_name}\n{content_secondary.strip()}"
+            sfs.write_text(f_primary, merged_content, force_allow_truncation=True)
+
+            # Delegate registry merge and secondary deletion
+            res = self.merge_concepts(project, cid_primary, cid_secondary)
+            if res.get("status") == "success":
+                already_merged.add(cid_secondary)
+                merged.append(f"Merged {cid_secondary} -> {cid_primary}")
 
         if merged:
             self.engine.index_all(force=True)
