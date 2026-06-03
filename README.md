@@ -27,19 +27,17 @@ Most AI memory systems focus on *remembering*. We believe the harder and more im
 
 ## Core Capabilities
 
-`openempiric` is first and foremost a **knowledge accumulation system**. To enrich and accelerate this knowledge pipeline, it includes built-in orchestration tools to capture cleaner, structured telemetry:
+`openempiric` is first and foremost a **knowledge accumulation system** and **agent runtime** (the `oem` CLI):
 
 ### 🧠 Knowledge Layer
 - 🕸️ **Knowledge Graph** — Hybrid vector + BM25 search over your project's historical knowledge.
-- 📂 **Isolated Contexts** — Each project keeps its own `.harness/` folder containing its private vector DB and concept registry.
+- 📂 **Isolated Contexts** — Each project keeps its own `.oem/` folder containing its private vector DB, sessions, and concept registry.
 - 🛡️ **Safety Guards** — Enforces path traversal sandboxing and a >50% truncation prevention guard during writes.
+- 📋 **Todo Tracking** — Maintain persistent task lists directly alongside validated concept growth.
 
-### ⚡ Orchestrator Boosters
-*These tools exist purely to feed, structure, and improve the knowledge base:*
-- 🤖 **Subagent Orchestration** — Spawn child OpenCode sessions and execute parallel tasks to collect multi-perspective collaboration telemetry.
-- 🔄 **Session Lifecycle Hooks** — Create, prompt, list, export, and fork sessions to capture sequential discovery pathways.
-- 📋 **Plan Mode** — Decompose complex prompts into sub-tasks, yielding well-demarcated execution context for cleaner knowledge event generation.
-- 📝 **Todo Tracking** — Maintain persistent task lists to track concrete objectives alongside validated concept growth.
+### ⚡ Agent Runtime (`oem`)
+- 🤖 **Agent Wrapping (`oem run`)** — Automatically injects openempiric plugin settings into your coding agent (e.g., `opencode`) on the fly, and restores original files on exit.
+- 🔄 **Session Lifecycle Automation** — Spawns agent processes with pre-injection context loaded from past sessions, committing and reflecting on learnings automatically upon exit.
 
 ---
 
@@ -63,38 +61,59 @@ uv sync
    mkdir -p ~/.config/opencode/plugins
    # Recommended (symlink):
    ln -s $(pwd)/plugins/openempiric.ts ~/.config/opencode/plugins/openempiric.ts
-   
-   # Alternative (copy):
-   # cp plugins/openempiric.ts ~/.config/opencode/plugins/
    ```
 
 OpenCode automatically loads `.ts` plugins from the plugins directory. The plugin dynamically resolves the repository location (via symlink, environment variable `OPENEMPIRIC_DIR`, or home directory candidates) to register the `openempiric` MCP server and load the required instructions!
 
 ---
 
+## OEM CLI Usage
+
+The package exposes the unified `oem` command-line utility for managing the project memory:
+
+```bash
+# Initialize openempiric in a project
+oem init
+
+# Run an agent (e.g. opencode) with dynamic config injection & lifecycle commitment
+oem run opencode
+
+# Manually start/commit session states
+oem session-start
+oem session-end --chat "conversation text"
+
+# Lint and auto-heal wiki links/orphans
+oem lint --fix
+
+# Query stats and status
+oem status
+```
+
+---
+
 ## The Knowledge Pipeline
 
-When you commit a session (`knowledge_session_commit`), the engine strictly executes the knowledge formation pipeline:
+When you commit a session, the engine strictly executes the knowledge formation pipeline:
 
 ```text
-Human + Agent Collaboration
+Human + Agent Collaboration (via oem run)
             ↓
     Session Reflection
             ↓
-     Knowledge Events
+    Knowledge Events
             ↓
        Event Store  (Immutable log: events.jsonl)
             ↓
-     Concept Registry  (Candidate → Emerging → Validated → Canonical)
+      Concept Registry  (Candidate → Emerging → Validated → Canonical)
             ↓
-      Knowledge Wiki  (Materializes wiki files for validated concepts)
+       Knowledge Wiki  (Materializes markdown files in .oem/wiki/)
             ↓
-     Knowledge Graph  (Reciprocal link mapping)
+      Knowledge Graph  (Reciprocal link mapping)
             ↓
-  Workspace Intelligence  (Semantic + BM25 Search)
+   Workspace Intelligence  (Semantic + BM25 Search)
 ```
 
-All data lives securely in `.harness/` at the project root.
+All data lives securely in `.oem/` at the project root. Any legacy `.harness/` directories are migrated automatically.
 
 ---
 
@@ -110,38 +129,21 @@ Today's AI agents suffer from a fundamental limitation: **context window boundar
 
 ---
 
-## Tools Listing (34 total)
+## Mounted MCP Tools
 
-### Orchestrator (`harness_*`)
+### Todo Tools (`harness_todo_*`)
 
 | Tool | Purpose |
 |---|---|
-| `harness_run_opencode` | Run a prompt in a child opencode session |
-| `harness_run_tasks` | Run multiple independent tasks sequentially/parallel |
-| `harness_session_run_json` | Run a session and get structured output (tokens, calls, cost) |
-| `harness_session_create` | Create a new session |
-| `harness_session_prompt` | Continue an existing session |
-| `harness_session_list` | List all sessions |
-| `harness_session_export` | Export session data as JSON |
-| `harness_session_fork` | Fork a session into a new one |
-| `harness_db_query` | Read-only SQL on session database |
-| `harness_list_agents` | List configured agents |
-| `harness_list_projects` | List available project directories |
-| `harness_plan_begin` | Start a plan — decompose a prompt into sub-tasks |
-| `harness_plan_step` | Advance the plan by one step |
-| `harness_plan_finalize` | Add remaining tasks and generate summary |
-| `harness_plan_execute` | Execute all completed plan steps |
-| `harness_plan_status` | Get current plan state |
-| `harness_plan_abort` | Cancel a plan |
 | `harness_todo_write` | Write/replace the todo list |
 | `harness_todo_read` | Read the todo list |
-| `harness_todo_advance` | Advance to the next todo item |
+| `harness_todo_advance` | Advance/update a todo item status |
 
-### Knowledge (`knowledge_*`)
+### Knowledge Tools (`knowledge_*`)
 
 | Tool | Purpose |
 |---|---|
-| `knowledge_init` | Initialize `.harness/` for the current project |
+| `knowledge_init` | Initialize `.oem/` for the current project |
 | `knowledge_search` | Hybrid (BM25 + dense) search across project knowledge |
 | `knowledge_index` | Index files into the vector store |
 | `knowledge_stats` | Show knowledge storage statistics |
