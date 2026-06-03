@@ -2,9 +2,6 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from oem_knowledge.search import DenseSearch
-
-
 class ConceptEvolutionEngine:
     def __init__(self, engine):
         self.engine = engine
@@ -67,7 +64,7 @@ class ConceptEvolutionEngine:
 class ContradictionDetector:
     def __init__(self, engine):
         self.engine = engine
-        self.dense_search = DenseSearch()
+        self.dense_search = self.engine.search_service
 
         # Hardcoded architectural contradiction rule pairs (lowercased)
         self.conflict_rules = [

@@ -28,6 +28,17 @@ class SearchService:
     def collection(self):
         return self.engine.collection
 
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        return [list(e) for e in self.model.embed(texts)]
+
+    def cosine_similarity(self, a: list[float], b: list[float]) -> float:
+        dot = sum(x * y for x, y in zip(a, b))
+        norm_a = math.sqrt(sum(x * x for x in a))
+        norm_b = math.sqrt(sum(y * y for y in b))
+        if norm_a == 0 or norm_b == 0:
+            return 0.0
+        return dot / (norm_a * norm_b)
+
     def calculate_sha256(self, filepath: Path) -> str:
         return self.engine.calculate_sha256(filepath)
 

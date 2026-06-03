@@ -16,7 +16,9 @@ oem = "oem_knowledge.cli:main"
 
 [tool.uv]
 package = true
-dev-dependencies = ["pytest>=8"]
+
+[dependency-groups]
+dev = ["pytest>=8"]
 
 [tool.uv.sources]
 oem-tui = { workspace = true }

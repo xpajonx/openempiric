@@ -2,12 +2,9 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
-from oem_knowledge.search import DenseSearch
-
 class SemanticIdentityResolver:
     def __init__(self, engine):
         self.engine = engine
-        self.dense_search = DenseSearch()
 
     def scan_duplicates(self, project: str | None = None, threshold: float = 0.82) -> list[dict]:
         """Scan registry concepts for semantic duplicates."""
@@ -25,12 +22,12 @@ class SemanticIdentityResolver:
         if not texts:
             return []
 
-        embeddings = self.dense_search.embed(texts)
+        embeddings = self.engine.search_service.embed(texts)
         candidates = []
 
         for i in range(len(cids)):
             for j in range(i + 1, len(cids)):
-                sim = self.dense_search.cosine_similarity(embeddings[i], embeddings[j])
+                sim = self.engine.search_service.cosine_similarity(embeddings[i], embeddings[j])
                 if sim >= threshold:
                     candidates.append({
                         "concept_a": cids[i],
