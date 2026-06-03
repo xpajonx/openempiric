@@ -34,7 +34,7 @@ jobs:
         run: uv run python -m compileall -q -f packages/
 
       - name: Run OEM Custom Linter
-        run: uv run python -m oem_knowledge.cli lint
+        run: uv run oem lint
 
       - name: Run Tests
         run: uv run pytest
