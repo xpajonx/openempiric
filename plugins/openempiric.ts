@@ -59,7 +59,7 @@ export const OpenempiricPlugin: Plugin = async ({ $ }) => {
           "oem_knowledge.server"
         ],
         enabled: true,
-        timeout: 60000,
+        timeout: 300000,
         ...existingMcp,
         env: {
           ...(existingMcp.env || {})
