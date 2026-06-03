@@ -1,6 +1,7 @@
 from __future__ import annotations
 import inspect
 import sys
+import types
 from pathlib import Path
 from typing import get_args, get_origin, Union
 
@@ -19,7 +20,7 @@ def map_type_to_ts(py_type) -> str:
         return f"{map_type_to_ts(args[0])}[]"
     elif origin is dict:
         return f"Record<{map_type_to_ts(args[0])}, {map_type_to_ts(args[1])}>"
-    elif origin is Union or origin is getattr(Union, "__origin__", None): # support optional
+    elif origin is Union or (hasattr(types, "UnionType") and origin is types.UnionType): # support optional
         non_none_args = [a for a in args if a is not type(None)]
         ts_types = [map_type_to_ts(a) for a in non_none_args]
         joined = " | ".join(ts_types)
@@ -68,7 +69,7 @@ def generate_ts() -> str:
             origin = get_origin(field.annotation)
             args = get_args(field.annotation)
             is_optional = False
-            if origin is Union and type(None) in args:
+            if (origin is Union or (hasattr(types, "UnionType") and origin is types.UnionType)) and type(None) in args:
                 is_optional = True
             
             suffix = "?" if is_optional else ""
