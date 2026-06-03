@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-from harness_knowledge.health import calculate_concept_health
+from oem_knowledge.health import calculate_concept_health
 
 
 def test_calculate_concept_health():

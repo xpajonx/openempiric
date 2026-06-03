@@ -8,8 +8,8 @@ from pathlib import Path
 import pytest
 
 from fastmcp import FastMCP
-from harness_knowledge.engine import KnowledgeEngine, HARNESS_DIR
-from harness_knowledge.server import mount_tools
+from oem_knowledge.engine import KnowledgeEngine, OEM_DIR
+from oem_knowledge.server import mount_tools
 
 mcp = FastMCP("openempiric")
 mount_tools(mcp)
@@ -36,10 +36,10 @@ class TestCriteria:
     def test_c1_knowledge_init_creates_harness(self, tmp_proj):
         """C2: knowledge_init creates a .oem/ tree."""
         result = _call("knowledge_init", {"project": tmp_proj})
-        assert (Path(tmp_proj) / HARNESS_DIR).is_dir()
-        assert (Path(tmp_proj) / HARNESS_DIR / "wiki").is_dir()
-        assert (Path(tmp_proj) / HARNESS_DIR / "state").is_dir()
-        assert "Harness Initialized" in result.content[0].text
+        assert (Path(tmp_proj) / OEM_DIR).is_dir()
+        assert (Path(tmp_proj) / OEM_DIR / "wiki").is_dir()
+        assert (Path(tmp_proj) / OEM_DIR / "state").is_dir()
+        assert "OpenEmpiric Initialized" in result.content[0].text
 
     def test_c2_knowledge_search_returns_results(self, tmp_proj):
         """C3: knowledge_search works (even with 0 results)."""
@@ -71,7 +71,7 @@ class TestCriteria:
         assert "Commit Complete" in text
 
         # Check session report was written
-        sessions_dir = Path(tmp_proj) / HARNESS_DIR / "sessions"
+        sessions_dir = Path(tmp_proj) / OEM_DIR / "sessions"
         assert sessions_dir.is_dir()
         assert len(list(sessions_dir.glob("*.md"))) >= 1
 
@@ -96,9 +96,9 @@ class TestCriteria:
         import json
         _call("knowledge_init", {"project": tmp_proj})
 
-        # harness_todo_write
+        # oem_todo_write
         result = _call(
-            "harness_todo_write",
+            "oem_todo_write",
             {
                 "items": json.dumps(
                     [
@@ -111,16 +111,16 @@ class TestCriteria:
         )
         assert "Todo list updated" in result.content[0].text
 
-        # harness_todo_read
-        result = _call("harness_todo_read", {"workdir": tmp_proj})
+        # oem_todo_read
+        result = _call("oem_todo_read", {"workdir": tmp_proj})
         assert "Todo list" in result.content[0].text
 
-        # harness_todo_advance
+        # oem_todo_advance
         todos = json.loads(
-            (Path(tmp_proj) / HARNESS_DIR / "state" / "todos.json").read_text()
+            (Path(tmp_proj) / OEM_DIR / "state" / "todos.json").read_text()
         )
         result = _call(
-            "harness_todo_advance",
+            "oem_todo_advance",
             {
                 "item_id": todos[0]["id"],
                 "status": "completed",
@@ -134,7 +134,7 @@ class TestCriteria:
         _call("knowledge_init", {"project": tmp_proj})
 
         # Write some state
-        handoff = Path(tmp_proj) / HARNESS_DIR / "session-handoff.md"
+        handoff = Path(tmp_proj) / OEM_DIR / "session-handoff.md"
         handoff.write_text(
             "# Session Handoff\n\n## Next Action\nComplete the auth module\n"
         )
@@ -151,7 +151,7 @@ class TestCriteria:
         import json
 
         _call(
-            "harness_todo_write",
+            "oem_todo_write",
             {
                 "items": json.dumps(
                     [
@@ -163,7 +163,7 @@ class TestCriteria:
         )
 
         # Verify file exists
-        todo_file = Path(tmp_proj) / HARNESS_DIR / "state" / "todos.json"
+        todo_file = Path(tmp_proj) / OEM_DIR / "state" / "todos.json"
         assert todo_file.exists()
         data = json.loads(todo_file.read_text())
         assert len(data) == 1
@@ -173,10 +173,10 @@ class TestCriteria:
         """Verify knowledge CLI parser structure and stats execution."""
         import sys
         from unittest.mock import patch
-        from harness_knowledge.cli import main
+        from oem_knowledge.cli import main
 
-        with patch.object(sys, "argv", ["harness-knowledge", "stats"]):
-            with patch("harness_knowledge.cli.KnowledgeEngine") as mock_engine:
+        with patch.object(sys, "argv", ["oem", "stats"]):
+            with patch("oem_knowledge.cli.KnowledgeEngine") as mock_engine:
                 mock_engine.return_value.stats.return_value = {
                     "total_chunks": 0,
                     "db_size_mb": 0.0,
@@ -191,7 +191,7 @@ class TestCriteria:
         """Verify that truncation guard blocks heavily truncated updates."""
         _call("knowledge_init", {"project": tmp_proj})
         eng = KnowledgeEngine(tmp_proj)
-        concepts_dir = Path(tmp_proj) / HARNESS_DIR / "wiki"
+        concepts_dir = Path(tmp_proj) / OEM_DIR / "wiki"
         concepts_dir.mkdir(parents=True, exist_ok=True)
         file_path = concepts_dir / "concept_001.md"
 
@@ -238,7 +238,7 @@ class TestCriteria:
         }
         eng._save_registry(registry, tmp_proj)
 
-        concepts_dir = Path(tmp_proj) / HARNESS_DIR / "wiki"
+        concepts_dir = Path(tmp_proj) / OEM_DIR / "wiki"
         concepts_dir.mkdir(parents=True, exist_ok=True)
 
         c1_content = """---
@@ -285,7 +285,7 @@ aliases: ["two"]
         """Verify linter detects broken links and orphans."""
         _call("knowledge_init", {"project": tmp_proj})
 
-        concepts_dir = Path(tmp_proj) / HARNESS_DIR / "wiki"
+        concepts_dir = Path(tmp_proj) / OEM_DIR / "wiki"
         concepts_dir.mkdir(parents=True, exist_ok=True)
 
         c1_content = """---
@@ -299,7 +299,7 @@ Broken: [[concept_999]]."""
         (concepts_dir / "concept_001.md").write_text(c1_content)
 
         import asyncio
-        from harness_knowledge.linter import run_lint
+        from oem_knowledge.linter import run_lint
 
         res = asyncio.run(run_lint(Path(tmp_proj)))
 
@@ -327,7 +327,7 @@ Broken: [[concept_999]]."""
         }
         eng._save_registry(registry, tmp_proj)
 
-        concepts_dir = Path(tmp_proj) / HARNESS_DIR / "wiki"
+        concepts_dir = Path(tmp_proj) / OEM_DIR / "wiki"
         concepts_dir.mkdir(parents=True, exist_ok=True)
 
         c1_content = """---
@@ -341,7 +341,7 @@ We discuss [[AI Safety]] here."""
         (concepts_dir / "concept_001.md").write_text(c1_content)
 
         import asyncio
-        from harness_knowledge.linter import run_lint
+        from oem_knowledge.linter import run_lint
 
         # First run without fix=True
         res = asyncio.run(run_lint(Path(tmp_proj), fix=False))
@@ -358,7 +358,7 @@ We discuss [[AI Safety]] here."""
 
     def test_sfs_bounds_check(self, tmp_proj):
         """Verify SFS enforces directory boundaries and truncation rules."""
-        from harness_knowledge.engine import SecureFileSystem
+        from oem_knowledge.engine import SecureFileSystem
 
         sfs = SecureFileSystem(Path(tmp_proj))
         outside = Path(tmp_proj).parent / "outside_test.txt"

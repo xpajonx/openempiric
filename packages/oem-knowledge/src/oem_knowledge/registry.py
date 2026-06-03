@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from harness_knowledge.models import ConceptData
-from harness_knowledge.engine import SecureFileSystem
+from oem_knowledge.models import ConceptData
+from oem_knowledge.engine import SecureFileSystem
 
 
 class ConceptRegistry:

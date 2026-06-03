@@ -7,7 +7,7 @@ from pathlib import Path
 import tempfile
 import shutil
 
-from harness_knowledge.cli import main
+from oem_knowledge.cli import main
 
 
 @pytest.fixture
@@ -69,9 +69,9 @@ def test_oem_session_end(tmp_proj):
 
 def test_oem_run(tmp_proj):
     """Verify that 'oem run' spawns the specified command writes context to file (not config)."""
-    from harness_knowledge.cli import _OEM_RUNTIME_CONTEXT_PATH, _OEM_TEMP_INSTRUCTIONS
+    from oem_knowledge.cli import _OEM_RUNTIME_CONTEXT_PATH, _OEM_TEMP_INSTRUCTIONS
 
-    with patch("harness_knowledge.cli.subprocess.run") as mock_run:
+    with patch("oem_knowledge.cli.subprocess.run") as mock_run:
         with patch.object(sys, "argv", ["oem", "run", "mock-agent", "--project", tmp_proj]):
             # Context file should not exist before run
             assert not _OEM_RUNTIME_CONTEXT_PATH.exists()

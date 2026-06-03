@@ -14,7 +14,7 @@ function resolveRepoDir(): string {
     const realFilePath = fs.realpathSync(currentFilePath)
     let dir = path.dirname(realFilePath)
     while (dir && dir !== path.parse(dir).root) {
-      if (fs.existsSync(path.join(dir, "pyproject.toml")) && fs.existsSync(path.join(dir, "packages", "harness-orchestrator"))) {
+      if (fs.existsSync(path.join(dir, "pyproject.toml")) && fs.existsSync(path.join(dir, "packages", "oem-knowledge"))) {
         return dir
       }
       dir = path.dirname(dir)
@@ -56,7 +56,7 @@ export const OpenempiricPlugin: Plugin = async ({ $ }) => {
           repoDir,
           "python",
           "-m",
-          "harness_knowledge.server"
+          "oem_knowledge.server"
         ],
         enabled: true,
         timeout: 60000,

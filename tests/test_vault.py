@@ -5,8 +5,8 @@ import shutil
 from pathlib import Path
 import pytest
 
-from harness_knowledge.vault import GlobalVault
-from harness_knowledge.engine import KnowledgeEngine, HARNESS_DIR
+from oem_knowledge.vault import GlobalVault
+from oem_knowledge.engine import KnowledgeEngine, OEM_DIR
 
 
 @pytest.fixture
@@ -64,7 +64,7 @@ def test_local_registry_sync(tmp_proj, tmp_vault_dir):
     }
     eng._save_registry(registry, tmp_proj)
     
-    concepts_dir = Path(tmp_proj) / HARNESS_DIR / "wiki"
+    concepts_dir = Path(tmp_proj) / OEM_DIR / "wiki"
     wiki_file = concepts_dir / "global_concept.md"
     wiki_file.write_text("# Shared Concept\nBody content.", encoding="utf-8")
     
@@ -87,7 +87,7 @@ def test_gated_vault_promotion(tmp_proj, tmp_vault_dir, monkeypatch):
 
     # Mock find_all_projects to return the current project directory twice to simulate two projects
     # mapping to the same concept (cross-project usage)
-    from harness_knowledge import engine
+    from oem_knowledge import engine
     monkeypatch.setattr(engine, "find_all_projects", lambda: [Path(tmp_proj), Path(tmp_proj)])
 
     registry = eng._load_registry(tmp_proj)
@@ -100,7 +100,7 @@ def test_gated_vault_promotion(tmp_proj, tmp_vault_dir, monkeypatch):
     }
     eng._save_registry(registry, tmp_proj)
 
-    concepts_dir = Path(tmp_proj) / HARNESS_DIR / "wiki"
+    concepts_dir = Path(tmp_proj) / OEM_DIR / "wiki"
     wiki_file = concepts_dir / "concept_001.md"
     wiki_file.write_text("---\nstatus: canonical\n---\n# Gated Concept\nSome details.", encoding="utf-8")
 

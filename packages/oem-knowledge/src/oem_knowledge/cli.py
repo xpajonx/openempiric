@@ -11,13 +11,13 @@ import subprocess
 import sys
 from pathlib import Path
 
-from harness_tui.panels import render_panel
+from oem_tui.panels import render_panel
 from .engine import KnowledgeEngine, migrate_harness_to_oem
 from .linter import run_lint
 
 try:
     from importlib.metadata import version as _pkg_version
-    _VERSION = _pkg_version("harness-knowledge")
+    _VERSION = _pkg_version("oem-knowledge")
 except Exception:
     _VERSION = "0.1.0"
 
@@ -442,7 +442,7 @@ def main():
                 )
 
         elif args.command == "vault":
-            from harness_knowledge.vault import GlobalVault
+            from oem_knowledge.vault import GlobalVault
             vault = GlobalVault()
             if args.action == "sync":
                 try:
@@ -478,7 +478,7 @@ def main():
                         print(render_panel("Error", [f"Demotion failed: {e}"], status="error"))
 
         elif args.command == "identity":
-            from harness_knowledge.identity_resolver import SemanticIdentityResolver
+            from oem_knowledge.identity_resolver import SemanticIdentityResolver
             resolver = SemanticIdentityResolver(eng)
             if args.action == "scan":
                 duplicates = resolver.scan_duplicates(project)
@@ -509,7 +509,7 @@ def main():
                 if not args.concept_id:
                     print(render_panel("Error", ["Concept ID required for evolution."], status="error"))
                 else:
-                    from harness_knowledge.evolution import ConceptEvolutionEngine
+                    from oem_knowledge.evolution import ConceptEvolutionEngine
                     evolve_engine = ConceptEvolutionEngine(eng)
                     res = evolve_engine.evolve_concept(args.concept_id, project)
                     if res.get("status") == "error":
@@ -518,7 +518,7 @@ def main():
                         print(render_panel("Concept Evolved", [res.get("message", "")], status="ok"))
             elif args.action == "health":
                 registry = eng._load_registry(project)
-                from harness_knowledge.health import calculate_concept_health
+                from oem_knowledge.health import calculate_concept_health
                 if args.concept_id:
                     if args.concept_id not in registry:
                         print(render_panel("Error", [f"Concept {args.concept_id} not found."], status="error"))
@@ -542,7 +542,7 @@ def main():
                     print(render_panel("System Health Summary", lines, status="ok"))
 
         elif args.command == "contradictions":
-            from harness_knowledge.evolution import ContradictionDetector
+            from oem_knowledge.evolution import ContradictionDetector
             detector = ContradictionDetector(eng)
             contradictions = detector.detect_contradictions(project)
             lines = [f"Contradictions detected: {len(contradictions)}", ""]

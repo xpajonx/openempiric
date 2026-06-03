@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from harness_tui.panels import render_panel
+from oem_tui.panels import render_panel
 
 from .engine import KnowledgeEngine
 
@@ -37,7 +37,7 @@ def mount_tools(mcp: object) -> None:
         lines.append("Created Baseline Documents:")
         for f in res.get("created_files", []):
             lines.append(f"  📄 {f}")
-        return render_panel("Harness Initialized", lines, status="bootstrap")
+        return render_panel("OpenEmpiric Initialized", lines, status="bootstrap")
 
     @mcp.tool()
     def knowledge_search(query: str, k: int = 3, project: str = "") -> str:
@@ -81,7 +81,7 @@ def mount_tools(mcp: object) -> None:
         lines = [
             f"Total Vector Chunks:  {s['total_chunks']}",
             f"Vector DB Size:       {s['db_size_mb']:.2f} MB",
-            f"Harness Path:         {s['harness_path']}",
+            f"OEM Path:             {s['harness_path']}",
         ]
         return render_panel("Knowledge Stats", lines, status="stats")
 

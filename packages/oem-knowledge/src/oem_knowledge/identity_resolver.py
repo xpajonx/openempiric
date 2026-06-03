@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
-from harness_knowledge.search import DenseSearch
+from oem_knowledge.search import DenseSearch
 
 class SemanticIdentityResolver:
     def __init__(self, engine):

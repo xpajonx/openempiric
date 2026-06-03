@@ -12,7 +12,7 @@ import uuid
 from collections import Counter
 from pathlib import Path
 
-from harness_knowledge.models import ConceptData, KnowledgeEvent
+from oem_knowledge.models import ConceptData, KnowledgeEvent
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -103,7 +103,7 @@ class SecureFileSystem:
             verified.unlink()
 
 
-HARNESS_DIR = ".oem"
+OEM_DIR = ".oem"
 DEFAULT_DIRS = [
     "wiki",
     "sessions",
@@ -214,7 +214,7 @@ class KnowledgeEngine:
         root = find_harness_root(p) or p
         migrate_harness_to_oem(root)
         
-        harness = root / HARNESS_DIR
+        harness = root / OEM_DIR
         if not harness.exists():
             harness.mkdir(parents=True, exist_ok=True)
             self._bootstrap_harness(root)
@@ -222,7 +222,7 @@ class KnowledgeEngine:
 
     def _bootstrap_harness(self, project_path: Path):
         """Create a minimal .oem/ structure."""
-        harness = project_path / HARNESS_DIR
+        harness = project_path / OEM_DIR
         for d in DEFAULT_DIRS:
             (harness / d).mkdir(parents=True, exist_ok=True)
         sfs = self._sfs(project_path)
@@ -267,7 +267,7 @@ class KnowledgeEngine:
     def collection(self):
         if self._collection is None:
             self._collection = self.chroma_client.get_or_create_collection(
-                name="harness_knowledge",
+                name="oem_knowledge",
                 metadata={"hnsw:space": "cosine"},
             )
         return self._collection
@@ -603,7 +603,7 @@ class KnowledgeEngine:
             project_dir = base / name if not (base / name).exists() else base
 
         migrate_harness_to_oem(project_dir)
-        harness = project_dir / HARNESS_DIR
+        harness = project_dir / OEM_DIR
 
         created_dirs = []
         for d in DEFAULT_DIRS:
@@ -1115,8 +1115,10 @@ class KnowledgeEngine:
         sfs = self._sfs(project)
         date_str = time.strftime("%Y-%m-%d")
         report_file = sessions_dir / f"{date_str}.md"
-        if sfs.exists(report_file):
-            report_file = sessions_dir / f"{date_str}_{int(time.time() % 100000)}.md"
+        counter = 1
+        while sfs.exists(report_file):
+            report_file = sessions_dir / f"{date_str}_{counter}.md"
+            counter += 1
 
         yaml_events = [
             {
@@ -1630,7 +1632,7 @@ aliases: {json.dumps(cdata.get("aliases", []))}
         cdata = registry[concept_id]
         events = self.get_events(project, concept=cdata["canonical_name"])
 
-        from harness_knowledge.health import calculate_concept_health
+        from oem_knowledge.health import calculate_concept_health
         health_score = calculate_concept_health(cdata)
 
         summary = {

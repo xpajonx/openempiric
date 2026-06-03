@@ -5,8 +5,8 @@ import shutil
 from pathlib import Path
 import pytest
 
-from harness_knowledge.engine import KnowledgeEngine
-from harness_knowledge.identity_resolver import SemanticIdentityResolver
+from oem_knowledge.engine import KnowledgeEngine
+from oem_knowledge.identity_resolver import SemanticIdentityResolver
 
 
 @pytest.fixture

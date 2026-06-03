@@ -73,7 +73,7 @@ class GlobalVault:
 
     def vault_candidates(self, project: str | Path | None = None) -> list[dict]:
         """Find all local concepts that are eligible for Global Vault promotion."""
-        from harness_knowledge.engine import KnowledgeEngine, find_all_projects
+        from oem_knowledge.engine import KnowledgeEngine, find_all_projects
 
         engine = KnowledgeEngine(project)
         local_reg = engine._load_registry()
@@ -125,7 +125,7 @@ class GlobalVault:
 
     def promote_to_global(self, concept_id: str, project: str | Path | None = None):
         """Promote a local concept to the global vault and update status."""
-        from harness_knowledge.engine import KnowledgeEngine
+        from oem_knowledge.engine import KnowledgeEngine
         engine = KnowledgeEngine(project)
         local_reg = engine._load_registry()
         if concept_id not in local_reg:
@@ -170,7 +170,7 @@ class GlobalVault:
             global_wiki.unlink()
 
         # Update local registry if present
-        from harness_knowledge.engine import KnowledgeEngine
+        from oem_knowledge.engine import KnowledgeEngine
         engine = KnowledgeEngine(project)
         local_reg = engine._load_registry()
         if concept_id in local_reg:

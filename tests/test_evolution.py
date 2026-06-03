@@ -5,8 +5,8 @@ import shutil
 from pathlib import Path
 import pytest
 
-from harness_knowledge.engine import KnowledgeEngine, HARNESS_DIR
-from harness_knowledge.evolution import ConceptEvolutionEngine, ContradictionDetector
+from oem_knowledge.engine import KnowledgeEngine, OEM_DIR
+from oem_knowledge.evolution import ConceptEvolutionEngine, ContradictionDetector
 
 
 @pytest.fixture
@@ -18,7 +18,7 @@ def tmp_proj():
 
 def test_concept_revision_logging(tmp_proj):
     eng = KnowledgeEngine(tmp_proj)
-    concepts_dir = Path(tmp_proj) / HARNESS_DIR / "wiki"
+    concepts_dir = Path(tmp_proj) / OEM_DIR / "wiki"
     concepts_dir.mkdir(parents=True, exist_ok=True)
     
     file_path = concepts_dir / "concept_test.md"
@@ -59,7 +59,7 @@ This is the updated version of the concept with changes.
 def test_concept_evolution_engine(tmp_proj):
     eng = KnowledgeEngine(tmp_proj)
     eng.init_project(tmp_proj)
-    concepts_dir = Path(tmp_proj) / HARNESS_DIR / "wiki"
+    concepts_dir = Path(tmp_proj) / OEM_DIR / "wiki"
 
     file_path = concepts_dir / "concept_001.md"
     content = """---
@@ -93,7 +93,7 @@ aliases: []
 def test_contradiction_detection(tmp_proj):
     eng = KnowledgeEngine(tmp_proj)
     eng.init_project(tmp_proj)
-    concepts_dir = Path(tmp_proj) / HARNESS_DIR / "wiki"
+    concepts_dir = Path(tmp_proj) / OEM_DIR / "wiki"
 
     # Add concept A advocating for REST
     file_a = concepts_dir / "concept_001.md"

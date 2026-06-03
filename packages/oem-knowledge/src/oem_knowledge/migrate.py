@@ -5,7 +5,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from harness_tui.panels import render_panel
+from oem_tui.panels import render_panel
 
 
 def migrate_from_central(central_path: str | Path = "", dry_run: bool = True) -> str:

@@ -5,12 +5,12 @@ import time
 import uuid
 from pathlib import Path
 
-from ..engine import HARNESS_DIR
+from ..engine import OEM_DIR
 
 
 def _todos_path(workdir: str = "") -> Path:
     base = Path(workdir) if workdir else Path.cwd()
-    return base / HARNESS_DIR / "state" / "todos.json"
+    return base / OEM_DIR / "state" / "todos.json"
 
 
 def _load_todos(workdir: str = "") -> list[dict]:
@@ -38,7 +38,7 @@ def register(mcp: object) -> None:
         return
 
     @mcp.tool()
-    def harness_todo_write(items: str, workdir: str = "") -> str:
+    def oem_todo_write(items: str, workdir: str = "") -> str:
         """Replace the current todo list with new items. Persists to .oem/state/todos.json.
 
         Args:
@@ -59,10 +59,10 @@ def register(mcp: object) -> None:
                 continue
             todos.append(
                 {
-                    "id": item.get("id", str(uuid.uuid4())),
-                    "content": content,
-                    "status": item.get("status", "pending"),
-                    "created_at": time.strftime("%Y-%m-%d %H:%M"),
+                     "id": item.get("id", str(uuid.uuid4())),
+                     "content": content,
+                     "status": item.get("status", "pending"),
+                     "created_at": time.strftime("%Y-%m-%d %H:%M"),
                 }
             )
 
@@ -74,7 +74,7 @@ def register(mcp: object) -> None:
         return f"Todo list updated ({len(todos)} items):\n" + "\n".join(summary)
 
     @mcp.tool()
-    def harness_todo_read(workdir: str = "") -> str:
+    def oem_todo_read(workdir: str = "") -> str:
         """Read the current todo list from .oem/state/todos.json."""
         todos = _load_todos(workdir)
         if not todos:
@@ -89,7 +89,7 @@ def register(mcp: object) -> None:
         return "\n".join(summary)
 
     @mcp.tool()
-    def harness_todo_advance(item_id: str, status: str = "", workdir: str = "") -> str:
+    def oem_todo_advance(item_id: str, status: str = "", workdir: str = "") -> str:
         """Update one todo item's status. If set to 'completed', auto-advance the next pending item to 'in_progress'.
 
         Args:

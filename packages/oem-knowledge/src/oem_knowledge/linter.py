@@ -4,7 +4,7 @@ import asyncio
 import re
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
-from harness_knowledge.engine import KnowledgeEngine
+from oem_knowledge.engine import KnowledgeEngine
 
 # Match [[type:target]] or [[target]] or [[type:target|label]]
 WIKILINK_ANY_PATTERN = re.compile(

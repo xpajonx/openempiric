@@ -1,11 +1,11 @@
 [project]
-name = "harness-mcp"
+name = "oem-mcp"
 version = "0.1.0"
-description = "Monorepo for harness MCP workspace"
+description = "Monorepo for OpenEmpiric OEM MCP workspace"
 requires-python = ">=3.12"
 
 [workspace]
 members = [
-    "packages/harness-knowledge",
-    "packages/harness-tui",
+    "packages/oem-knowledge",
+    "packages/oem-tui",
 ]
