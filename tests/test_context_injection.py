@@ -96,9 +96,11 @@ def test_oem_runtime_context_injection(tmp_proj, mock_home):
         def capture_config(*args, **kwargs):
             assert config_file.exists()
             config_data = json.loads(config_file.read_text(encoding="utf-8"))
-            assert "openempiric" in config_data
+            assert "openempiric" in config_data["mcp"]
+            assert "env" in config_data["mcp"]["openempiric"]
+            assert "OEM_RUNTIME_CONTEXT" in config_data["mcp"]["openempiric"]["env"]
             
-            oem = config_data["openempiric"]
+            oem = json.loads(config_data["mcp"]["openempiric"]["env"]["OEM_RUNTIME_CONTEXT"])
             # Verify active concepts
             assert len(oem["active_concepts"]) == 1
             assert oem["active_concepts"][0]["id"] == "concept_001"

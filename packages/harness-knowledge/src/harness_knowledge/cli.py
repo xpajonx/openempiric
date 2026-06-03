@@ -127,7 +127,23 @@ def run_agent(agent_name: str, project_dir: str, eng: KnowledgeEngine):
         try:
             cleaned = clean_jsonc(orig_content)
             config = json.loads(cleaned)
-            config["openempiric"] = oem_context
+            config.setdefault("mcp", {})
+            config["mcp"].setdefault("openempiric", {
+                "type": "local",
+                "command": [
+                    "uv",
+                    "run",
+                    "--directory",
+                    str(repo_root),
+                    "python",
+                    "-m",
+                    "harness_knowledge.server"
+                ],
+                "enabled": True,
+                "timeout": 60000
+            })
+            config["mcp"]["openempiric"].setdefault("env", {})
+            config["mcp"]["openempiric"]["env"]["OEM_RUNTIME_CONTEXT"] = json.dumps(oem_context)
             config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
         except Exception as e:
             print(f"Warning: Failed to inject context into opencode.jsonc: {e}")

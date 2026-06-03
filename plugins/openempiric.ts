@@ -44,7 +44,8 @@ export const OpenempiricPlugin: Plugin = async ({ $ }) => {
   const repoDir = resolveRepoDir()
   return {
     config: async (config) => {
-      // 1. Register MCP
+      // 1. Register MCP (safely merge existing config to preserve env context)
+      const existingMcp = config.mcp?.openempiric || {}
       config.mcp = config.mcp || {}
       config.mcp.openempiric = {
         type: "local",
@@ -58,7 +59,11 @@ export const OpenempiricPlugin: Plugin = async ({ $ }) => {
           "harness_knowledge.server"
         ],
         enabled: true,
-        timeout: 60000
+        timeout: 60000,
+        ...existingMcp,
+        env: {
+          ...(existingMcp.env || {})
+        }
       }
 
       // 2. Register Instructions (OEMRuntimeContext prompt injection)
@@ -67,12 +72,19 @@ export const OpenempiricPlugin: Plugin = async ({ $ }) => {
       const tempInstPath = path.join(os.homedir(), ".config", "opencode", "plugins", ".openempiric_temp_instructions.md")
       let instContent = "# openempiric Session Context\n\n"
       
-      if (config.openempiric) {
-        const oe = config.openempiric
-        
+      let oemContext: any = null
+      if (config.mcp.openempiric.env?.OEM_RUNTIME_CONTEXT) {
+        try {
+          oemContext = JSON.parse(config.mcp.openempiric.env.OEM_RUNTIME_CONTEXT)
+        } catch (e) {
+          console.error("Failed to parse OEM_RUNTIME_CONTEXT JSON:", e)
+        }
+      }
+      
+      if (oemContext) {
         instContent += "## Active Concepts\n"
-        if (oe.active_concepts && oe.active_concepts.length > 0) {
-          oe.active_concepts.forEach((c: any) => {
+        if (oemContext.active_concepts && oemContext.active_concepts.length > 0) {
+          oemContext.active_concepts.forEach((c: any) => {
             instContent += `- **${c.name}** (${c.id}): ${c.description || 'No description available.'}\n`
           })
         } else {
@@ -80,8 +92,8 @@ export const OpenempiricPlugin: Plugin = async ({ $ }) => {
         }
         
         instContent += "\n## Active Decisions\n"
-        if (oe.active_decisions && oe.active_decisions.length > 0) {
-          oe.active_decisions.forEach((d: any) => {
+        if (oemContext.active_decisions && oemContext.active_decisions.length > 0) {
+          oemContext.active_decisions.forEach((d: any) => {
             instContent += `- ${d}\n`
           })
         } else {
@@ -89,8 +101,8 @@ export const OpenempiricPlugin: Plugin = async ({ $ }) => {
         }
         
         instContent += "\n## Relevant Failures\n"
-        if (oe.relevant_failures && oe.relevant_failures.length > 0) {
-          oe.relevant_failures.forEach((f: any) => {
+        if (oemContext.relevant_failures && oemContext.relevant_failures.length > 0) {
+          oemContext.relevant_failures.forEach((f: any) => {
             instContent += `- ${f}\n`
           })
         } else {
@@ -98,8 +110,8 @@ export const OpenempiricPlugin: Plugin = async ({ $ }) => {
         }
         
         instContent += "\n## Open Questions\n"
-        if (oe.open_questions && oe.open_questions.length > 0) {
-          oe.open_questions.forEach((q: any) => {
+        if (oemContext.open_questions && oemContext.open_questions.length > 0) {
+          oemContext.open_questions.forEach((q: any) => {
             instContent += `- ${q}\n`
           })
         } else {
