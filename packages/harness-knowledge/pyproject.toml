@@ -16,3 +16,6 @@ oem = "harness_knowledge.cli:main"
 
 [tool.uv]
 dev-dependencies = ["pytest>=8"]
+
+[tool.uv.sources]
+harness-tui = { path = "../harness-tui" }
