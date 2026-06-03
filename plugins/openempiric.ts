@@ -61,16 +61,59 @@ export const OpenempiricPlugin: Plugin = async ({ $ }) => {
         timeout: 60000
       }
 
-      // 2. Register Instructions
+      // 2. Register Instructions (OEMRuntimeContext prompt injection)
       config.instructions = config.instructions || []
-      const memoryStart = path.join(repoDir, "instructions", "memory-start.md")
-      const aggressiveStart = path.join(repoDir, "instructions", "aggressive-start.md")
-
-      if (!config.instructions.includes(memoryStart)) {
-        config.instructions.push(memoryStart)
+      
+      const tempInstPath = path.join(os.homedir(), ".config", "opencode", "plugins", ".openempiric_temp_instructions.md")
+      let instContent = "# openempiric Session Context\n\n"
+      
+      if (config.openempiric) {
+        const oe = config.openempiric
+        
+        instContent += "## Active Concepts\n"
+        if (oe.active_concepts && oe.active_concepts.length > 0) {
+          oe.active_concepts.forEach((c: any) => {
+            instContent += `- **${c.name}** (${c.id}): ${c.description || 'No description available.'}\n`
+          })
+        } else {
+          instContent += "- None\n"
+        }
+        
+        instContent += "\n## Active Decisions\n"
+        if (oe.active_decisions && oe.active_decisions.length > 0) {
+          oe.active_decisions.forEach((d: any) => {
+            instContent += `- ${d}\n`
+          })
+        } else {
+          instContent += "- None\n"
+        }
+        
+        instContent += "\n## Relevant Failures\n"
+        if (oe.relevant_failures && oe.relevant_failures.length > 0) {
+          oe.relevant_failures.forEach((f: any) => {
+            instContent += `- ${f}\n`
+          })
+        } else {
+          instContent += "- None\n"
+        }
+        
+        instContent += "\n## Open Questions\n"
+        if (oe.open_questions && oe.open_questions.length > 0) {
+          oe.open_questions.forEach((q: any) => {
+            instContent += `- ${q}\n`
+          })
+        } else {
+          instContent += "- None\n"
+        }
       }
-      if (!config.instructions.includes(aggressiveStart)) {
-        config.instructions.push(aggressiveStart)
+      
+      try {
+        fs.writeFileSync(tempInstPath, instContent, "utf-8")
+        if (!config.instructions.includes(tempInstPath)) {
+          config.instructions.push(tempInstPath)
+        }
+      } catch (e) {
+        console.error("Failed to write transient openempiric instructions:", e)
       }
     }
   }

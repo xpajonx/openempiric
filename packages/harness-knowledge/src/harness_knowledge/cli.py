@@ -15,7 +15,7 @@ from .engine import KnowledgeEngine, migrate_harness_to_oem
 from .linter import run_lint
 
 
-def run_agent(agent_name: str, project_dir: str):
+def run_agent(agent_name: str, project_dir: str, eng: KnowledgeEngine):
     # 1. Resolve repository root
     repo_root = Path(__file__).resolve().parent.parent.parent.parent.parent
     plugin_src = repo_root / "plugins" / "openempiric.ts"
@@ -39,10 +39,102 @@ def run_agent(agent_name: str, project_dir: str):
             except Exception as e:
                 print(f"Warning: Failed to copy plugin file to {plugin_dest}: {e}")
 
-    # 3. Spawn the coding agent
+    # 3. Compile OEMRuntimeContext
+    active_concepts = []
+    try:
+        registry = eng._load_registry()
+        for cid, cdata in registry.items():
+            if cdata.get("status") in ("validated", "canonical", "global"):
+                desc = ""
+                wiki_file = eng._concepts_dir() / f"{cid}.md"
+                if wiki_file.exists():
+                    try:
+                        text = wiki_file.read_text(encoding="utf-8")
+                        body_match = re.search(r"^---\s*\n.*?\n---\s*\n(.*)$", text, re.DOTALL)
+                        body = body_match.group(1).strip() if body_match else text.strip()
+                        body = re.sub(r"^#.*?\n", "", body).strip()
+                        desc = body.split("\n")[0][:150].strip()
+                    except Exception:
+                        pass
+                active_concepts.append({
+                    "id": cid,
+                    "name": cdata.get("canonical_name", cid),
+                    "description": desc
+                })
+    except Exception as e:
+        print(f"Warning: Failed to compile active concepts: {e}")
+
+    active_decisions = []
+    relevant_failures = []
+    try:
+        events = eng._load_events()
+        
+        # Gather decisions
+        seen_decisions = set()
+        for ev in reversed(events):
+            if ev.get("event_type") == "decision":
+                d = ev.get("evidence", "")
+                if d and d not in seen_decisions:
+                    seen_decisions.add(d)
+                    active_decisions.append(d)
+                    if len(active_decisions) >= 5:
+                        break
+        active_decisions.reverse()
+
+        # Gather failures
+        seen_failures = set()
+        for ev in reversed(events):
+            if ev.get("event_type") == "failure":
+                f = ev.get("evidence", "")
+                if f and f not in seen_failures:
+                    seen_failures.add(f)
+                    relevant_failures.append(f)
+                    if len(relevant_failures) >= 5:
+                        break
+        relevant_failures.reverse()
+    except Exception as e:
+        print(f"Warning: Failed to compile events context: {e}")
+
+    open_questions = []
+    try:
+        session_state = eng.restore_session_state()
+        open_questions = session_state.get("active_goals", [])
+    except Exception as e:
+        print(f"Warning: Failed to compile active goals: {e}")
+
+    oem_context = {
+        "active_concepts": active_concepts,
+        "active_decisions": active_decisions,
+        "relevant_failures": relevant_failures,
+        "open_questions": open_questions
+    }
+
+    # 4. Inject OEMRuntimeContext into opencode.jsonc
+    config_path = Path.home() / ".config" / "opencode" / "opencode.jsonc"
+    orig_content = ""
+    if config_path.exists():
+        try:
+            orig_content = config_path.read_text(encoding="utf-8")
+        except Exception as e:
+            print(f"Warning: Failed to read opencode.jsonc: {e}")
+
+    def clean_jsonc(text: str) -> str:
+        text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
+        text = re.sub(r"(?<!:)//.*", "", text)
+        return text.strip()
+
+    if orig_content:
+        try:
+            cleaned = clean_jsonc(orig_content)
+            config = json.loads(cleaned)
+            config["openempiric"] = oem_context
+            config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+        except Exception as e:
+            print(f"Warning: Failed to inject context into opencode.jsonc: {e}")
+
+    # 5. Spawn the coding agent
     print(f"Spawning coding agent: {agent_name}...")
     try:
-        # Execute the agent command
         if agent_name == "opencode":
             subprocess.run(["opencode"], check=True)
         elif agent_name == "claude-code":
@@ -53,6 +145,21 @@ def run_agent(agent_name: str, project_dir: str):
             subprocess.run(agent_name.split(), check=True)
     except Exception as e:
         print(f"Agent session finished or returned: {e}")
+    finally:
+        # Restore configuration
+        if orig_content:
+            try:
+                config_path.write_text(orig_content, encoding="utf-8")
+            except Exception as e:
+                print(f"Warning: Failed to restore opencode.jsonc: {e}")
+        
+        # Delete transient instruction file
+        temp_inst = Path.home() / ".config" / "opencode" / "plugins" / ".openempiric_temp_instructions.md"
+        if temp_inst.exists():
+            try:
+                temp_inst.unlink()
+            except Exception:
+                pass
 
 
 def main():
@@ -462,7 +569,7 @@ def main():
             print(render_panel("Concepts Merged", [res.get("message", "")], status="ok"))
 
     elif args.command == "run":
-        run_agent(args.agent, project_dir)
+        run_agent(args.agent, project_dir, eng)
 
 
 if __name__ == "__main__":
