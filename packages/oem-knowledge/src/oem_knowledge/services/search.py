@@ -1,0 +1,323 @@
+from __future__ import annotations
+import math
+import os
+import re
+import sys
+import time
+from collections import Counter
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from oem_knowledge.engine import KnowledgeEngine
+
+
+class SearchService:
+    def __init__(self, engine: KnowledgeEngine):
+        self.engine = engine
+
+    @property
+    def model(self):
+        return self.engine.model
+
+    @property
+    def chroma_client(self):
+        return self.engine.chroma_client
+
+    @property
+    def collection(self):
+        return self.engine.collection
+
+    def calculate_sha256(self, filepath: Path) -> str:
+        return self.engine.calculate_sha256(filepath)
+
+    def chunk_markdown(self, filepath: Path, rel_path: str) -> list[dict]:
+        try:
+            content = filepath.read_text()
+        except Exception:
+            return []
+        if not content.strip():
+            return []
+
+        header_pattern = re.compile(r"^(#{1,4}\s+.*)$", re.MULTILINE)
+        parts = header_pattern.split(content)
+        chunks = []
+        current_title = "Introduction"
+
+        if parts[0].strip():
+            chunks.append({"title": current_title, "text": parts[0].strip()})
+
+        for i in range(1, len(parts), 2):
+            header = parts[i].strip()
+            section_body = parts[i + 1].strip() if i + 1 < len(parts) else ""
+            if section_body:
+                chunks.append(
+                    {
+                        "title": header.lstrip("#").strip(),
+                        "text": f"{header}\n\n{section_body}",
+                    }
+                )
+
+        if not chunks:
+            chunks.append({"title": "Full Document", "text": content.strip()})
+
+        formatted = []
+        for idx, chunk in enumerate(chunks):
+            section_text = (
+                f"Document: {rel_path}\nSection: {chunk['title']}\n\n{chunk['text']}"
+            )
+            links = list(set(re.findall(r"\[\[([^\]]+)\]\]", chunk["text"])))
+            formatted.append(
+                {
+                    "chunk_id": f"{rel_path}#chunk_{idx}",
+                    "text": section_text,
+                    "title": chunk["title"],
+                    "raw_body": chunk["text"],
+                    "linked_concepts": links,
+                }
+            )
+
+        return formatted
+
+    def derive_importance(self, rel_path: str) -> str:
+        lower = rel_path.lower()
+        if "agents.md" in lower or "claude.md" in lower:
+            return "critical"
+        if "scratch" in lower:
+            return "low"
+        if "/" not in rel_path and "\\" not in rel_path:
+            return "high"
+        return "medium"
+
+    def index_all(self, force: bool = False) -> dict:
+        harness = self.engine._resolve_harness()
+        wiki_dir = harness / "wiki"
+        
+        md_files = list(wiki_dir.rglob("*.md")) if wiki_dir.exists() else []
+        for f in harness.glob("*.md"):
+            if f.is_file():
+                md_files.append(f)
+
+        registry = {}
+        reg_path = harness / "state" / "file_registry.json"
+        if reg_path.exists():
+            try:
+                registry = json.loads(reg_path.read_text())
+            except Exception:
+                registry = {}
+
+        # json import needed if not imported globally in search.py
+        import json
+        stats = {
+            "scanned": len(md_files),
+            "new": 0,
+            "updated": 0,
+            "unchanged": 0,
+            "failed": 0,
+        }
+        active_paths = set()
+        new_registry = {}
+        to_index = []
+
+        for fp in md_files:
+            path_str = str(fp)
+            active_paths.add(path_str)
+            try:
+                cur_hash = self.calculate_sha256(fp)
+                old_hash = registry.get(path_str)
+                new_registry[path_str] = cur_hash
+                if force or old_hash != cur_hash:
+                    stats["new" if old_hash is None else "updated"] += 1
+                    to_index.append((fp, path_str, old_hash, cur_hash))
+                else:
+                    stats["unchanged"] += 1
+            except Exception:
+                stats["failed"] += 1
+                if path_str in registry:
+                    new_registry[path_str] = registry[path_str]
+
+        if to_index:
+            model = self.model
+            col = self.collection
+            for fp, path_str, old_hash, cur_hash in to_index:
+                if old_hash is not None:
+                    try:
+                        existing = col.get(where={"source": path_str})
+                        if existing and existing["ids"]:
+                            col.delete(ids=existing["ids"])
+                    except Exception:
+                        pass
+
+                try:
+                    rel_path = str(fp.relative_to(harness.parent))
+                except Exception:
+                    rel_path = fp.name
+
+                chunks = self.chunk_markdown(fp, rel_path)
+                if not chunks:
+                    continue
+
+                mtime = os.path.getmtime(fp)
+                imp = self.derive_importance(rel_path)
+
+                ids = [c["chunk_id"] for c in chunks]
+                texts = [c["text"] for c in chunks]
+                metadatas = [
+                    {
+                        "source": path_str,
+                        "rel_path": rel_path,
+                        "title": c["title"],
+                        "content_hash": cur_hash,
+                        "linked_concepts": ",".join(c["linked_concepts"]),
+                        "created_at": str(mtime),
+                        "updated_at": str(mtime),
+                        "importance": imp,
+                    }
+                    for c in chunks
+                ]
+
+                try:
+                    embeddings = [list(e) for e in model.embed(texts)]
+                    col.add(
+                        ids=ids, embeddings=embeddings, documents=texts, metadatas=metadatas
+                    )
+                except Exception as e:
+                    print(f"Index error: {e}", file=sys.stderr)
+                    stats["failed"] += 1
+
+        deleted_paths = set(registry.keys()) - active_paths
+        if deleted_paths:
+            try:
+                col = self.collection
+                for path in deleted_paths:
+                    existing = col.get(where={"source": path})
+                    if existing and existing["ids"]:
+                        col.delete(ids=existing["ids"])
+            except Exception:
+                pass
+
+        reg_path.parent.mkdir(parents=True, exist_ok=True)
+        reg_path.write_text(json.dumps(new_registry, indent=2))
+        return stats
+
+    def search(self, query: str, k: int = 3, hybrid: bool = True) -> list[dict]:
+        col = self.collection
+        if col.count() == 0:
+            return []
+
+        candidate_count = min(col.count(), max(20, k * 4))
+        query_vec = [list(e) for e in self.model.embed([query])][0]
+
+        results = col.query(query_embeddings=[query_vec], n_results=candidate_count)
+
+        if not results or not results["ids"] or not results["ids"][0]:
+            return []
+
+        doc_texts = results["documents"][0]
+        bm25_scores = (
+            self._compute_bm25(query, doc_texts) if hybrid else [0.0] * len(doc_texts)
+        )
+
+        formatted = []
+        seen_ids = set()
+        for i in range(len(results["ids"][0])):
+            doc_id = results["ids"][0][i]
+            if doc_id in seen_ids:
+                continue
+            seen_ids.add(doc_id)
+            meta = results["metadatas"][0][i]
+
+            dense = 1 - results["distances"][0][i]
+            sparse = bm25_scores[i]
+            recency = self._recency_score(meta.get("created_at", str(time.time())))
+            importance = self._importance_score(meta.get("importance", "medium"))
+
+            final = (
+                (0.45 * dense)
+                + (0.30 * sparse)
+                + (0.15 * recency)
+                + (0.10 * importance)
+            )
+
+            formatted.append(
+                {
+                    "id": doc_id,
+                    "document": results["documents"][0][i],
+                    "metadata": meta,
+                    "score": final,
+                }
+            )
+
+        formatted.sort(key=lambda x: x["score"], reverse=True)
+        return formatted[:k]
+
+    def _compute_bm25(self, query: str, documents: list[str]) -> list[float]:
+        query_terms = [t.lower() for t in re.findall(r"\w+", query) if len(t) > 1]
+        if not query_terms or not documents:
+            return [0.0] * len(documents)
+
+        doc_terms = [[t.lower() for t in re.findall(r"\w+", d)] for d in documents]
+        doc_count = len(documents)
+        df: dict[str, int] = {}
+        for terms in doc_terms:
+            for t in set(terms):
+                df[t] = df.get(t, 0) + 1
+
+        k1, b = 1.5, 0.75
+        avg_dl = sum(len(t) for t in doc_terms) / max(doc_count, 1)
+
+        scores = []
+        for terms in doc_terms:
+            score = 0.0
+            doc_len = len(terms)
+            tf = Counter(terms)
+            for q in query_terms:
+                if q in tf:
+                    n = df.get(q, 0)
+                    idf = math.log((doc_count - n + 0.5) / (n + 0.5) + 1.0)
+                    freq = tf[q]
+                    score += (
+                        idf
+                        * (freq * (k1 + 1))
+                        / (freq + k1 * (1 - b + b * doc_len / max(avg_dl, 1)))
+                    )
+            scores.append(score)
+
+        max_s = max(scores) if scores else 0
+        return [s / max_s for s in scores] if max_s > 0 else scores
+
+    def _recency_score(self, created_at_str: str) -> float:
+        try:
+            age_days = (time.time() - float(created_at_str)) / (3600 * 24)
+            return math.exp(-0.05 * max(0.0, age_days))
+        except Exception:
+            return 1.0
+
+    def _importance_score(self, imp: str) -> float:
+        match str(imp).lower():
+            case "critical":
+                return 1.0
+            case "high":
+                return 0.7
+            case "medium":
+                return 0.5
+            case "low":
+                return 0.2
+            case _:
+                return 0.5
+
+    def stats(self) -> dict:
+        col = self.collection
+        total_chunks = col.count()
+        db_size = 0
+        db_path = self.engine._resolve_harness() / ".local_vector_db"
+        if db_path.exists():
+            for f in db_path.rglob("*"):
+                if f.is_file():
+                    db_size += f.stat().st_size
+
+        return {
+            "total_chunks": total_chunks,
+            "db_size_mb": db_size / (1024 * 1024),
+            "harness_path": str(self.engine._resolve_harness()),
+        }
