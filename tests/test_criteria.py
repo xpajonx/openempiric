@@ -230,6 +230,103 @@ class TestCriteria:
                 except SystemExit as e:
                     assert e.code == 0 or e.code is None
 
+    def test_metrics_cli(self, tmp_proj):
+        """Verify the metrics CLI command."""
+        import sys
+        import json
+        from unittest.mock import patch
+        from oem_knowledge.cli import main
+
+        # Create dummy metrics.json file
+        metrics_dir = Path(tmp_proj) / OEM_DIR / "state"
+        metrics_dir.mkdir(parents=True, exist_ok=True)
+        metrics_file = metrics_dir / "metrics.json"
+        
+        test_metrics = {
+            "retrieval": {
+                "search_count": 5,
+                "search_latency_total": 25.0,
+                "search_latency_min": 2.0,
+                "search_latency_max": 8.0,
+                "last_search_latency": 4.0,
+                "last_search_at": "2026-06-03T12:00:00Z",
+                "cache_hits": 10,
+                "cache_misses": 2,
+                "concepts_retrieved": 12
+            },
+            "context": {
+                "context_count": 2,
+                "context_latency_total": 30.0,
+                "context_latency_min": 10.0,
+                "context_latency_max": 20.0,
+                "last_context_latency": 15.0,
+                "last_context_at": "2026-06-03T12:05:00Z"
+            },
+            "knowledge_usage": {
+                "concepts_injected": 3,
+                "concepts_referenced": 1,
+                "concepts_ignored": 0,
+                "agent_decisions_aligned": 1,
+                "last_report_at": "2026-06-03T12:10:00Z"
+            }
+        }
+        metrics_file.write_text(json.dumps(test_metrics, indent=2))
+
+        # Test viewing metrics
+        with patch.object(sys, "argv", ["oem", "metrics", "--project", tmp_proj]):
+            try:
+                main()
+            except SystemExit as e:
+                assert e.code == 0 or e.code is None
+
+        # Test reset
+        with patch.object(sys, "argv", ["oem", "metrics", "--project", tmp_proj, "--reset"]):
+            try:
+                main()
+            except SystemExit as e:
+                assert e.code == 0 or e.code is None
+        
+        # Verify reset structure
+        data = json.loads(metrics_file.read_text())
+        assert data["retrieval"]["search_count"] == 0
+        assert data["retrieval"]["concepts_retrieved"] == 0
+        assert data["context"]["context_count"] == 0
+        assert data["knowledge_usage"]["concepts_injected"] == 0
+        assert data["knowledge_usage"]["last_report_at"] is None
+
+        # Test export
+        export_dest = Path(tmp_proj) / "exported_metrics.json"
+        with patch.object(sys, "argv", ["oem", "metrics", "--project", tmp_proj, "--export", str(export_dest)]):
+            try:
+                main()
+            except SystemExit as e:
+                assert e.code == 0 or e.code is None
+        
+        assert export_dest.exists()
+
+        # Test usage log with no log file
+        with patch.object(sys, "argv", ["oem", "metrics", "--project", tmp_proj, "--usage-log"]):
+            try:
+                main()
+            except SystemExit as e:
+                assert e.code == 0 or e.code is None
+
+        # Test usage log with dummy usage log file
+        log_file = metrics_dir / "usage_log.jsonl"
+        log_entry = {
+            "timestamp": "2026-06-03T12:10:00Z",
+            "concepts_used": ["concept_001"],
+            "concepts_ignored": ["concept_002"],
+            "decisions": ["Used concept_001 in tests"]
+        }
+        log_file.write_text(json.dumps(log_entry) + "\n", encoding="utf-8")
+        with patch.object(sys, "argv", ["oem", "metrics", "--project", tmp_proj, "--usage-log"]):
+            try:
+                main()
+            except SystemExit as e:
+                assert e.code == 0 or e.code is None
+
+
     def test_truncation_guard(self, tmp_proj):
         """Verify that truncation guard blocks heavily truncated updates."""
         _call("knowledge_init", {"project": tmp_proj})

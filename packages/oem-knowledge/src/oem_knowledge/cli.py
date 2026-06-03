@@ -251,6 +251,12 @@ def _setup_parser() -> argparse.ArgumentParser:
     run_p.add_argument("agent", type=str, help="opencode, claude-code, cursor, or custom command")
     run_p.add_argument("--project", type=str, default="")
 
+    metrics_p = sub.add_parser("metrics")
+    metrics_p.add_argument("--project", type=str, default="")
+    metrics_p.add_argument("--reset", action="store_true", help="Reset all metrics to default")
+    metrics_p.add_argument("--export", type=str, help="Export raw metrics JSON to file path")
+    metrics_p.add_argument("--usage-log", type=int, nargs="?", const=10, help="Print recent entries from usage_log.jsonl (default 10)")
+
     return parser
 
 
@@ -562,6 +568,174 @@ def main():
 
         elif args.command == "run":
             run_agent(args.agent, eng)
+
+        elif args.command == "metrics":
+            metrics_file = eng._resolve_harness(project) / "state" / "metrics.json"
+            if args.usage_log is not None:
+                try:
+                    resolved_dir = eng._resolve_harness(project)
+                    log_file = resolved_dir / "state" / "usage_log.jsonl"
+                except Exception:
+                    log_file = Path(project or ".") / ".oem" / "state" / "usage_log.jsonl"
+
+                if not log_file.exists():
+                    print(render_panel("Usage Log", ["No usage log records found yet."], status="info"))
+                else:
+                    try:
+                        lines = log_file.read_text(encoding="utf-8").splitlines()
+                        limit = args.usage_log
+                        recent = lines[-limit:] if limit > 0 else []
+                        log_lines = []
+                        for r in recent:
+                            try:
+                                entry = json.loads(r)
+                                ts = entry.get("timestamp", "N/A")
+                                used = entry.get("concepts_used", [])
+                                ignored = entry.get("concepts_ignored", [])
+                                decs = entry.get("decisions", [])
+                                log_lines.append(f"[{ts}]")
+                                log_lines.append(f"  Used:    {', '.join(used) if used else 'None'}")
+                                log_lines.append(f"  Ignored: {', '.join(ignored) if ignored else 'None'}")
+                                if decs:
+                                    log_lines.append(f"  Decisions: {'; '.join(decs)}")
+                            except Exception:
+                                pass
+                        if not log_lines:
+                            log_lines = ["No valid entries found."]
+                        print(render_panel("Recent Usage Log", log_lines, status="info"))
+                    except Exception as e:
+                        print(render_panel("Log Error", [f"Failed to read usage log: {e}"], status="error"))
+            elif args.reset:
+                if metrics_file.exists():
+                    try:
+                        metrics_file.unlink()
+                    except Exception:
+                        pass
+                try:
+                    resolved_dir = eng._resolve_harness(project)
+                    log_file = resolved_dir / "state" / "usage_log.jsonl"
+                    if log_file.exists():
+                        log_file.unlink()
+                except Exception:
+                    pass
+                try:
+                    resolved_dir = eng._resolve_harness(project)
+                    session_state_file = resolved_dir / "state" / "session_state.json"
+                    if session_state_file.exists():
+                        session_state_file.unlink()
+                except Exception:
+                    pass
+
+                empty_metrics = {
+                    "retrieval": {
+                        "search_count": 0,
+                        "search_latency_total": 0.0,
+                        "search_latency_min": None,
+                        "search_latency_max": None,
+                        "last_search_latency": None,
+                        "last_search_at": None,
+                        "cache_hits": 0,
+                        "cache_misses": 0,
+                        "concepts_retrieved": 0
+                    },
+                    "context": {
+                        "context_count": 0,
+                        "context_latency_total": 0.0,
+                        "context_latency_min": None,
+                        "context_latency_max": None,
+                        "last_context_latency": None,
+                        "last_context_at": None
+                    },
+                    "knowledge_usage": {
+                        "concepts_injected": 0,
+                        "concepts_referenced": 0,
+                        "concepts_ignored": 0,
+                        "agent_decisions_aligned": 0,
+                        "last_report_at": None
+                    }
+                }
+                try:
+                    metrics_file.parent.mkdir(parents=True, exist_ok=True)
+                    metrics_file.write_text(json.dumps(empty_metrics, indent=2), encoding="utf-8")
+                except Exception as e:
+                    print(render_panel("Reset Error", [f"Failed to reset metrics: {e}"], status="error"))
+                    sys.exit(1)
+                print(render_panel("Metrics Reset", ["All retrieval and context metrics have been reset to zero."], status="ok"))
+            elif args.export:
+                if not metrics_file.exists():
+                    print(render_panel("Export Error", ["No metrics found to export."], status="error"))
+                    sys.exit(1)
+                try:
+                    dest = Path(args.export)
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy(metrics_file, dest)
+                    print(render_panel("Metrics Exported", [f"Raw metrics exported successfully to: {dest}"], status="ok"))
+                except Exception as e:
+                    print(render_panel("Export Error", [f"Failed to export metrics: {e}"], status="error"))
+                    sys.exit(1)
+            else:
+                if not metrics_file.exists():
+                    print(render_panel("Retrieval Metrics", ["No metrics recorded yet."], status="info"))
+                else:
+                    try:
+                        data = json.loads(metrics_file.read_text(encoding="utf-8"))
+                        retrieval = data.get("retrieval", {})
+                        context = data.get("context", {})
+                        usage = data.get("knowledge_usage", {})
+
+                        search_count = retrieval.get("search_count", 0)
+                        search_total = retrieval.get("search_latency_total", 0.0)
+                        search_min = retrieval.get("search_latency_min")
+                        search_max = retrieval.get("search_latency_max")
+                        search_last = retrieval.get("last_search_latency")
+                        search_last_at = retrieval.get("last_search_at")
+                        search_avg = (search_total / search_count) if search_count > 0 else 0.0
+                        concepts_retrieved = retrieval.get("concepts_retrieved", 0)
+
+                        hits = retrieval.get("cache_hits", 0)
+                        misses = retrieval.get("cache_misses", 0)
+                        total_lookups = hits + misses
+                        hit_rate = (hits / total_lookups * 100) if total_lookups > 0 else 0.0
+
+                        context_count = context.get("context_count", 0)
+                        context_total = context.get("context_latency_total", 0.0)
+                        context_min = context.get("context_latency_min")
+                        context_max = context.get("context_latency_max")
+                        context_last = context.get("last_context_latency")
+                        context_last_at = context.get("last_context_at")
+                        context_avg = (context_total / context_count) if context_count > 0 else 0.0
+
+                        lines = [
+                            "Retrieval Search Metrics:",
+                            f"  Total Searches:     {search_count}",
+                            f"  Concepts Retrieved: {concepts_retrieved}",
+                            f"  Avg Latency:        {search_avg:.2f} ms",
+                            f"  Min/Max Latency:    {f'{search_min:.2f}/{search_max:.2f}' if search_min is not None else 'N/A'} ms",
+                            f"  Last Latency:       {f'{search_last:.2f}' if search_last is not None else 'N/A'} ms",
+                            f"  Last Run:           {search_last_at or 'N/A'}",
+                            "",
+                            "Cache (RegistryCache) Metrics:",
+                            f"  Cache Hits:         {hits}",
+                            f"  Cache Misses:       {misses}",
+                            f"  Cache Hit Rate:     {hit_rate:.1f}%",
+                            "",
+                            "Context Metrics:",
+                            f"  Context Loads:      {context_count}",
+                            f"  Avg Latency:        {context_avg:.2f} ms",
+                            f"  Min/Max Latency:    {f'{context_min:.2f}/{context_max:.2f}' if context_min is not None else 'N/A'} ms",
+                            f"  Last Latency:       {f'{context_last:.2f}' if context_last is not None else 'N/A'} ms",
+                            f"  Last Run:           {context_last_at or 'N/A'}",
+                            "",
+                            "Knowledge Attribution Metrics (Self-Reported):",
+                            f"  Concepts Injected:   {usage.get('concepts_injected', 0)}",
+                            f"  Concepts Referenced: {usage.get('concepts_referenced', 0)}",
+                            f"  Concepts Ignored:    {usage.get('concepts_ignored', 0)}",
+                            f"  Decisions Aligned:   {usage.get('agent_decisions_aligned', 0)}",
+                            f"  Last Report At:      {usage.get('last_report_at') or 'N/A'}",
+                        ]
+                        print(render_panel("Retrieval Metrics", lines, status="info"))
+                    except Exception as e:
+                        print(render_panel("Metrics Error", [f"Failed to read metrics: {e}"], status="error"))
 
     except Exception as e:
         logging.exception("Unhandled error in command '%s'", args.command)

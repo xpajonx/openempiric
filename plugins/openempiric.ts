@@ -52,6 +52,152 @@ function stringSimilarity(s1: string, s2: string): number {
   return (maxLen - dist) / maxLen;
 }
 
+// ── Metrics Definitions & Persistence ─────────────────────────────────────────
+interface RetrievalMetrics {
+  search_count: number;
+  search_latency_total: number;
+  search_latency_min: number | null;
+  search_latency_max: number | null;
+  last_search_latency: number | null;
+  last_search_at: string | null;
+  cache_hits: number;
+  cache_misses: number;
+  concepts_retrieved: number;
+}
+
+interface ContextMetrics {
+  context_count: number;
+  context_latency_total: number;
+  context_latency_min: number | null;
+  context_latency_max: number | null;
+  last_context_latency: number | null;
+  last_context_at: string | null;
+}
+
+interface KnowledgeUsageMetrics {
+  concepts_injected: number;
+  concepts_referenced: number;
+  concepts_ignored: number;
+  agent_decisions_aligned: number;
+  last_report_at: string | null;
+}
+
+interface MetricsSchema {
+  retrieval: RetrievalMetrics;
+  context: ContextMetrics;
+  knowledge_usage: KnowledgeUsageMetrics;
+  [key: string]: any;
+}
+
+function updateMetrics(projectPath: string, updates: {
+  cache_hit?: boolean;
+  cache_miss?: boolean;
+  search_latency?: number;
+  context_latency?: number;
+  concepts_retrieved?: number;
+  concepts_injected?: number;
+  concepts_referenced?: number;
+  concepts_ignored?: number;
+  agent_decisions_aligned?: number;
+  last_report_at?: string | null;
+}) {
+  const metricsDir = path.join(projectPath, ".oem", "state");
+  const metricsPath = path.join(metricsDir, "metrics.json");
+
+  let data: MetricsSchema = {
+    retrieval: {
+      search_count: 0,
+      search_latency_total: 0.0,
+      search_latency_min: null,
+      search_latency_max: null,
+      last_search_latency: null,
+      last_search_at: null,
+      cache_hits: 0,
+      cache_misses: 0,
+      concepts_retrieved: 0
+    },
+    context: {
+      context_count: 0,
+      context_latency_total: 0.0,
+      context_latency_min: null,
+      context_latency_max: null,
+      last_context_latency: null,
+      last_context_at: null
+    },
+    knowledge_usage: {
+      concepts_injected: 0,
+      concepts_referenced: 0,
+      concepts_ignored: 0,
+      agent_decisions_aligned: 0,
+      last_report_at: null
+    }
+  };
+
+  try {
+    if (fs.existsSync(metricsPath)) {
+      const existing = JSON.parse(fs.readFileSync(metricsPath, "utf-8"));
+      data = { ...data, ...existing };
+      data.retrieval = { ...data.retrieval, ...existing.retrieval };
+      data.context = { ...data.context, ...existing.context };
+      data.knowledge_usage = { ...data.knowledge_usage, ...existing.knowledge_usage };
+    }
+  } catch (e) {
+    // Ignore errors
+  }
+
+  const nowStr = new Date().toISOString();
+
+  if (updates.cache_hit) {
+    data.retrieval.cache_hits = (data.retrieval.cache_hits || 0) + 1;
+  }
+  if (updates.cache_miss) {
+    data.retrieval.cache_misses = (data.retrieval.cache_misses || 0) + 1;
+  }
+  if (updates.search_latency !== undefined) {
+    const lat = updates.search_latency;
+    data.retrieval.search_count = (data.retrieval.search_count || 0) + 1;
+    data.retrieval.search_latency_total = (data.retrieval.search_latency_total || 0.0) + lat;
+    data.retrieval.search_latency_min = data.retrieval.search_latency_min === null ? lat : Math.min(data.retrieval.search_latency_min, lat);
+    data.retrieval.search_latency_max = data.retrieval.search_latency_max === null ? lat : Math.max(data.retrieval.search_latency_max, lat);
+    data.retrieval.last_search_latency = lat;
+    data.retrieval.last_search_at = nowStr;
+  }
+  if (updates.concepts_retrieved !== undefined) {
+    data.retrieval.concepts_retrieved = (data.retrieval.concepts_retrieved || 0) + updates.concepts_retrieved;
+  }
+  if (updates.concepts_injected !== undefined) {
+    data.knowledge_usage.concepts_injected = (data.knowledge_usage.concepts_injected || 0) + updates.concepts_injected;
+  }
+  if (updates.concepts_referenced !== undefined) {
+    data.knowledge_usage.concepts_referenced = (data.knowledge_usage.concepts_referenced || 0) + updates.concepts_referenced;
+  }
+  if (updates.concepts_ignored !== undefined) {
+    data.knowledge_usage.concepts_ignored = (data.knowledge_usage.concepts_ignored || 0) + updates.concepts_ignored;
+  }
+  if (updates.agent_decisions_aligned !== undefined) {
+    data.knowledge_usage.agent_decisions_aligned = (data.knowledge_usage.agent_decisions_aligned || 0) + updates.agent_decisions_aligned;
+  }
+  if (updates.last_report_at !== undefined) {
+    data.knowledge_usage.last_report_at = updates.last_report_at;
+  }
+  if (updates.context_latency !== undefined) {
+    const lat = updates.context_latency;
+    data.context.context_count = (data.context.context_count || 0) + 1;
+    data.context.context_latency_total = (data.context.context_latency_total || 0.0) + lat;
+    data.context.context_latency_min = data.context.context_latency_min === null ? lat : Math.min(data.context.context_latency_min, lat);
+    data.context.context_latency_max = data.context.context_latency_max === null ? lat : Math.max(data.context.context_latency_max, lat);
+    data.context.last_context_latency = lat;
+    data.context.last_context_at = nowStr;
+  }
+
+  try {
+    fs.mkdirSync(metricsDir, { recursive: true });
+    fs.writeFileSync(metricsPath, JSON.stringify(data, null, 2), "utf-8");
+  } catch (e) {
+    // Ignore write errors
+  }
+}
+
 // ── In-Memory RegistryCache ──────────────────────────────────────────────────
 interface RegistryItem {
   concept_id: string;
@@ -67,6 +213,37 @@ interface RegistryItem {
 
 type Registry = Record<string, RegistryItem>;
 
+// ── Ranking Strategy Abstraction ─────────────────────────────────────────────
+interface RankingStrategy {
+  score(candidate: { id: string; item: RegistryItem; score: number }): number;
+}
+
+class Phase09RankingStrategy implements RankingStrategy {
+  score(candidate: { id: string; item: RegistryItem; score: number }): number {
+    const { item, score: similarity } = candidate;
+    const confidence = item.confidence || 1;
+    const evidence = item.evidence_count || 0;
+    const failures = (item as any).failure_count || 0;
+    const status = item.status || "candidate";
+
+    const healthBoost = 0.05 * (confidence / 5.0) + 0.03 * Math.min(evidence / 10.0, 1.0) - 0.05 * Math.min(failures / 5.0, 1.0);
+
+    let statusBoost = 0.0;
+    if (status === "global" || status === "canonical") {
+      statusBoost = 0.10;
+    } else if (status === "validated") {
+      statusBoost = 0.05;
+    }
+
+    const sessionCount = item.session_count || 0;
+    const usageBoost = 0.02 * Math.min(sessionCount / 10.0, 1.0);
+
+    return similarity + healthBoost + statusBoost + usageBoost;
+  }
+}
+
+const rankingStrategy = new Phase09RankingStrategy();
+
 class RegistryCache {
   private cache: Map<string, { data: Registry; mtime: number }> = new Map();
 
@@ -74,19 +251,23 @@ class RegistryCache {
     const oemDir = path.join(projectPath, ".oem");
     const regPath = path.join(oemDir, "concept_registry.json");
     if (!fs.existsSync(regPath)) {
+      updateMetrics(projectPath, { cache_miss: true });
       return {};
     }
     const stat = fs.statSync(regPath);
     const cached = this.cache.get(regPath);
     if (cached && cached.mtime === stat.mtimeMs) {
+      updateMetrics(projectPath, { cache_hit: true });
       return cached.data;
     }
     try {
       const data = JSON.parse(fs.readFileSync(regPath, "utf-8")) as Registry;
       this.cache.set(regPath, { data, mtime: stat.mtimeMs });
+      updateMetrics(projectPath, { cache_miss: true });
       return data;
     } catch (e) {
       console.error("Failed to read registry cache:", e);
+      updateMetrics(projectPath, { cache_miss: true });
       return cached ? cached.data : {};
     }
   }
@@ -166,6 +347,159 @@ function saveTodos(todos: TodoItem[], workdir: string) {
   fs.writeFileSync(p, JSON.stringify(todos, null, 2), "utf-8");
 }
 
+// ── Context Assembler ────────────────────────────────────────────────────────
+interface ContextBudget {
+  conceptCountLimit: number;
+  tokenBudgetLimit: number;
+}
+
+class ContextAssembler {
+  private budget: ContextBudget;
+
+  constructor(budget: ContextBudget = { conceptCountLimit: 5, tokenBudgetLimit: 1500 }) {
+    this.budget = budget;
+  }
+
+  assemble(projectPath: string): string {
+    const oemDir = path.join(projectPath, ".oem");
+    const registry = registryCache.getRegistry(projectPath);
+
+    // 1. Load active concepts from registry prioritizing validated/canonical/global
+    const concepts: Array<{ id: string; name: string; description: string; score: number }> = [];
+    for (const [cid, cdata] of Object.entries(registry)) {
+      if (["validated", "canonical", "global"].includes(cdata.status)) {
+        const score = rankingStrategy.score({ id: cid, item: cdata, score: 0.5 });
+        
+        let description = "";
+        const wikiFile = path.join(oemDir, "wiki", `${cid}.md`);
+        if (fs.existsSync(wikiFile)) {
+          try {
+            const text = fs.readFileSync(wikiFile, "utf-8");
+            const body = text.replace(/^---[\s\S]*?---/, "").trim();
+            description = body.split("\n")[0].replace(/^#.*?\n/, "").trim().slice(0, 150);
+          } catch (e) {
+            // ignore
+          }
+        }
+        concepts.push({ id: cid, name: cdata.canonical_name, description, score });
+      }
+    }
+
+    concepts.sort((a, b) => b.score - a.score);
+
+    // 2. Read workspace state files directly
+    const readList = (filename: string): string[] => {
+      const fp = path.join(oemDir, filename);
+      if (!fs.existsSync(fp)) return [];
+      try {
+        const text = fs.readFileSync(fp, "utf-8");
+        return text.split("\n")
+          .map(line => line.trim())
+          .filter(line => line.startsWith("-"))
+          .map(line => line.replace(/^-\s*(\[[ xX/]])?\s*/, "").trim());
+      } catch (e) {
+        return [];
+      }
+    };
+
+    const activeGoals = readList("state/current-goals.md");
+    const blockers = readList("state/open-issues.md");
+    const discoveries = readList("state/active-decisions.md");
+
+    // Parse session-handoff
+    const handoffPath = path.join(oemDir, "session-handoff.md");
+    if (fs.existsSync(handoffPath)) {
+      try {
+        const text = fs.readFileSync(handoffPath, "utf-8");
+        const m = text.match(/## Next Action\s*\n\s*(?:-\s*)?([^\n#]+)/);
+        if (m && m[1]) {
+          activeGoals.unshift(m[1].trim());
+        }
+      } catch (e) {
+        // Ignore
+      }
+    }
+
+    // 3. Format dynamic markdown instructions under budget constraints
+    let instContent = "# openempiric Session Context\n\n";
+
+    instContent += "## Active Concepts\n";
+    let budgetUsedChars = instContent.length;
+    const charLimit = this.budget.tokenBudgetLimit * 4; // Approx 4 chars per token
+    let conceptCount = 0;
+    const injectedIds: string[] = [];
+
+    for (const c of concepts) {
+      if (conceptCount >= this.budget.conceptCountLimit) break;
+      const conceptStr = `- **${c.name}** (${c.id}): ${c.description || 'No description available.'}\n`;
+      if (budgetUsedChars + conceptStr.length > charLimit) break;
+      instContent += conceptStr;
+      budgetUsedChars += conceptStr.length;
+      conceptCount++;
+      injectedIds.push(c.id);
+    }
+    if (conceptCount === 0) {
+      instContent += "- None\n";
+    }
+
+    instContent += "\n## Active Decisions\n";
+    let decisionCount = 0;
+    for (const d of discoveries.slice(0, 5)) {
+      const decisionStr = `- ${d}\n`;
+      if (budgetUsedChars + decisionStr.length > charLimit) break;
+      instContent += decisionStr;
+      budgetUsedChars += decisionStr.length;
+      decisionCount++;
+    }
+    if (decisionCount === 0) {
+      instContent += "- None\n";
+    }
+
+    instContent += "\n## Relevant Failures\n";
+    let failureCount = 0;
+    for (const b of blockers.slice(0, 5)) {
+      const failureStr = `- ${b}\n`;
+      if (budgetUsedChars + failureStr.length > charLimit) break;
+      instContent += failureStr;
+      budgetUsedChars += failureStr.length;
+      failureCount++;
+    }
+    if (failureCount === 0) {
+      instContent += "- None\n";
+    }
+
+    instContent += "\n## Open Questions\n";
+    let questionCount = 0;
+    for (const q of activeGoals.slice(0, 5)) {
+      const questionStr = `- ${q}\n`;
+      if (budgetUsedChars + questionStr.length > charLimit) break;
+      instContent += questionStr;
+      budgetUsedChars += questionStr.length;
+      questionCount++;
+    }
+    if (questionCount === 0) {
+      instContent += "- None\n";
+    }
+
+    // Save injected concepts to session state
+    const sessionStatePath = path.join(projectPath, ".oem", "state", "session_state.json");
+    try {
+      fs.mkdirSync(path.dirname(sessionStatePath), { recursive: true });
+      fs.writeFileSync(sessionStatePath, JSON.stringify({
+        last_injected_concepts: injectedIds,
+        last_injected_at: new Date().toISOString()
+      }, null, 2), "utf-8");
+    } catch (e) {
+      // Ignore
+    }
+
+    // Increment injected concepts count immediately
+    updateMetrics(projectPath, { concepts_injected: injectedIds.length });
+
+    return instContent;
+  }
+}
+
 // ── Repo Dir Resolver ───────────────────────────────────────────────────────
 function resolveRepoDir(): string {
   if (process.env.OPENEMPIRIC_DIR) {
@@ -229,73 +563,83 @@ export const OpenempiricPlugin: Plugin = async ({ $ }) => {
         }
       }
 
-      // 2. Read OEMRuntimeContext from well-known file (primary) or env var (fallback)
-      const contextPath = process.env.OEM_RUNTIME_CONTEXT_PATH ||
-        path.join(os.homedir(), ".config", "opencode", "plugins", ".oem_runtime_context.json")
+      // 2. Read context using ContextAssembler dynamically from workspace, falling back to JSON
       const tempInstPath = process.env.OEM_TEMP_INSTRUCTIONS ||
         path.join(os.homedir(), ".config", "opencode", "plugins", ".openempiric_temp_instructions.md")
 
-      let oemContext: any = null
+      let instContent = "";
       try {
-        if (fs.existsSync(contextPath)) {
-          const content = fs.readFileSync(contextPath, "utf-8")
-          oemContext = JSON.parse(content)
-        }
+        const assembler = new ContextAssembler();
+        const activeProject = config.directory || process.cwd();
+        instContent = assembler.assemble(activeProject);
       } catch (e) {
-        console.error("Failed to read OEM runtime context from file:", e)
+        console.error("ContextAssembler failed, falling back to legacy JSON context:", e);
       }
-      if (!oemContext && config.mcp.openempiric.env?.OEM_RUNTIME_CONTEXT) {
+
+      // Legacy fallback
+      if (!instContent || instContent.trim() === "# openempiric Session Context\n\n## Active Concepts\n- None\n\n## Active Decisions\n- None\n\n## Relevant Failures\n- None\n\n## Open Questions\n- None") {
+        const contextPath = process.env.OEM_RUNTIME_CONTEXT_PATH ||
+          path.join(os.homedir(), ".config", "opencode", "plugins", ".oem_runtime_context.json")
+        let oemContext: any = null
         try {
-          oemContext = JSON.parse(config.mcp.openempiric.env.OEM_RUNTIME_CONTEXT)
+          if (fs.existsSync(contextPath)) {
+            const content = fs.readFileSync(contextPath, "utf-8")
+            oemContext = JSON.parse(content)
+          }
         } catch (e) {
-          console.error("Failed to parse OEM_RUNTIME_CONTEXT JSON:", e)
+          // Ignore
+        }
+        if (!oemContext && config.mcp.openempiric.env?.OEM_RUNTIME_CONTEXT) {
+          try {
+            oemContext = JSON.parse(config.mcp.openempiric.env.OEM_RUNTIME_CONTEXT)
+          } catch (e) {
+            // Ignore
+          }
+        }
+
+        if (oemContext) {
+          instContent = "# openempiric Session Context\n\n";
+          instContent += "## Active Concepts\n"
+          if (oemContext.active_concepts && oemContext.active_concepts.length > 0) {
+            oemContext.active_concepts.forEach((c: any) => {
+              instContent += `- **${c.name}** (${c.id}): ${c.description || 'No description available.'}\n`
+            })
+          } else {
+            instContent += "- None\n"
+          }
+          
+          instContent += "\n## Active Decisions\n"
+          if (oemContext.active_decisions && oemContext.active_decisions.length > 0) {
+            oemContext.active_decisions.forEach((d: any) => {
+              instContent += `- ${d}\n`
+            })
+          } else {
+            instContent += "- None\n"
+          }
+          
+          instContent += "\n## Relevant Failures\n"
+          if (oemContext.relevant_failures && oemContext.relevant_failures.length > 0) {
+            oemContext.relevant_failures.forEach((f: any) => {
+              instContent += `- ${f}\n`
+            })
+          } else {
+            instContent += "- None\n"
+          }
+          
+          instContent += "\n## Open Questions\n"
+          if (oemContext.open_questions && oemContext.open_questions.length > 0) {
+            oemContext.open_questions.forEach((q: any) => {
+              instContent += `- ${q}\n`
+            })
+          } else {
+            instContent += "- None\n"
+          }
         }
       }
 
-      // 3. Register Instructions (OEMRuntimeContext prompt injection)
       config.instructions = config.instructions || []
-      let instContent = "# openempiric Session Context\n\n"
-
-      if (oemContext) {
-        instContent += "## Active Concepts\n"
-        if (oemContext.active_concepts && oemContext.active_concepts.length > 0) {
-          oemContext.active_concepts.forEach((c: any) => {
-            instContent += `- **${c.name}** (${c.id}): ${c.description || 'No description available.'}\n`
-          })
-        } else {
-          instContent += "- None\n"
-        }
-        
-        instContent += "\n## Active Decisions\n"
-        if (oemContext.active_decisions && oemContext.active_decisions.length > 0) {
-          oemContext.active_decisions.forEach((d: any) => {
-            instContent += `- ${d}\n`
-          })
-        } else {
-          instContent += "- None\n"
-        }
-        
-        instContent += "\n## Relevant Failures\n"
-        if (oemContext.relevant_failures && oemContext.relevant_failures.length > 0) {
-          oemContext.relevant_failures.forEach((f: any) => {
-            instContent += `- ${f}\n`
-          })
-        } else {
-          instContent += "- None\n"
-        }
-        
-        instContent += "\n## Open Questions\n"
-        if (oemContext.open_questions && oemContext.open_questions.length > 0) {
-          oemContext.open_questions.forEach((q: any) => {
-            instContent += `- ${q}\n`
-          })
-        } else {
-          instContent += "- None\n"
-        }
-      }
-      
       try {
-        fs.writeFileSync(tempInstPath, instContent, "utf-8")
+        fs.writeFileSync(tempInstPath, instContent || "# openempiric Session Context\n\nNo active context available.", "utf-8")
         if (!config.instructions.includes(tempInstPath)) {
           config.instructions.push(tempInstPath)
         }
@@ -314,6 +658,7 @@ export const OpenempiricPlugin: Plugin = async ({ $ }) => {
           project: tool.schema.string().optional().describe("Project directory path")
         },
         async execute({ query, k, project }, context) {
+          const startTime = performance.now();
           const root = project || context.directory || process.cwd();
           const registry = registryCache.getRegistry(root);
           const normalizedQuery = query.toLowerCase().trim();
@@ -380,12 +725,15 @@ export const OpenempiricPlugin: Plugin = async ({ $ }) => {
             results.push({
               rel_path: path.join(".oem", "wiki", `${cand.id}.md`),
               snippet,
-              score: cand.score + fileBoost
+              score: rankingStrategy.score({ id: cand.id, item: cand.item, score: cand.score + fileBoost })
             });
           }
 
           results.sort((a, b) => b.score - a.score);
           const finalResults = results.slice(0, k || 3);
+
+          const duration = performance.now() - startTime;
+          updateMetrics(root, { search_latency: duration, concepts_retrieved: finalResults.length });
 
           if (finalResults.length === 0) {
             return renderPanel(`Search: 0 results`, [`No matches for: '${query}'`], "search");
@@ -407,6 +755,7 @@ export const OpenempiricPlugin: Plugin = async ({ $ }) => {
           project: tool.schema.string().optional().describe("Project directory path")
         },
         async execute({ project }, context) {
+          const startTime = performance.now();
           const root = project || context.directory || process.cwd();
           const oemDir = path.join(root, ".oem");
 
@@ -452,6 +801,10 @@ export const OpenempiricPlugin: Plugin = async ({ $ }) => {
             `Recent Discoveries:`,
             ...discoveries.slice(0, 5).map(d => `  💡 ${d}`)
           ];
+
+          const duration = performance.now() - startTime;
+          updateMetrics(root, { context_latency: duration });
+
           return renderPanel("Session Start", lines, "restore");
         }
       }),
@@ -687,6 +1040,75 @@ export const OpenempiricPlugin: Plugin = async ({ $ }) => {
 
           saveTodos(todos, root);
           return `Updated item ${item_id}: ${target.content} → ${target.status}`;
+        }
+      }),
+
+      knowledge_usage_report: tool({
+        description: "Report concept usage and decision alignment for the session. (Experimental/Low-Confidence Telemetry)",
+        args: {
+          concepts_used: tool.schema.array(tool.schema.string()).describe("Concept IDs referenced during this session"),
+          concepts_ignored: tool.schema.array(tool.schema.string()).optional().describe("Concept IDs ignored/not used during this session (optional, auto-derived if omitted)"),
+          decisions: tool.schema.array(tool.schema.string()).optional().describe("Decisions aligned with concepts (optional)"),
+          project: tool.schema.string().optional().describe("Project directory path")
+        },
+        async execute({ concepts_used, concepts_ignored, decisions, project }, context) {
+          const root = project || context.directory || process.cwd();
+          
+          // 1. Read last injected concepts from session state
+          const sessionStatePath = path.join(root, ".oem", "state", "session_state.json");
+          let injectedConcepts: string[] = [];
+          if (fs.existsSync(sessionStatePath)) {
+            try {
+              const stateData = JSON.parse(fs.readFileSync(sessionStatePath, "utf-8"));
+              if (Array.isArray(stateData.last_injected_concepts)) {
+                injectedConcepts = stateData.last_injected_concepts;
+              }
+            } catch (e) {
+              // Ignore
+            }
+          }
+
+          // 2. Auto-derive ignored concepts if not provided
+          let ignored = concepts_ignored || [];
+          if (!concepts_ignored) {
+            ignored = injectedConcepts.filter(cid => !concepts_used.includes(cid));
+          }
+
+          // 3. Update metrics
+          const nowStr = new Date().toISOString();
+          updateMetrics(root, {
+            concepts_referenced: concepts_used.length,
+            concepts_ignored: ignored.length,
+            agent_decisions_aligned: (decisions || []).length,
+            last_report_at: nowStr
+          });
+
+          // 4. Append to usage_log.jsonl
+          const logPath = path.join(root, ".oem", "state", "usage_log.jsonl");
+          const logEntry = {
+            timestamp: nowStr,
+            concepts_used,
+            concepts_ignored: ignored,
+            decisions: decisions || [],
+            session_concepts_injected: injectedConcepts
+          };
+          try {
+            fs.mkdirSync(path.dirname(logPath), { recursive: true });
+            fs.appendFileSync(logPath, JSON.stringify(logEntry) + "\n", "utf-8");
+          } catch (e) {
+            console.error("Failed to write to usage_log.jsonl:", e);
+          }
+
+          const lines = [
+            `Report Timestamp: ${nowStr}`,
+            `Concepts Used:    [${concepts_used.join(", ") || "None"}]`,
+            `Concepts Ignored: [${ignored.join(", ") || "None"}]`,
+            `Decisions Aligned: ${(decisions || []).length}`,
+            "",
+            "Note: This is experimental telemetry for establishing pipelines.",
+            "Roadmap decisions are not made on this reported usage."
+          ];
+          return renderPanel("Knowledge Usage Report Received", lines, "ok");
         }
       })
     }
