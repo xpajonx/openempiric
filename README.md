@@ -3,11 +3,14 @@
 </p>
 
 <p align="center">
-  <strong>Event-sourced knowledge operating system and agent runtime for AI.</strong>
+  <strong>Agent-agnostic event-sourced knowledge operating system and agent runtime for AI.</strong>
 </p>
 
 <p align="center">
   <a href="https://github.com/xpajonx/openempiric">GitHub</a> • 
+  <a href="docs/adapter-spec.md">Adapter Spec</a> •
+  <a href="docs/adapter-architecture.md">Adapter Architecture</a> •
+  <a href="docs/releases/v0.9.4.md">v0.9.4 Release Notes</a> •
   <a href="CONTRIBUTING.md">Contributing</a> • 
   <a href="LICENSE">License</a>
 </p>
@@ -21,7 +24,7 @@
 
 Most AI memory systems focus on *remembering*. We believe the harder and more important problem is **learning**.
 
-`openempiric` is an event-sourced knowledge operating system for coding agents that continuously converts conversations, experiments, decisions, successes, and failures into structured, durable organizational knowledge that improves over time.
+`openempiric` is an agent-agnostic event-sourced knowledge runtime for coding agents that continuously converts conversations, experiments, decisions, successes, and failures into structured, durable organizational knowledge that improves over time.
 
 ---
 
@@ -36,14 +39,35 @@ Most AI memory systems focus on *remembering*. We believe the harder and more im
 - 📋 **Todo Tracking** — Maintain persistent task lists directly alongside validated concept growth.
 
 ### ⚡ Agent Runtime (`oem`)
-- 🤖 **Agent Wrapping (`oem run`)** — Automatically injects openempiric plugin settings into your coding agent (e.g., `opencode`) on the fly, and restores original files on exit.
+- 🤖 **Agent Wrapping (`oem run`)** — Automatically injects openempiric settings into your coding agent on the fly, and restores original files on exit.
 - 🔄 **Session Lifecycle Automation** — Spawns agent processes with pre-injection context loaded from past sessions, committing and reflecting on learnings automatically upon exit.
 
 ---
 
 ## Install & Setup
 
-### Contributors & Testers Setup
+### Global Installation (For General Users)
+
+Install the `oem` CLI globally on your machine using `uv` or `pipx`:
+
+```bash
+# Using uv (Recommended)
+uv tool install --editable ./packages/oem-knowledge
+
+# Or using pipx
+pipx install ./packages/oem-knowledge
+```
+
+Once installed, verify the setup:
+```bash
+oem doctor
+```
+
+---
+
+### Workspace Contributor Setup
+
+If you are developing or contributing to OpenEmpiric:
 
 1. **Clone the repository:**
    ```bash
@@ -52,19 +76,19 @@ Most AI memory systems focus on *remembering*. We believe the harder and more im
    ```
 
 2. **Synchronize the UV workspace:**
-   Use the `--all-packages` flag to sync all workspace members and install command-line tools like `oem` in the local virtual environment:
+   Use the `--all-packages` flag to sync all workspace members and install tools:
    ```bash
    uv sync --all-packages --all-extras --dev
    ```
 
 3. **Verify the installation:**
-   Run the test suite to ensure everything is set up correctly (tests run fully offline in ~5s using a mocked embedding engine):
+   Run the test suite (runs offline using a mocked embedding engine):
    ```bash
    uv run pytest
    ```
 
 4. **Verify doctor check status:**
-   Validate your environment dependencies and check the embedding model cache status:
+   Validate your environment dependencies and cache status:
    ```bash
    uv run oem doctor
    ```
@@ -89,14 +113,15 @@ OpenEmpiric uses a single UV workspace virtual environment. Do NOT create packag
 ```text
 root/
 ├── .venv/            ← Single shared virtual environment
+├── docs/             ← Release notes, architecture, and adapter specifications
 └── packages/         ← Workspace member packages (oem-knowledge, oem-tui)
 ```
 
 ---
 
-## Configure as OpenCode Plugin (WSL)
+## Configure as OpenCode Plugin (WSL Optional)
 
-`openempiric` operates as a native OpenCode plugin.
+While `openempiric` is designed to be fully agent-agnostic and work with any wrapper, it features a native OpenCode plugin:
 
 1. **Install/Enable the Plugin:**
    Symlink the plugin file to OpenCode's plugins directory:
