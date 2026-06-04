@@ -544,6 +544,13 @@ class KnowledgeEngine:
             "created_files": created_files,
         }
 
+    def warmup(self) -> dict:
+        import sys
+        print("[OEM] Warming up embedding model 'BAAI/bge-small-en-v1.5'...", file=sys.stderr)
+        _ = self.model
+        print("[OEM] Embedding model ready (cached globally, one-time per machine).", file=sys.stderr)
+        return {"status": "success", "model": "BAAI/bge-small-en-v1.5"}
+
     def restore_session_state(self, project: str | None = None) -> dict:
         h = self._resolve_harness(project)
         state_dir = h / "state"

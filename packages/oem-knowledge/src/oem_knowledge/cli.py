@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 
 from oem_tui.panels import render_panel
@@ -122,7 +123,10 @@ def _compile_oem_context(eng: KnowledgeEngine) -> dict:
     }
 
 
-def run_agent(agent_name: str, eng: KnowledgeEngine):
+def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None):
+    # 0. Resolve project harness
+    harness = eng._resolve_harness(project)
+
     # 1. Ensure plugin is available in opencode plugins dir
     plugin_src = _REPO_ROOT / "plugins" / "openempiric.ts"
     _OPENCODE_PLUGINS_DIR.mkdir(parents=True, exist_ok=True)
@@ -142,7 +146,8 @@ def run_agent(agent_name: str, eng: KnowledgeEngine):
             except Exception as e:
                 logging.warning("Failed to copy plugin file to %s: %s", plugin_dest, e)
 
-    # 2. Compile OEMRuntimeContext and write to well-known file
+    # 2. Pre-session: generate session_id, restore state, compile context
+    session_id = uuid.uuid4().hex[:12]
     context = _compile_oem_context(eng)
     try:
         _OEM_RUNTIME_CONTEXT_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -152,20 +157,59 @@ def run_agent(agent_name: str, eng: KnowledgeEngine):
     except Exception as e:
         logging.warning("Failed to write runtime context to %s: %s", _OEM_RUNTIME_CONTEXT_PATH, e)
 
-    # 3. Spawn the coding agent
-    logging.info("Spawning coding agent: %s...", agent_name)
+    try:
+        logging.info("Restoring session state (session_id=%s)", session_id)
+        eng.restore_session_state(project)
+    except Exception as e:
+        logging.warning("Pre-session restore failed: %s", e)
+
+    # 3. Spawn agent with managed mode env vars
+    managed_env = os.environ.copy()
+    managed_env["OEM_MANAGED"] = "1"
+    managed_env["OEM_SESSION_ID"] = session_id
+    managed_env["OEM_RUNTIME_CONTEXT_PATH"] = str(_OEM_RUNTIME_CONTEXT_PATH)
+    if project:
+        managed_env["OEM_PROJECT"] = project
+
+    logging.info("Spawning coding agent: %s... (managed session_id=%s)", agent_name, session_id)
     try:
         if agent_name == "opencode":
-            subprocess.run(["opencode"], check=True)
+            subprocess.run(["opencode"], check=True, env=managed_env)
         elif agent_name == "claude-code":
-            subprocess.run(["claude"], check=True)
+            subprocess.run(["claude"], check=True, env=managed_env)
         elif agent_name == "cursor":
-            subprocess.run(["cursor", "."], check=True)
+            subprocess.run(["cursor", "."], check=True, env=managed_env)
         else:
-            subprocess.run(agent_name.split(), check=True)
+            subprocess.run(agent_name.split(), check=True, env=managed_env)
     except Exception as e:
         logging.warning("Agent session finished or returned: %s", e)
     finally:
+        # 4. Post-session: read deferred chat from plugin
+        chat_path = harness / "state" / f"chat_{session_id}.md"
+        chat_text = chat_path.read_text(encoding="utf-8") if chat_path.exists() else ""
+        if chat_path.exists():
+            try:
+                chat_path.unlink()
+            except Exception:
+                pass
+
+        # 5. Session commit (reflect → materialize → graph → index)
+        try:
+            commit_res = eng.session_commit(project, conversation_text=chat_text, session_id=session_id)
+            logging.info("Session commit: report=%s events=%d materialized=%d",
+                         commit_res.get("report_path", "?"),
+                         len(commit_res.get("canonical_events", [])),
+                         len(commit_res.get("materialized_log", [])))
+        except Exception as e:
+            logging.warning("Post-session commit failed: %s", e)
+
+        # 6. Record outcome
+        try:
+            eng.record_outcome("success", session_id=session_id, project=project)
+        except Exception as e:
+            logging.warning("Outcome recording failed: %s", e)
+
+        # 7. Cleanup temp files
         for p in [_OEM_RUNTIME_CONTEXT_PATH, _OEM_TEMP_INSTRUCTIONS]:
             if p.exists():
                 try:
@@ -287,6 +331,9 @@ def _setup_parser() -> argparse.ArgumentParser:
 
     doctor_p = sub.add_parser("doctor", help="Check workspace health and configuration")
     doctor_p.add_argument("--project", type=str, default="")
+
+    warmup_p = sub.add_parser("warmup", help="Pre-download embedding model (one-time per machine)")
+    warmup_p.add_argument("--project", type=str, default="")
 
     return parser
 
@@ -671,7 +718,7 @@ def main():
                 print(render_panel("Concepts Merged", [res.get("message", "")], status="ok"))
 
         elif args.command == "run":
-            run_agent(args.agent, eng)
+            run_agent(args.agent, eng, project)
 
         elif args.command == "todo":
             from oem_knowledge.tools.todos import oem_todo_read, oem_todo_write, oem_todo_advance
@@ -884,6 +931,10 @@ def main():
                         print(render_panel("Retrieval Metrics", lines, status="info"))
                     except Exception as e:
                         print(render_panel("Metrics Error", [f"Failed to read metrics: {e}"], status="error"))
+        elif args.command == "warmup":
+            res = eng.warmup()
+            print(render_panel("Model Warm-Up", [f"Status: {res['status']}", f"Model: {res['model']}", "", "Embedding model is now cached globally.", "Run `oem doctor` to verify."], status="ok"))
+
         elif args.command == "doctor":
             try:
                 resolved_dir = eng._resolve_harness(project)
@@ -985,7 +1036,8 @@ def main():
                 TextEmbedding(model_name="BAAI/bge-small-en-v1.5", local_files_only=True)
                 lines.append("✓ Embedding model (BAAI/bge-small-en-v1.5) is cached locally")
             except Exception:
-                lines.append("⚠ Embedding model (BAAI/bge-small-en-v1.5) is not cached (will download on first run)")
+                lines.append("⚠ Embedding model (BAAI/bge-small-en-v1.5) is not cached")
+                lines.append("  → Run `oem warmup` once per machine to pre-download")
 
             print(render_panel("OEM Environment Check", lines, status=status))
 

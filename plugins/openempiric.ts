@@ -682,6 +682,18 @@ export const OpenempiricPlugin: Plugin = async ({ $ }) => {
         },
         async execute({ project, chat, session_id }, context) {
           const root = project || context.directory || process.cwd();
+          if (process.env.OEM_MANAGED === "1") {
+            const sid = process.env.OEM_SESSION_ID || session_id || `fallback_${Date.now()}`;
+            const oemDir = path.join(root, ".oem");
+            const stateDir = path.join(oemDir, "state");
+            const chatFile = path.join(stateDir, `chat_${sid}.md`);
+            fs.mkdirSync(stateDir, { recursive: true });
+            fs.writeFileSync(chatFile, chat || "", "utf-8");
+            return renderPanel("Session Deferred", [
+              `Session ${sid} chat logged to runtime.`,
+              "OEM runtime will commit on agent exit."
+            ], "ok");
+          }
           const cmdArgs = ["session-end"];
           if (chat) {
             cmdArgs.push("--chat", chat);

@@ -79,7 +79,14 @@ def test_oem_run(tmp_proj):
 
             main()
 
-            mock_run.assert_called_once_with(["mock-agent"], check=True)
+            mock_run.assert_called_once()
+            args, kwargs = mock_run.call_args
+            assert args[0] == ["mock-agent"]
+            assert kwargs.get("check") is True
+            assert kwargs.get("env") is not None
+            assert kwargs["env"].get("OEM_MANAGED") == "1"
+            assert "OEM_SESSION_ID" in kwargs["env"]
+            assert kwargs["env"].get("OEM_PROJECT") == tmp_proj
 
     # Both transient files should be cleaned up after run finishes
     assert not _OEM_RUNTIME_CONTEXT_PATH.exists()
