@@ -11,6 +11,7 @@
   <a href="docs/adapter-spec.md">Adapter Spec</a> •
   <a href="docs/adapter-architecture.md">Adapter Architecture</a> •
   <a href="docs/releases/v0.9.4.md">v0.9.4 Release Notes</a> •
+  <a href="docs/development/docker.md">Docker Dev Environment</a> •
   <a href="CONTRIBUTING.md">Contributing</a> • 
   <a href="LICENSE">License</a>
 </p>
