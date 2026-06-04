@@ -900,25 +900,35 @@ def main():
             pyproject_path = workspace_root / "pyproject.toml"
             root_venv_path = workspace_root / ".venv"
             
+            # Detect if this is the OpenEmpiric development workspace
+            is_dev_workspace = False
+            if pyproject_path.exists():
+                try:
+                    content = pyproject_path.read_text(encoding="utf-8")
+                    if 'name = "oem-mcp"' in content:
+                        is_dev_workspace = True
+                except Exception:
+                    pass
+
             lines = []
             status = "ok"
 
-            # 1. Root workspace check
-            if pyproject_path.exists():
-                lines.append("✓ Root workspace detected")
-            else:
-                lines.append("✗ Root workspace pyproject.toml not found")
-                status = "error"
+            if is_dev_workspace:
+                # 1. Root workspace check
+                if pyproject_path.exists():
+                    lines.append("✓ Root workspace detected")
+                else:
+                    lines.append("✗ Root workspace pyproject.toml not found")
+                    status = "error"
 
-            # 2. Root venv check
-            if root_venv_path.exists():
-                lines.append("✓ Root .venv exists")
-            else:
-                lines.append("✗ Root .venv not found")
-                status = "error"
+                # 2. Root venv check
+                if root_venv_path.exists():
+                    lines.append("✓ Root .venv exists")
+                else:
+                    lines.append("✗ Root .venv not found")
+                    status = "error"
 
-            # 3. UV workspace health check
-            if pyproject_path.exists():
+                # 3. UV workspace health check
                 try:
                     content = pyproject_path.read_text(encoding="utf-8")
                     if "[tool.uv.workspace]" in content:
@@ -929,30 +939,30 @@ def main():
                 except Exception as e:
                     lines.append(f"✗ Failed to read root pyproject.toml: {e}")
                     status = "error"
-            else:
-                lines.append("✗ UV workspace health check failed")
-                status = "error"
 
-            # 4. Nested virtualenvs scan
-            nested_venvs = []
-            packages_dir = workspace_root / "packages"
-            if packages_dir.exists() and packages_dir.is_dir():
-                for p in packages_dir.iterdir():
-                    if p.is_dir():
-                        sub_venv = p / ".venv"
-                        if sub_venv.exists():
-                            nested_venvs.append(str(sub_venv.relative_to(workspace_root)))
+                # 4. Nested virtualenvs scan
+                nested_venvs = []
+                packages_dir = workspace_root / "packages"
+                if packages_dir.exists() and packages_dir.is_dir():
+                    for p in packages_dir.iterdir():
+                        if p.is_dir():
+                            sub_venv = p / ".venv"
+                            if sub_venv.exists():
+                                nested_venvs.append(str(sub_venv.relative_to(workspace_root)))
 
-            if nested_venvs:
-                status = "error"
-                for nv in nested_venvs:
-                    lines.append(f"✗ Nested virtualenv detected: {nv}")
-                lines.append("")
-                lines.append("Suggested Fix:")
-                lines.append(f"  rm -rf {Path(packages_dir.relative_to(workspace_root)) / '*/.venv'}")
-                lines.append("  uv sync")
+                if nested_venvs:
+                    status = "error"
+                    for nv in nested_venvs:
+                        lines.append(f"✗ Nested virtualenv detected: {nv}")
+                    lines.append("")
+                    lines.append("Suggested Fix:")
+                    lines.append(f"  rm -rf {Path(packages_dir.relative_to(workspace_root)) / '*/.venv'}")
+                    lines.append("  uv sync")
+                else:
+                    lines.append("✓ No nested virtualenvs detected")
             else:
-                lines.append("✓ No nested virtualenvs detected")
+                lines.append("✓ Running as globally installed user tool")
+                lines.append(f"✓ Project directory: {workspace_root.resolve()}")
 
             # 5. Events log schema version check
             try:

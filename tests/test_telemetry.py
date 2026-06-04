@@ -108,7 +108,7 @@ def test_doctor_cmd(tmp_proj):
     """Verify oem doctor command detection."""
     # Write virtual pyproject.toml
     pyproject = Path(tmp_proj) / "pyproject.toml"
-    pyproject.write_text("[tool.uv.workspace]\nmembers = []\n", encoding="utf-8")
+    pyproject.write_text("[project]\nname = \"oem-mcp\"\n\n[tool.uv.workspace]\nmembers = []\n", encoding="utf-8")
     
     # Create fake .venv
     venv = Path(tmp_proj) / ".venv"

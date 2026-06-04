@@ -84,3 +84,12 @@ def test_oem_run(tmp_proj):
     # Both transient files should be cleaned up after run finishes
     assert not _OEM_RUNTIME_CONTEXT_PATH.exists()
     assert not _OEM_TEMP_INSTRUCTIONS.exists()
+
+
+def test_oem_doctor_user_project(tmp_proj):
+    """Verify that 'oem doctor' succeeds (exits 0) when run in a user project directory."""
+    with patch.object(sys, "argv", ["oem", "doctor", "--project", tmp_proj]):
+        try:
+            main()
+        except SystemExit as e:
+            assert e.code == 0 or e.code is None
