@@ -179,19 +179,31 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None)
             subprocess.run(["claude"], check=True, env=managed_env)
         elif agent_name == "cursor":
             subprocess.run(["cursor", "."], check=True, env=managed_env)
+        elif agent_name in ("agy", "antigravity"):
+            # Run the antigravity (agy) agent
+            subprocess.run(["agy"], check=True, env=managed_env)
         else:
             subprocess.run(agent_name.split(), check=True, env=managed_env)
     except Exception as e:
         logging.warning("Agent session finished or returned: %s", e)
     finally:
-        # 4. Post-session: read deferred chat from plugin
-        chat_path = harness / "state" / f"chat_{session_id}.md"
-        chat_text = chat_path.read_text(encoding="utf-8") if chat_path.exists() else ""
-        if chat_path.exists():
-            try:
-                chat_path.unlink()
-            except Exception:
-                pass
+        # 4. Post-session: read deferred chat from plugin or from agent transcripts
+        chat_text = ""
+        if agent_name in ("agy", "antigravity"):
+            from oem_knowledge.adapters.antigravity.adapter import AntigravityAdapter
+            adapter = AntigravityAdapter(eng)
+            latest_t = adapter.discover_latest_transcript()
+            if latest_t:
+                logging.info(f"Discovered Antigravity transcript: {latest_t}")
+                chat_text = adapter.parse_transcript(latest_t)
+        else:
+            chat_path = harness / "state" / f"chat_{session_id}.md"
+            if chat_path.exists():
+                chat_text = chat_path.read_text(encoding="utf-8")
+                try:
+                    chat_path.unlink()
+                except Exception:
+                    pass
 
         # 5. Session commit (reflect → materialize → graph → index)
         try:
@@ -202,6 +214,7 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None)
                          len(commit_res.get("materialized_log", [])))
         except Exception as e:
             logging.warning("Post-session commit failed: %s", e)
+
 
         # 6. Record outcome
         try:

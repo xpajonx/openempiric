@@ -161,8 +161,9 @@ The package exposes the unified `oem` command-line utility for managing the proj
 # Initialize openempiric in a project
 oem init
 
-# Run an agent (e.g. opencode) with dynamic config injection & lifecycle commitment
+# Run an agent (e.g. opencode, agy) with dynamic config injection & lifecycle commitment
 oem run opencode
+oem run agy
 
 # Manually start/commit session states
 oem session-start
@@ -173,6 +174,7 @@ oem lint --fix
 
 # Query stats and status
 oem status
+
 ```
 
 ---
