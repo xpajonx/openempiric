@@ -61,7 +61,11 @@ class StateService:
         return new_id, new_data
 
     def evaluate_concept_status(
-        self, cdata: dict, e_type: str, session_id: str
+        self,
+        cdata: dict,
+        e_type: str,
+        session_id: str,
+        fitness_data: dict | None = None,
     ) -> dict:
         confidence = cdata.get("confidence", 1)
 
@@ -77,17 +81,63 @@ class StateService:
         cdata["confidence"] = confidence
 
         current_status = cdata.get("status", "candidate")
+        evidence_count = cdata.get("evidence_count", 0)
 
+        # Retrieve fitness telemetry (treated as correlation, not proof of correctness)
+        cid = cdata.get("concept_id")
+        fit_score = 0.0
+        succ_sessions = 0
+        fail_sessions = 0
+        has_fitness = False
+
+        if fitness_data and cid in fitness_data:
+            fit = fitness_data[cid]
+            fit_score = fit.fitness_score
+            succ_sessions = fit.successful_sessions
+            fail_sessions = fit.failed_sessions
+            has_fitness = (fit.successful_sessions + fit.failed_sessions) > 0
+
+        # Confidence/Evidence awareness for demotion thresholds
+        if confidence >= 4 or evidence_count >= 10:
+            min_failures = 5
+        else:
+            min_failures = 3
+
+        # Status transitions
+        history_reason = ""
         if e_type == "deprecation":
             new_status = "deprecated"
+            history_reason = "Manual/event-triggered deprecation"
+        elif has_fitness and fail_sessions >= min_failures and fit_score < 0.60:
+            new_status = "needs_review"
+            history_reason = f"Telemetry Correlation: Repeated failures (fitness: {fit_score * 100:.1f}%, failures: {fail_sessions}/{fail_sessions + succ_sessions}, confidence: {confidence}, evidence: {evidence_count})"
+        elif current_status == "needs_review":
+            # If it is already needs_review, it can only exit via deprecation or High Fitness promotion
+            if has_fitness and fit_score >= 0.80 and succ_sessions >= 2 and evidence_count >= 2:
+                new_status = "validated"
+                history_reason = f"Telemetry Correlation: High fitness promotion from review (fitness: {fit_score * 100:.1f}%, successes: {succ_sessions}, evidence: {evidence_count})"
+            else:
+                new_status = "needs_review"
+                history_reason = "Status retained: remains in needs_review"
         elif cdata.get("session_count", 0) >= 5 and cdata["confidence"] >= 4:
             new_status = "canonical"
-        elif cdata.get("evidence_count", 0) >= 3 or current_status == "validated":
+            history_reason = f"Standard Promotion: High session usage ({cdata.get('session_count', 0)}) and confidence ({confidence})"
+        elif (
+            evidence_count >= 3
+            or current_status == "validated"
+            or (has_fitness and fit_score >= 0.80 and succ_sessions >= 2 and evidence_count >= 2)
+        ):
             new_status = "validated"
+            if has_fitness and fit_score >= 0.80 and succ_sessions >= 2 and evidence_count >= 2 and current_status not in ("validated", "canonical"):
+                history_reason = f"Telemetry Correlation: High fitness promotion (fitness: {fit_score * 100:.1f}%, successes: {succ_sessions}, evidence: {evidence_count})"
+            else:
+                history_reason = f"Standard Validation: Evidence count ({evidence_count}) or status retention"
         elif cdata.get("session_count", 0) >= 2:
             new_status = "emerging"
+            history_reason = f"Standard Promotion: Emerging concept based on session count ({cdata.get('session_count', 0)})"
         else:
             new_status = "candidate"
+            history_reason = "Standard initialization as Candidate"
 
         if new_status != current_status:
             cdata.setdefault("promotion_history", []).append({
@@ -95,6 +145,7 @@ class StateService:
                 "to_status": new_status,
                 "trigger_event": e_type,
                 "session_id": session_id,
+                "reason": history_reason,
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             })
 
@@ -226,6 +277,7 @@ class StateService:
                 except Exception:
                     pass
 
+        fitness_data = self.engine.calculate_fitness(project)
         events = self._load_events(project)
         for event in events:
             concept_candidates = event.get("concept_candidates", [])
@@ -244,6 +296,7 @@ class StateService:
                 cdata=cdata,
                 e_type=event.get("event_type", "observation"),
                 session_id=event.get("session_id", "historical"),
+                fitness_data=fitness_data,
             )
             temp_registry[cid] = cdata
 
@@ -252,9 +305,12 @@ class StateService:
         materialized_log = []
         concepts_dir.mkdir(parents=True, exist_ok=True)
         for cid, cdata in temp_registry.items():
-            if cdata["status"] in ("validated", "canonical"):
+            if cdata["status"] in ("validated", "canonical", "needs_review"):
                 concept_file = concepts_dir / f"{cid}.md"
-                body = f"# {cdata['canonical_name'].replace('-', ' ').title()}\n\nThis concept is a validated organizational knowledge node.\n\n## Learnings\n"
+                if cdata["status"] == "needs_review":
+                    body = f"# {cdata['canonical_name'].replace('-', ' ').title()}\n\nThis concept requires review due to repeated session failures.\n\n## Learnings\n"
+                else:
+                    body = f"# {cdata['canonical_name'].replace('-', ' ').title()}\n\nThis concept is a validated organizational knowledge node.\n\n## Learnings\n"
 
                 concept_content = f"---\nconcept_id: {cid}\ncanonical_name: {cdata['canonical_name']}\nstatus: {cdata['status']}\nconfidence: {cdata['confidence']}\nevidence_count: {cdata['evidence_count']}\nsession_count: {cdata.get('session_count', 0)}\naliases: {json.dumps(cdata.get('aliases', []))}\n---\n{body}"
                 self.engine._safe_write_concept_file(concept_file, concept_content, project)

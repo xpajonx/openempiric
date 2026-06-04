@@ -182,6 +182,7 @@ class MaterializationService:
             }
 
         registry = self.engine._load_registry(project)
+        fitness_data = self.engine.calculate_fitness(project)
         materialized_log = []
 
         for event in knowledge_events:
@@ -194,13 +195,13 @@ class MaterializationService:
             if evidence:
                 cdata["evidence_count"] = cdata.get("evidence_count", 0) + 1
 
-            cdata = self.engine.evaluate_concept_status(cdata, e_type, session_id=latest.stem)
+            cdata = self.engine.evaluate_concept_status(cdata, e_type, session_id=latest.stem, fitness_data=fitness_data)
             new_status = cdata["status"]
             registry[cid] = cdata
 
             concept_file = concepts_dir / f"{cid}.md"
 
-            if new_status in ("validated", "canonical"):
+            if new_status in ("validated", "canonical", "needs_review"):
                 existing_body = ""
                 is_new = not concept_file.exists()
                 if not is_new:
@@ -213,7 +214,10 @@ class MaterializationService:
 
                 learning = f"- **{e_type.title()}**: {evidence}" if evidence else ""
                 if is_new:
-                    body = f"# {cdata['canonical_name'].replace('-', ' ').title()}\n\nThis concept is a validated organizational knowledge node.\n\n## Learnings\n{learning}\n"
+                    if new_status == "needs_review":
+                        body = f"# {cdata['canonical_name'].replace('-', ' ').title()}\n\nThis concept requires review due to repeated session failures.\n\n## Learnings\n{learning}\n"
+                    else:
+                        body = f"# {cdata['canonical_name'].replace('-', ' ').title()}\n\nThis concept is a validated organizational knowledge node.\n\n## Learnings\n{learning}\n"
                 else:
                     body = existing_body
                     if learning:

@@ -431,8 +431,8 @@ class KnowledgeEngine:
     def _resolve_concept(self, term: str, registry: dict) -> tuple[str, dict]:
         return self.state_service._resolve_concept(term, registry)
 
-    def evaluate_concept_status(self, cdata: dict, e_type: str, session_id: str) -> dict:
-        return self.state_service.evaluate_concept_status(cdata, e_type, session_id)
+    def evaluate_concept_status(self, cdata: dict, e_type: str, session_id: str, fitness_data: dict | None = None) -> dict:
+        return self.state_service.evaluate_concept_status(cdata, e_type, session_id, fitness_data)
 
     def consolidate(self, project: str | None = None) -> dict:
         return self.state_service.consolidate(project)

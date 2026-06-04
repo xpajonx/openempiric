@@ -32,6 +32,8 @@ def calculate_concept_health(cdata: dict) -> float:
         score += 10.0
     elif status == "validated":
         score += 5.0
+    elif status == "needs_review":
+        score -= 20.0
     elif status == "deprecated":
         score = 0.0
         return score
