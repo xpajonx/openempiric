@@ -19,7 +19,7 @@ try:
     from importlib.metadata import version as _pkg_version
     _VERSION = _pkg_version("oem-knowledge")
 except Exception:
-    _VERSION = "0.1.0"
+    _VERSION = "0.9.5"
 
 # ── Configurable paths (via env vars with sensible defaults) ────────────────
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent

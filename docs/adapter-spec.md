@@ -22,7 +22,7 @@ A successful integration divides responsibilities cleanly between the shared Ope
 An adapter implements capabilities to interface with the OEM runtime. The following YAML specification defines required and optional capabilities:
 
 ```yaml
-version: "0.9.4"
+version: "0.9.5"
 capabilities:
   required:
     context_injection:

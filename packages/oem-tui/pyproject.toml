@@ -1,6 +1,6 @@
 [project]
 name = "oem-tui"
-version = "0.1.0"
+version = "0.9.5"
 description = "Shared TUI primitives for OEM panels and styling"
 requires-python = ">=3.12"
 dependencies = []
