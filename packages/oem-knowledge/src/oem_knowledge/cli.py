@@ -978,6 +978,87 @@ def main():
                 lines.append("⚠ Embedding model (BAAI/bge-small-en-v1.5) is not cached (will download on first run)")
 
             print(render_panel("OEM Environment Check", lines, status=status))
+
+            # --- Knowledge Health Dashboard ---
+            try:
+                fitness_data = eng.calculate_fitness(project)
+                registry = eng._load_registry(project)
+
+                tested = []
+                untested = []
+
+                for cid, fit in fitness_data.items():
+                    conf = registry.get(cid, {}).get("confidence", 1)
+                    entry = {
+                        "id": cid,
+                        "name": fit.canonical_name.replace("-", " ").title(),
+                        "fitness": fit.fitness_score,
+                        "evidence": fit.evidence_count,
+                        "referenced": fit.referenced,
+                        "successful": fit.successful_sessions,
+                        "failed": fit.failed_sessions,
+                        "confidence": conf,
+                    }
+                    if fit.referenced > 0:
+                        # Composite score: fitness weighted by log of evidence
+                        # Concepts with more evidence are more reliable signals
+                        import math
+                        entry["composite"] = fit.fitness_score * (1.0 + 0.3 * math.log1p(fit.evidence_count))
+                        tested.append(entry)
+                    else:
+                        untested.append(entry)
+
+                tested_by_composite = sorted(tested, key=lambda x: x["composite"], reverse=True)
+                top = tested_by_composite[:5]
+                bottom = [x for x in tested_by_composite[::-1] if x["fitness"] < 1.0][:5]
+
+                dash_lines = [
+                    "⚠  Scores are outcome correlations, not causation.",
+                    "   Ranked by: Fitness × Evidence (composite score).",
+                    "",
+                ]
+
+                if not tested:
+                    dash_lines.append("No session outcome data yet.")
+                    dash_lines.append("Run sessions and record outcomes with:")
+                    dash_lines.append("  oem outcome success")
+                    dash_lines.append("  oem outcome failure")
+                else:
+                    dash_lines.append("Top Concepts:")
+                    for c in top:
+                        sessions = c["successful"] + c["failed"]
+                        label = c["name"][:28]
+                        dash_lines.append(
+                            f"  ✦ {label:<28}  Fitness: {c['fitness'] * 100:.0f}%"
+                            f"  Evidence: {c['evidence']}  Confidence: {c['confidence']}/5"
+                            f"  ({c['successful']}/{sessions} sessions)"
+                        )
+
+                    if bottom and bottom != top[:len(bottom)]:
+                        dash_lines.append("")
+                        dash_lines.append("Underperforming Concepts:")
+                        for c in bottom:
+                            sessions = c["successful"] + c["failed"]
+                            label = c["name"][:28]
+                            dash_lines.append(
+                                f"  ✗ {label:<28}  Fitness: {c['fitness'] * 100:.0f}%"
+                                f"  Evidence: {c['evidence']}  Confidence: {c['confidence']}/5"
+                                f"  ({c['successful']}/{sessions} sessions)"
+                            )
+
+                if untested:
+                    dash_lines.append("")
+                    dash_lines.append(f"Untested Concepts ({len(untested)} total — no session outcomes):")
+                    for c in untested[:5]:
+                        dash_lines.append(f"  ○ {c['name'][:28]:<28}  Evidence: {c['evidence']}  Confidence: {c['confidence']}/5")
+                    if len(untested) > 5:
+                        dash_lines.append(f"  … and {len(untested) - 5} more")
+
+                print(render_panel("Knowledge Health Dashboard", dash_lines, status="stats"))
+
+            except Exception as e:
+                print(render_panel("Knowledge Health Dashboard", [f"Could not compute: {e}"], status="error"))
+
             if status == "error":
                 sys.exit(1)
 
