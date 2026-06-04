@@ -48,13 +48,16 @@ Most AI memory systems focus on *remembering*. We believe the harder and more im
 
 ### Global Installation (For General Users)
 
-Install the `oem` CLI globally on your machine using `uv` or `pipx`:
+Install the `oem` CLI globally on your machine using `uv` (no cloning required) or via a local clone:
 
 ```bash
-# Using uv (Recommended)
+# Using uv direct from Git (Recommended)
+uv tool install "git+https://github.com/xpajonx/openempiric.git#subdirectory=packages/oem-knowledge"
+
+# Or using uv locally after cloning
 uv tool install --editable ./packages/oem-knowledge
 
-# Or using pipx
+# Or using pipx locally after cloning
 pipx install ./packages/oem-knowledge
 ```
 
