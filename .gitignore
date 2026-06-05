@@ -25,4 +25,5 @@ Thumbs.db
 # Agent scaffolding
 AGENTS.md
 CLAUDE.md
+AGENT_ROADMAP.md
 init.sh
