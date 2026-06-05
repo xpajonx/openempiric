@@ -1,8 +1,9 @@
 from pathlib import Path
 from typing import Optional
 from oem_knowledge.adapters.base import BaseAdapter
-from oem_knowledge.engine import KnowledgeEngine
+from oem_knowledge.adapters.registry import register_adapter
 
+@register_adapter("opencode")
 class OpenCodeAdapter(BaseAdapter):
     def install_skill(self) -> bool:
         try:

@@ -6,7 +6,10 @@ from typing import Any, Dict, List, Optional
 from oem_knowledge.engine import KnowledgeEngine
 
 from oem_knowledge.adapters.base import BaseAdapter
+from oem_knowledge.adapters.registry import register_adapter
 
+@register_adapter("antigravity")
+@register_adapter("agy")
 class AntigravityAdapter(BaseAdapter):
     def __init__(self, engine: Optional[KnowledgeEngine] = None, project_path: Optional[str] = None):
         eng = engine or KnowledgeEngine(project_path)
