@@ -63,12 +63,16 @@ best_practices:
         if not plugin_src.exists():
             plugin_src = _REPO_ROOT / "plugins" / "openempiric.ts"
 
-        if plugin_src.exists() and plugin_dest.is_symlink():
+        if plugin_dest.is_symlink():
             try:
-                if plugin_dest.readlink().resolve() != plugin_src.resolve():
-                    return False, "Plugin symlink points to wrong location"
-            except (OSError, ValueError):
-                return False, "Plugin symlink broken"
+                target = plugin_dest.readlink()
+                resolved_target = (plugins_dir / target).resolve() if not target.is_absolute() else target.resolve()
+                if not resolved_target.exists():
+                    return False, f"Plugin symlink broken: target not found ({resolved_target})"
+                if resolved_target.name != "openempiric.ts":
+                    return False, f"Plugin symlink points to wrong location: wrong file name ({resolved_target.name})"
+            except (OSError, ValueError) as e:
+                return False, f"Plugin symlink broken: {e}"
 
         return True, "Plugin healthy"
 
