@@ -65,6 +65,19 @@ best_practices:
             try:
                 target = plugin_dest.readlink()
                 resolved_target = (plugins_dir / target).resolve() if not target.is_absolute() else target.resolve()
+                import tempfile
+                sys_temp = Path(tempfile.gettempdir()).resolve()
+                try:
+                    is_in_temp = resolved_target.resolve().is_relative_to(sys_temp)
+                except ValueError:
+                    is_in_temp = False
+                if is_in_temp:
+                    try:
+                        is_in_project = resolved_target.resolve().is_relative_to(Path(self.project_path).resolve())
+                    except ValueError:
+                        is_in_project = False
+                    if not is_in_project:
+                        return False, f"Plugin symlink target is in volatile temp directory: {resolved_target}"
                 if not resolved_target.exists():
                     return False, f"Plugin symlink broken: target not found ({resolved_target})"
                 if resolved_target.name != "openempiric.ts":

@@ -185,11 +185,13 @@ def migrate_harness_to_oem(project_dir: Path):
 
 
 def find_harness_root(path: str | Path) -> Path | None:
-    """Walk up from path looking for .oem/ or .harness/ directory."""
+    """Walk up from path looking for .oem/ or .harness/ directory, stopping at boundaries."""
     p = Path(path).resolve()
     for parent in [p] + list(p.parents):
         if (parent / ".oem").is_dir() or (parent / ".harness").is_dir():
             return parent
+        if (parent / ".git").exists() or (parent / "pyproject.toml").exists() or (parent / ".opencode").exists():
+            break
     return None
 
 

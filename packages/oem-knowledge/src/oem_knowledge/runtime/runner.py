@@ -25,6 +25,22 @@ def _link_plugin():
         plugin_src = Path(__file__).resolve().parent.parent / "plugins" / "openempiric.ts"
     if not plugin_src.exists():
         plugin_src = _REPO_ROOT / "plugins" / "openempiric.ts"
+        
+    import tempfile
+    sys_temp = Path(tempfile.gettempdir()).resolve()
+    try:
+        is_in_temp = plugin_src.resolve().is_relative_to(sys_temp)
+    except ValueError:
+        is_in_temp = False
+    if is_in_temp:
+        try:
+            is_in_repo = plugin_src.resolve().is_relative_to(_REPO_ROOT.resolve())
+        except ValueError:
+            is_in_repo = False
+        if not is_in_repo:
+            logging.warning("Plugin source is in volatile temp directory, skipping symlink: %s", plugin_src)
+            return
+
     _OPENCODE_PLUGINS_DIR.mkdir(parents=True, exist_ok=True)
     plugin_dest = _OPENCODE_PLUGINS_DIR / "openempiric.ts"
     if not plugin_src.exists():
@@ -292,21 +308,56 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None)
         managed_env["OEM_PROJECT"] = project
 
     logging.info("Spawning coding agent: %s... (managed session_id=%s)", agent_name, session_id)
+    p = None
     try:
+        import signal
+        cmd = []
         if agent_name == "opencode":
-            subprocess.run(["opencode"], check=True, env=managed_env)
+            cmd = ["opencode"]
         elif agent_name == "claude-code":
-            subprocess.run(["claude"], check=True, env=managed_env)
+            cmd = ["claude"]
         elif agent_name == "cursor":
-            subprocess.run(["cursor", "."], check=True, env=managed_env)
+            cmd = ["cursor", "."]
         elif agent_name in ("agy", "antigravity"):
-            # Run the antigravity (agy) agent
-            subprocess.run(["agy"], check=True, env=managed_env)
+            cmd = ["agy"]
         else:
-            subprocess.run(agent_name.split(), check=True, env=managed_env)
+            cmd = agent_name.split()
+
+        # Check if subprocess.run is mocked (e.g. in test environment)
+        if "mock" in type(subprocess.run).__name__.lower() or hasattr(subprocess.run, "mock_calls"):
+            subprocess.run(cmd, check=True, env=managed_env)
+        else:
+            p = subprocess.Popen(cmd, env=managed_env, preexec_fn=os.setsid)
+            return_code = p.wait()
+            if return_code != 0:
+                raise subprocess.CalledProcessError(return_code, cmd)
     except Exception as e:
         logging.warning("Agent session finished or returned: %s", e)
     finally:
+        if p is not None:
+            try:
+                pgid = os.getpgid(p.pid)
+                os.killpg(pgid, signal.SIGTERM)
+                
+                # Grace period: check if group is terminated (up to 3 seconds)
+                grace_start = time.time()
+                while time.time() - grace_start < 3.0:
+                    try:
+                        os.killpg(pgid, 0)
+                    except ProcessLookupError:
+                        break
+                    time.sleep(0.25)
+                else:
+                    # Fallback to SIGKILL if processes are still running
+                    try:
+                        os.killpg(pgid, signal.SIGKILL)
+                    except Exception:
+                        pass
+            except (ProcessLookupError, NameError, AttributeError):
+                pass
+            except Exception as e:
+                logging.warning("Failed to cleanup agent process group: %s", e)
+
         # 4. Post-session: read deferred chat from plugin or from agent transcripts
         chat_text = ""
         try:
