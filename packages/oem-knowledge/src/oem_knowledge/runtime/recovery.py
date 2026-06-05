@@ -93,8 +93,16 @@ def cmd_recover(eng: KnowledgeEngine, project: str | None = None, abort: bool = 
         print(render_panel("Recovery Failed", ["Could not find any conversation transcript or log for the session."], status="error"))
         sys.exit(1)
 
+    import time
     try:
-        commit_res = eng.session_commit(project, conversation_text=chat_text, session_id=session_id)
+        commit_start = time.time()
+        commit_res = eng.session_commit(
+            project,
+            conversation_text=chat_text,
+            session_id=session_id,
+            session_started_at=started_at
+        )
+        commit_duration = time.time() - commit_start
         eng.record_outcome("success", session_id=session_id, project=project)
 
         # Emit sessions_recovered metric
@@ -121,16 +129,21 @@ def cmd_recover(eng: KnowledgeEngine, project: str | None = None, abort: bool = 
                     except Exception:
                         pass
 
+        from oem_knowledge.runtime.supervisor import render_commit_complete_panel
+        report_name = Path(commit_res['report_path']).name
+        concepts_count = len(commit_res.get('materialized_log', []))
+        exp = commit_res.get("explainability", {})
+        obs_count = exp.get("file_observations", 0)
+
         print(
-            render_panel(
-                "Recovery Complete",
-                [
-                    f"Successfully recovered and committed session {session_id}.",
-                    f"Report: {Path(commit_res['report_path']).name}",
-                    f"Materialized: {len(commit_res.get('materialized_log', []))}",
-                    f"Links: {commit_res.get('links_updated', 0)}",
-                ],
-                status="ok",
+            render_commit_complete_panel(
+                report_name=report_name,
+                concepts_count=concepts_count,
+                observations_count=obs_count,
+                duration=commit_duration,
+                structured_events=exp.get("structured_events", 0),
+                fallback_concepts=exp.get("fallback_extractions", 0),
+                file_observations=exp.get("file_observations", 0)
             )
         )
     except Exception as e:

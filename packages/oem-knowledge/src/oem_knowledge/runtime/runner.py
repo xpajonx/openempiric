@@ -435,12 +435,34 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None)
 
         # 5. Session commit (reflect → materialize → graph → index)
         committed = False
+        commit_start = time.time()
         try:
-            commit_res = eng.session_commit(project, conversation_text=chat_text, session_id=session_id)
-            logging.info("Session commit: report=%s events=%d materialized=%d",
-                         commit_res.get("report_path", "?"),
-                         len(commit_res.get("canonical_events", [])),
-                         len(commit_res.get("materialized_log", [])))
+            started_at = session_state.started_at if session_state else None
+            commit_res = eng.session_commit(
+                project,
+                conversation_text=chat_text,
+                session_id=session_id,
+                session_started_at=started_at
+            )
+            commit_duration = time.time() - commit_start
+            
+            from oem_knowledge.runtime.supervisor import render_commit_complete_panel
+            report_name = Path(commit_res['report_path']).name
+            concepts_count = len(commit_res.get('materialized_log', []))
+            exp = commit_res.get("explainability", {})
+            obs_count = exp.get("file_observations", 0)
+            
+            print(
+                render_commit_complete_panel(
+                    report_name=report_name,
+                    concepts_count=concepts_count,
+                    observations_count=obs_count,
+                    duration=commit_duration,
+                    structured_events=exp.get("structured_events", 0),
+                    fallback_concepts=exp.get("fallback_extractions", 0),
+                    file_observations=exp.get("file_observations", 0)
+                )
+            )
             committed = True
         except Exception as e:
             logging.warning("Post-session commit failed: %s", e)

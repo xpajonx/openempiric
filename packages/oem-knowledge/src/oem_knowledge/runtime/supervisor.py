@@ -90,3 +90,117 @@ def print_project_memory_summary(context: dict, agent_display: str, duration: fl
     print("└─────────────────────────────────────────────┘")
     print(f"Startup duration: {duration:.2f}s")
     print(f"Launching {agent_display}...\n")
+
+
+class CommitProgressSupervisor:
+    def __init__(self, width: int = 47, force_tty: bool = False):
+        import sys
+        self.width = width
+        self.steps = [
+            {"id": "transcript", "name": "Transcript Loaded", "status": "pending"},
+            {"id": "reflection", "name": "Reflection Complete", "status": "pending"},
+            {"id": "materialization", "name": "Materialization Complete", "status": "pending"},
+            {"id": "index", "name": "Updating Search Index", "status": "pending"},
+            {"id": "vault", "name": "Vault Sync Complete", "status": "pending"},
+        ]
+        self.is_tty = sys.stdout.isatty() or force_tty
+        self.started = False
+        self.last_lines_count = 0
+        self.printed_non_tty_steps = set()
+
+    def start(self):
+        self.started = True
+        self.render()
+
+    def update_step(self, step_id: str, status: str, detail: str | None = None):
+        for s in self.steps:
+            if s["id"] == step_id:
+                s["status"] = status
+                if detail is not None:
+                    s["detail"] = detail
+                break
+        if self.started:
+            self.render()
+
+    def render(self):
+        import sys
+        border_top = "╔" + "═" * (self.width - 2) + "╗"
+        border_bot = "╚" + "═" * (self.width - 2) + "╝"
+        
+        title = " OEM Session Commit "
+        padding = (self.width - 2 - len(title)) // 2
+        header = "╔" + "═" * padding + title + "═" * (self.width - 2 - padding - len(title)) + "╗"
+        
+        if self.is_tty:
+            lines = [header]
+            for s in self.steps:
+                if s["status"] == "success":
+                    symbol = "✓"
+                elif s["status"] == "running":
+                    symbol = "⟳"
+                elif s["status"] == "failed":
+                    symbol = "✗"
+                else:
+                    symbol = " "
+                
+                line_text = f" {symbol} {s['name']}"
+                lines.append(f"║ {line_text:<{self.width - 4}} ║")
+                if "detail" in s and s["status"] == "running":
+                    detail_text = f"   {s['detail']}"
+                    lines.append(f"║ {detail_text:<{self.width - 4}} ║")
+                    
+            lines.append(border_bot)
+            
+            if self.last_lines_count > 0:
+                sys.stdout.write(f"\033[{self.last_lines_count}A")
+                for _ in range(self.last_lines_count):
+                    sys.stdout.write("\033[K\n")
+                sys.stdout.write(f"\033[{self.last_lines_count}A")
+                
+            output = "\n".join(lines)
+            sys.stdout.write(output + "\n")
+            sys.stdout.flush()
+            self.last_lines_count = len(lines)
+        else:
+            if self.last_lines_count == 0:
+                print(header)
+                self.last_lines_count = 1
+            
+            for s in self.steps:
+                if s["status"] != "pending":
+                    detail_val = s.get("detail")
+                    key = (s["id"], s["status"], detail_val)
+                    if key not in self.printed_non_tty_steps:
+                        self.printed_non_tty_steps.add(key)
+                        symbol = "✓" if s["status"] == "success" else ("⟳" if s["status"] == "running" else "✗")
+                        detail_str = f" ({detail_val})" if detail_val and s["status"] == "running" else ""
+                        print(f"║ {symbol} {s['name']}{detail_str}")
+            
+            all_done = all(s["status"] in ("success", "failed") for s in self.steps)
+            if all_done and not hasattr(self, "non_tty_finished"):
+                self.non_tty_finished = True
+                print(border_bot)
+
+
+def render_commit_complete_panel(
+    report_name: str,
+    concepts_count: int,
+    observations_count: int,
+    duration: float,
+    structured_events: int = 0,
+    fallback_concepts: int = 0,
+    file_observations: int = 0,
+    width: int = 60
+) -> str:
+    from oem_tui.panels import render_panel
+    lines = [
+        f"Report: {report_name}",
+        f"Concepts Materialized: {concepts_count}",
+        f"Commit Time: {duration:.1f}s",
+        "",
+        "Knowledge Generated:",
+        f"  Structured Events: {structured_events}",
+        f"  Fallback Concepts: {fallback_concepts}",
+        f"  File Observations: {file_observations}"
+    ]
+    return render_panel("Session End Complete", lines, status="ok", width=width)

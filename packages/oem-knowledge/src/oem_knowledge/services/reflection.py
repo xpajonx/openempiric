@@ -70,6 +70,7 @@ class ReflectionService:
         conversation_text: str = "",
         session_id: str = "",
         telemetry: dict | None = None,
+        session_started_at: float | None = None,
     ) -> dict:
         import time
         import uuid
@@ -80,13 +81,45 @@ class ReflectionService:
         file_observations_count = 0
         structured_events_found = 0
         fallback_extraction_used = False
+        fallback_extractions_count = 0
 
         self.engine._resolve_harness(project)
         concepts_dir = self.engine._concepts_dir(project)
 
-        modified_files = (
-            list(concepts_dir.rglob("*.md")) if concepts_dir.exists() else []
-        )
+        modified_files = []
+        if concepts_dir.exists():
+            for fp in concepts_dir.rglob("*.md"):
+                # 1. Check modification time
+                if session_started_at is not None:
+                    try:
+                        mtime = fp.stat().st_mtime
+                        if mtime < session_started_at:
+                            continue
+                    except Exception:
+                        pass
+                
+                # 2. Check if body actually changed compared to last revision log
+                try:
+                    concept_id = fp.stem
+                    current_text = fp.read_text(encoding="utf-8")
+                    
+                    fm_match = re.match(r"^---\s*\n.*?\n---\s*\n(.*)$", current_text, re.DOTALL)
+                    current_body = fm_match.group(1).strip() if fm_match else current_text.strip()
+                    
+                    history = self.engine.get_concept_history(concept_id, project)
+                    if history:
+                        last_entry = history[-1]
+                        last_content = last_entry.get("content", "")
+                        last_fm_match = re.match(r"^---\s*\n.*?\n---\s*\n(.*)$", last_content, re.DOTALL)
+                        last_body = last_fm_match.group(1).strip() if last_fm_match else last_content.strip()
+                        
+                        if current_body.strip() == last_body.strip():
+                            continue
+                except Exception:
+                    pass
+                
+                modified_files.append(fp)
+
         for fp in modified_files:
             concept = fp.stem.replace("_", " ").replace("-", " ").title()
             knowledge_events.append(
@@ -264,6 +297,7 @@ class ReflectionService:
                 if fallback_events:
                     knowledge_events.extend(fallback_events)
                     fallback_extraction_used = True
+                    fallback_extractions_count = len(fallback_events)
 
         seen = set()
         canonical_events = []
@@ -330,16 +364,35 @@ project: {project or "default"}
 """
         sfs.write_text(report_file, report, force_allow_truncation=True)
 
+        source_counts = {}
+        for ev in canonical_events:
+            if ev.get("source") == "diff":
+                evidence = ev.get("evidence", "")
+                if "Modified:" in evidence:
+                    fname = evidence.replace("Modified:", "").strip()
+                    source_counts[fname] = source_counts.get(fname, 0) + 1
+                elif "Code modified in workspace:" in evidence:
+                    fpath = evidence.replace("Code modified in workspace:", "").strip()
+                    fname = Path(fpath).name
+                    source_counts[fname] = source_counts.get(fname, 0) + 1
+            elif ev.get("source") in ("chat", "chat-fallback"):
+                source_counts["chat"] = source_counts.get("chat", 0) + 1
+        
+        top_sources = sorted(source_counts.keys(), key=lambda k: source_counts[k], reverse=True)[:5]
+
         explainability = {
             "chat_lines_processed": len([l for l in conversation_text.splitlines() if l.strip()]),
+            "structured_events": structured_events_found,
             "structured_events_found": structured_events_found,
+            "fallback_extractions": fallback_extractions_count,
             "fallback_extraction_used": fallback_extraction_used,
-            "file_observations_count": file_observations_count,
+            "file_observations": file_observations_count,
             "generated_concepts": [
                 e["concept_candidates"][0]
                 for e in canonical_events
                 if e.get("source") in ("chat", "chat-fallback")
             ],
+            "top_sources": top_sources,
         }
 
         # Emit reflection metrics

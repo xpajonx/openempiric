@@ -100,7 +100,7 @@ class SearchService:
             return "high"
         return "medium"
 
-    def index_all(self, force: bool = False) -> dict:
+    def index_all(self, force: bool = False, progress_callback=None) -> dict:
         harness = self.engine._resolve_harness()
         wiki_dir = harness / "wiki"
         
@@ -157,7 +157,12 @@ class SearchService:
                 col = None
 
             if col is not None:
-                for fp, path_str, old_hash, cur_hash in to_index:
+                for idx, (fp, path_str, old_hash, cur_hash) in enumerate(to_index):
+                    if progress_callback is not None:
+                        try:
+                            progress_callback(idx + 1, len(to_index))
+                        except Exception:
+                            pass
                     if old_hash is not None:
                         try:
                             existing = col.get(where={"source": path_str})

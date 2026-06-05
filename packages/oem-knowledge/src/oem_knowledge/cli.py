@@ -266,17 +266,40 @@ def main():
             print(render_panel("Session Start", lines, status="restore"))
 
         elif args.command == "session-end":
-            res = eng.session_commit(project, args.chat, args.session_id)
-            lines = [
-                f"Report: {Path(res['report_path']).name}",
-                f"Materialized: {len(res.get('materialized_log', []))}",
-                f"Links: {res.get('links_updated', 0)}",
-            ]
+            session_started_at = None
+            try:
+                harness = eng._resolve_harness(project)
+                active_session_file = harness / "state" / "active_session.json"
+                session_state = SessionState.load(active_session_file)
+                if session_state:
+                    session_started_at = session_state.started_at
+            except Exception:
+                pass
+
+            commit_start = time.time()
+            res = eng.session_commit(
+                project,
+                args.chat,
+                args.session_id,
+                session_started_at=session_started_at
+            )
+            commit_duration = time.time() - commit_start
+
+            from oem_knowledge.runtime.supervisor import render_commit_complete_panel
+            report_name = Path(res['report_path']).name
+            concepts_count = len(res.get('materialized_log', []))
+            exp = res.get("explainability", {})
+            obs_count = exp.get("file_observations", 0)
+
             print(
-                render_panel(
-                    "Session End Complete",
-                    lines,
-                    status="ok",
+                render_commit_complete_panel(
+                    report_name=report_name,
+                    concepts_count=concepts_count,
+                    observations_count=obs_count,
+                    duration=commit_duration,
+                    structured_events=exp.get("structured_events", 0),
+                    fallback_concepts=exp.get("fallback_extractions", 0),
+                    file_observations=exp.get("file_observations", 0)
                 )
             )
             if args.verbose and "explainability" in res:

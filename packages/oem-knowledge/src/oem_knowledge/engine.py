@@ -431,8 +431,9 @@ class KnowledgeEngine:
         conversation_text: str = "",
         session_id: str = "",
         telemetry: dict | None = None,
+        session_started_at: float | None = None,
     ) -> dict:
-        return self.reflection_service.reflect_session(project, conversation_text, session_id, telemetry)
+        return self.reflection_service.reflect_session(project, conversation_text, session_id, telemetry, session_started_at)
 
     # StateService Delegations
     def _load_registry(self, project: str | None = None) -> dict:
@@ -746,25 +747,41 @@ class KnowledgeEngine:
         conversation_text: str = "",
         session_id: str = "",
         telemetry: dict | None = None,
+        session_started_at: float | None = None,
     ) -> dict:
         # Core Orchestration flow using extracted services
+        from oem_knowledge.runtime.supervisor import CommitProgressSupervisor
+        progress = CommitProgressSupervisor()
+        progress.start()
+
+        progress.update_step("transcript", "running")
+        progress.update_step("transcript", "success")
+
+        progress.update_step("reflection", "running")
         res = self.reflect_session(
-            project, conversation_text, session_id=session_id, telemetry=telemetry
+            project, conversation_text, session_id=session_id, telemetry=telemetry, session_started_at=session_started_at
         )
         if res["status"] == "error":
+            progress.update_step("reflection", "failed")
             return res
+        progress.update_step("reflection", "success")
 
+        progress.update_step("materialization", "running")
         mat_res = self.materialize_concepts(project)
         mat_log = mat_res.get("materialized", [])
+        progress.update_step("materialization", "success")
 
-        graph_res = self.update_graph(project)
-
+        progress.update_step("index", "running")
         idx_res = {"new": 0, "updated": 0, "scanned": 0, "unchanged": 0, "failed": 0}
         try:
-            idx_res = self.index_all()
+            def index_progress(current, total):
+                progress.update_step("index", "running", detail=f"{current} / {total} embeddings")
+            idx_res = self.search_service.index_all(progress_callback=index_progress)
         except Exception:
             pass
+        progress.update_step("index", "success")
 
+        progress.update_step("vault", "running")
         try:
             from .vault import GlobalVault
             vault = GlobalVault()
@@ -773,15 +790,19 @@ class KnowledgeEngine:
             vault.sync_from_registry(local_reg, concepts_dir)
         except Exception:
             pass
+        progress.update_step("vault", "success")
+
+        explainability = res.get("explainability", {})
+        explainability["materialized"] = len(mat_log)
 
         return {
             "status": "success",
             "report_path": res["report_path"],
             "knowledge_events": res["knowledge_events"],
             "materialized_log": mat_log,
-            "links_updated": graph_res.get("links_updated", 0),
+            "links_updated": self.update_graph(project).get("links_updated", 0),
             "index_stats": idx_res,
-            "explainability": res.get("explainability"),
+            "explainability": explainability,
         }
 
     def record_outcome(
