@@ -112,8 +112,10 @@ def _compile_oem_context(eng: KnowledgeEngine) -> dict:
         "open_questions": open_questions,
         "last_topic": last_topic,
         "memory_context": (
-            "OEM is your long-term memory for this project. "
+            "OpenEmpiric is already active for this session; do not initialize it manually. "
+            "Relevant project memory has been restored automatically into your context as long-term memory. "
             "Use this information when relevant. "
-            "Do not assume work should continue unless the user requests it."
+            "Use knowledge_search when you need additional historical context. "
+            "Do not assume work should proceed unless the user requests it."
         ),
     }

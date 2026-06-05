@@ -225,7 +225,7 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None)
             "relevant_failures": [],
             "open_questions": [],
             "memory_context": (
-                "OEM is your long-term memory for this project. "
+                "OpenEmpiric is already active for this session; do not initialize it manually. "
                 "Use the knowledge_search tool to retrieve details. "
                 "You do not need to search before every response — only when you need information you do not already have."
             )
