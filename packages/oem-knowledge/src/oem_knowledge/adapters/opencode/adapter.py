@@ -19,22 +19,20 @@ adapter: opencode
 description: Agent knowledge runtime
 required:
   - knowledge_search
-  - knowledge_session_start
   - knowledge_capture_after_work
 tools:
   - oem
   - knowledge_search
-  - knowledge_session_start
 best_practices:
-  - Treat OEM as your long-term memory for the project.
-  - Context is pre-loaded for you — you already know the active concepts.
-  - Use knowledge_search when you need details, not before every response.
+  - OpenEmpiric is already active for this session; do not initialize it manually.
+  - Relevant project memory has been restored automatically into your context.
+  - Use knowledge_search when you need additional historical context.
+  - Use knowledge_health_check to identify stale, duplicate, or contradictory knowledge.
   - Explicitly state decisions and rationale.
   - Record failures and root causes.
-  - Summarize experiments and results.
-  - Capture tradeoffs.
-  - Describe outcomes and impact.
-  - Record session outcomes (success/failure/abandoned) along with goal satisfaction levels (0.0 to 1.0) using outcome tools to refine long-term memory ranking.
+  - Summarize experiments and outcomes.
+  - Capture important tradeoffs.
+  - Record session outcomes and goal satisfaction when available.
 """
             skills_file.write_text(SKILLS_YAML_CONTENT, encoding="utf-8")
             return True
