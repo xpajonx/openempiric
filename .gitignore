@@ -22,6 +22,9 @@ Thumbs.db
 .oem/
 .local_vector_db/
 
+# CI artifacts
+tmp_ci_test/
+
 # Agent scaffolding
 AGENTS.md
 CLAUDE.md
