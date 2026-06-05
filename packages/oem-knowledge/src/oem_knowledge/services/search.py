@@ -1,4 +1,5 @@
 from __future__ import annotations
+import json
 import math
 import os
 import re
@@ -114,11 +115,8 @@ class SearchService:
         if reg_path.exists():
             try:
                 registry = json.loads(reg_path.read_text())
-            except Exception:
+            except (json.JSONDecodeError, OSError):
                 registry = {}
-
-        # json import needed if not imported globally in search.py
-        import json
         stats = {
             "scanned": len(md_files),
             "new": 0,
