@@ -54,3 +54,16 @@ We're actively looking for contributors interested in:
 > [!WARNING]
 > Never run `uv sync` or `uv venv` inside `packages/oem-knowledge` or other sub-packages. All packages must be managed from the repository root workspace.
 
+
+## Agent-First Principle
+
+OEM should not require agents to:
+
+- initialize sessions
+- commit sessions
+- activate memory
+
+Lifecycle management belongs to the runtime.
+
+When introducing new features, prefer runtime automation over agent instructions.
+

@@ -18,6 +18,21 @@ A clean separation of concerns ensures that the core knowledge-engine logic rema
 | **Materialization**: Writing Markdown wiki files (`.oem/wiki/*.md`). | **Doctor Diagnostics**: Verifying installation of files and dependencies. |
 | **Telemetry**: Recording session outcomes (`outcomes.jsonl`) and fitness. | **Skill Registration**: Installing yaml declarations into `skills/`. |
 
+## Lifecycle Ownership
+
+The OEM runtime owns:
+
+- session creation
+- session recovery
+- context restoration
+- reflection
+- materialization
+- outcome recording
+
+Agents are consumers of context and producers of work.
+
+Agents do not initialize or terminate OEM sessions.
+
 ---
 
 ## 2. Lifecycle Overview

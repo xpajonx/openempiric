@@ -17,12 +17,36 @@ A successful integration divides responsibilities cleanly between the shared Ope
 
 ---
 
+## Runtime Lifecycle Flow
+
+The OEM runtime manages the execution flow and lifecycle automatically:
+
+```text
+oem run
+↓
+pre_session
+↓
+context injection
+↓
+agent execution
+↓
+reflection
+↓
+materialization
+↓
+outcome recording
+```
+
+The agent is a consumer of context and a producer of work, and does not manually initialize, end, or commit the session.
+
+---
+
 ## Capabilities Specification
 
-An adapter implements capabilities to interface with the OEM runtime. The following YAML specification defines required and optional capabilities:
+An adapter implements capabilities to interface with the OEM runtime. The following YAML specification defines capabilities for v0.96:
 
 ```yaml
-version: "0.9.5"
+version: "0.9.6"
 capabilities:
   required:
     context_injection:
@@ -31,20 +55,6 @@ capabilities:
       mechanism:
         - Read `.oem/session-handoff.md` and prepended concept content
         - Include system prompt context wrapper
-    session_start:
-      description: "Registers session states, tracks active goals, open issues, and initializes telemetry."
-      command: "oem session-start"
-      outputs:
-        session_id: "Unique session identifier"
-        active_goals: "List of targets loaded from handoff"
-        recent_discoveries: "Contextual concepts pre-loaded from search"
-    session_commit:
-      description: "Closes the current session, triggers reflection, materializes markdown concepts, updates graph, and logs outcomes."
-      command: "oem session-end --chat <transcript>"
-      inputs:
-        conversation_text: "Raw string of session conversation"
-        outcome: "Success | Failure | Abandoned"
-        reason: "Optional context/reasons for failure"
 
   optional:
     todo_access:

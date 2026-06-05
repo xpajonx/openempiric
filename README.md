@@ -10,7 +10,7 @@
 
 OpenEmpiric is an agent-first learning runtime.
 
-Run:
+Run your coding agent through OEM:
 
 ```bash
 oem run opencode
@@ -18,11 +18,18 @@ oem run opencode
 
 Then work normally.
 
-OEM automatically:
-- **restores context** — Pre-loads active concepts, decisions, and past failures into the agent's prompt context at the start of a session.
-- **learns from conversations** — Reflects on chat transcripts post-session, automatically extracting hypotheses, experiments, decisions, and outcomes.
-- **records outcomes** — Evaluates and logs session status (success, failure, abandoned) and satisfaction ratings.
-- **improves future sessions** — Evolves the concept registry, semantic wiki pages, and reciprocal links to continuously optimize long-term memory.
+OpenEmpiric automatically:
+
+- restores project memory
+- injects relevant context
+- learns from conversations
+- records outcomes
+- improves future retrieval
+
+You don't manage memory.
+
+You talk to your agent.
+OEM manages the learning loop.
 
 ---
 
@@ -56,27 +63,23 @@ oem run opencode
 
 ---
 
-## Command Taxonomy
+## Common Commands
 
-### Public User Surface
-These are the primary entrypoints for users working with OpenEmpiric.
-* `oem run` - Spawns a managed coding agent session with dynamic config injection & lifecycle commitment.
-* `oem doctor` - Validates the local environment, MCP registry status, and warms the cache.
-* `oem search` - Performs hybrid semantic + BM25 keyword search across project registry concepts.
-* `oem health` - Scans the workspace for stale concepts, duplicates, and contradicting knowledge.
+Daily Use
 
-### Advanced
-For power users performing manual maintenance or diagnostics.
-* `oem merge` - Merges two duplicate/overlapping registry concepts together.
-* `oem rebuild` - Replays the raw event store to rebuild the concept registry.
-* `oem reflect` - Dry-runs session transcript reflection and concept candidate extraction.
+- `oem run opencode`
+- `oem doctor`
+- `oem search`
 
-### Internal Runtime
-Low-level commands managed by the session coordinator. These are implementation details and do not need to be run manually.
-* `oem session-start` - Restores pre-injection context and prepares files before the agent starts.
-* `oem session-end` - Finalizes context, runs extraction, and commits learnings after agent exits.
-* `oem outcome` - Records manual outcome status, referenced concepts, and goal satisfaction ratings.
-* `oem recover` - Restores, commits, or aborts crashed or unfinished agent sessions.
+Knowledge Health
+
+- `oem health`
+
+Advanced
+
+- `oem merge`
+- `oem rebuild`
+- `oem reflect`
 
 ---
 
