@@ -31,6 +31,7 @@ from .runtime import (
     _compile_oem_context,
     run_agent,
     cmd_recover,
+    SessionState,
 )
 
 
@@ -181,26 +182,24 @@ def main():
         try:
             harness = eng._resolve_harness(project)
             active_session_file = harness / "state" / "active_session.json"
-            if active_session_file.exists():
-                try:
-                    session_data = json.loads(active_session_file.read_text(encoding="utf-8"))
-                    sid = session_data.get("session_id", "unknown")
-                    print(render_panel(
-                        "Warning: Unfinished Session Detected",
-                        [
-                            f"An unfinished session was found (ID: {sid}).",
-                            "The agent may have crashed or exited unexpectedly.",
-                            "",
-                            "To query status:       oem recover --status",
-                            "To commit learnings:   oem recover",
-                            "To discard session:    oem recover --abort"
-                        ],
-                        status="warning"
-                    ))
-                except Exception:
-                    pass
+            session_state = SessionState.load(active_session_file)
+            if session_state:
+                sid = session_state.session_id
+                print(render_panel(
+                    "Warning: Unfinished Session Detected",
+                    [
+                        f"An unfinished session was found (ID: {sid}).",
+                        "The agent may have crashed or exited unexpectedly.",
+                        "",
+                        "To query status:       oem recover --status",
+                        "To commit learnings:   oem recover",
+                        "To discard session:    oem recover --abort"
+                    ],
+                    status="warning"
+                ))
         except Exception:
             pass
+
 
 
     try:

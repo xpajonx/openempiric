@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 
 from .config import _REPO_ROOT, _OPENCODE_PLUGINS_DIR, _OEM_RUNTIME_CONTEXT_PATH, _OEM_TEMP_INSTRUCTIONS
 from .context import _compile_oem_context
+from .session import SessionState
 
 if TYPE_CHECKING:
     from oem_knowledge.engine import KnowledgeEngine
@@ -57,19 +58,17 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None)
     active_session_file = harness / "state" / "active_session.json"
     active_session_file.parent.mkdir(parents=True, exist_ok=True)
     
-    session_state = {
-        "session_id": session_id,
-        "agent": agent_name,
-        "status": "started",
-        "started_at": time.time(),
-        "project": str(Path(project or ".").resolve()),
-        "transcript_path": transcript_path_str,
-        "context_path": str(_OEM_RUNTIME_CONTEXT_PATH.resolve()),
-        "temp_instructions": str(_OEM_TEMP_INSTRUCTIONS.resolve())
-    }
+    session_state = SessionState.create(
+        session_id=session_id,
+        agent=agent_name,
+        project=project or ".",
+        transcript_path=transcript_path_str,
+        context_path=str(_OEM_RUNTIME_CONTEXT_PATH.resolve()),
+        temp_instructions=str(_OEM_TEMP_INSTRUCTIONS.resolve()),
+    )
 
     try:
-        active_session_file.write_text(json.dumps(session_state, indent=2), encoding="utf-8")
+        session_state.save(active_session_file)
     except Exception as e:
         logging.warning("Failed to write active session file: %s", e)
 
@@ -90,8 +89,8 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None)
 
     # Set status to running
     try:
-        session_state["status"] = "running"
-        active_session_file.write_text(json.dumps(session_state, indent=2), encoding="utf-8")
+        session_state.status = "running"
+        session_state.save(active_session_file)
     except Exception:
         pass
 
@@ -122,7 +121,7 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None)
         # 4. Post-session: read deferred chat from plugin or from agent transcripts
         chat_text = ""
         try:
-            transcript_file = Path(session_state["transcript_path"])
+            transcript_file = Path(session_state.transcript_path)
             if transcript_file.exists():
                 if hasattr(adapter, "parse_transcript"):
                     chat_text = adapter.parse_transcript(transcript_file)
@@ -176,10 +175,10 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None)
         try:
             if active_session_file.exists():
                 if committed:
-                    session_state["status"] = "completed"
+                    session_state.status = "completed"
                     active_session_file.unlink()
                 else:
-                    session_state["status"] = "failed"
-                    active_session_file.write_text(json.dumps(session_state, indent=2), encoding="utf-8")
+                    session_state.status = "failed"
+                    session_state.save(active_session_file)
         except Exception:
             pass

@@ -1,13 +1,12 @@
 from __future__ import annotations
-import json
 import sys
 import datetime
-import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from oem_tui.panels import render_panel
 from .config import _OEM_RUNTIME_CONTEXT_PATH, _OEM_TEMP_INSTRUCTIONS
+from .session import SessionState
 
 if TYPE_CHECKING:
     from oem_knowledge.engine import KnowledgeEngine
@@ -15,21 +14,17 @@ if TYPE_CHECKING:
 def cmd_recover(eng: KnowledgeEngine, project: str | None = None, abort: bool = False, status: bool = False):
     harness = eng._resolve_harness(project)
     active_session_file = harness / "state" / "active_session.json"
-    if not active_session_file.exists():
+    
+    session_state = SessionState.load(active_session_file)
+    if not session_state:
         print(render_panel("OEM Recovery", ["No unfinished sessions detected."], status="info"))
         return
 
-    try:
-        session_data = json.loads(active_session_file.read_text(encoding="utf-8"))
-    except Exception as e:
-        print(render_panel("Recovery Error", [f"Failed to read active session file: {e}"], status="error"))
-        sys.exit(1)
-
-    session_id = session_data.get("session_id")
-    agent_name = session_data.get("agent", "opencode")
-    started_at = session_data.get("started_at", 0.0)
-    current_status = session_data.get("status", "unknown")
-    transcript_path = session_data.get("transcript_path", "")
+    session_id = session_state.session_id
+    agent_name = session_state.agent
+    started_at = session_state.started_at
+    current_status = session_state.status
+    transcript_path = session_state.transcript_path
 
     if status:
         started_str = datetime.datetime.fromtimestamp(started_at).isoformat() if started_at else "unknown"
@@ -38,17 +33,17 @@ def cmd_recover(eng: KnowledgeEngine, project: str | None = None, abort: bool = 
             f"Agent:           {agent_name}",
             f"Lifecycle State: {current_status}",
             f"Started At:      {started_str}",
-            f"Project:         {session_data.get('project')}",
+            f"Project:         {session_state.project}",
             f"Transcript Path: {transcript_path}",
-            f"Context Path:    {session_data.get('context_path')}",
-            f"Temp Inst Path:  {session_data.get('temp_instructions')}"
+            f"Context Path:    {session_state.context_path}",
+            f"Temp Inst Path:  {session_state.temp_instructions}"
         ]
         print(render_panel("Active Session Status", lines, status="stats"))
         return
 
     if abort:
-        context_path = session_data.get("context_path")
-        temp_inst = session_data.get("temp_instructions")
+        context_path = session_state.context_path
+        temp_inst = session_state.temp_instructions
         for path_str in (context_path, temp_inst, str(_OEM_RUNTIME_CONTEXT_PATH), str(_OEM_TEMP_INSTRUCTIONS)):
             if path_str:
                 p = Path(path_str)
@@ -58,7 +53,7 @@ def cmd_recover(eng: KnowledgeEngine, project: str | None = None, abort: bool = 
                     except Exception:
                         pass
         try:
-            session_data["status"] = "failed"
+            session_state.status = "failed"
             active_session_file.unlink()
         except Exception:
             pass
@@ -102,13 +97,13 @@ def cmd_recover(eng: KnowledgeEngine, project: str | None = None, abort: bool = 
         eng.record_outcome("success", session_id=session_id, project=project)
         
         try:
-            session_data["status"] = "completed"
+            session_state.status = "completed"
             active_session_file.unlink()
         except Exception:
             pass
 
-        context_path = session_data.get("context_path")
-        temp_inst = session_data.get("temp_instructions")
+        context_path = session_state.context_path
+        temp_inst = session_state.temp_instructions
         for path_str in (context_path, temp_inst, str(_OEM_RUNTIME_CONTEXT_PATH), str(_OEM_TEMP_INSTRUCTIONS)):
             if path_str:
                 p = Path(path_str)

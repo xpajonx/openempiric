@@ -2,7 +2,19 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-_REPO_ROOT = Path(__file__).resolve().parents[5]
+def _find_repo_root() -> Path:
+    curr = Path(__file__).resolve().parent
+    for _ in range(10):
+        if (curr / "plugins" / "openempiric.ts").exists() or (curr / ".git").exists():
+            return curr
+        if curr.parent == curr:
+            break
+        curr = curr.parent
+    # fallback
+    return Path(__file__).resolve().parent.parent.parent.parent.parent.parent
+
+_REPO_ROOT = _find_repo_root()
+
 
 _OPENCODE_PLUGINS_DIR = Path(
     os.environ.get(

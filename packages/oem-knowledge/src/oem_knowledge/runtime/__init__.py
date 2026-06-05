@@ -4,3 +4,5 @@ from .config import _OEM_RUNTIME_CONTEXT_PATH, _OEM_TEMP_INSTRUCTIONS, _OPENCODE
 from .context import _compile_oem_context
 from .runner import run_agent
 from .recovery import cmd_recover
+from .session import SessionState
+
