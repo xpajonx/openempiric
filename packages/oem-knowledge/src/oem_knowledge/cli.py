@@ -425,6 +425,7 @@ def main():
             res = asyncio.run(run_lint(target, max_parallel=args.workers, fix=args.fix))
             if res["status"] == "error":
                 print(render_panel("Lint Error", [res["message"]], status="error"))
+                sys.exit(1)
             else:
                 lines = [
                     f"Files scanned: {res.get('files_scanned', 0)}",
@@ -454,6 +455,8 @@ def main():
                         status="error" if res.get("broken_links") else "ok",
                     )
                 )
+                if res.get("broken_links"):
+                    sys.exit(1)
 
         elif args.command == "vault":
             from oem_knowledge.vault import GlobalVault
