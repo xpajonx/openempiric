@@ -713,6 +713,7 @@ class KnowledgeEngine:
             "materialized_log": mat_log,
             "links_updated": graph_res.get("links_updated", 0),
             "index_stats": idx_res,
+            "explainability": res.get("explainability"),
         }
 
     def record_outcome(

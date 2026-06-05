@@ -113,10 +113,16 @@ def _setup_parser() -> argparse.ArgumentParser:
     session_start_p = sub.add_parser("session-start")
     session_start_p.add_argument("--project", type=str, default="")
 
+    reflect_p = sub.add_parser("reflect", help="Analyze session content for concept extraction (debug)")
+    reflect_p.add_argument("--chat", type=str, default="")
+    reflect_p.add_argument("--debug", action="store_true", help="Show detailed extraction breakdown")
+    reflect_p.add_argument("--project", type=str, default="")
+
     session_end_p = sub.add_parser("session-end")
     session_end_p.add_argument("--project", type=str, default="")
     session_end_p.add_argument("--chat", type=str, default="")
     session_end_p.add_argument("--session-id", type=str, default="")
+    session_end_p.add_argument("--verbose", action="store_true", help="Show detailed reflection analysis")
 
     run_p = sub.add_parser("run")
     run_p.add_argument("agent", type=str, help="opencode, claude-code, cursor, or custom command")
@@ -246,17 +252,69 @@ def main():
 
         elif args.command == "session-end":
             res = eng.session_commit(project, args.chat, args.session_id)
+            lines = [
+                f"Report: {Path(res['report_path']).name}",
+                f"Materialized: {len(res.get('materialized_log', []))}",
+                f"Links: {res.get('links_updated', 0)}",
+            ]
             print(
                 render_panel(
                     "Session End Complete",
-                    [
-                        f"Report: {Path(res['report_path']).name}",
-                        f"Materialized: {len(res.get('materialized_log', []))}",
-                        f"Links: {res.get('links_updated', 0)}",
-                    ],
+                    lines,
                     status="ok",
                 )
             )
+            if args.verbose and "explainability" in res:
+                exp = res["explainability"]
+                debug_lines = [
+                    f"Chat Lines Processed:   {exp.get('chat_lines_processed', 0)}",
+                    f"Structured Events:      {exp.get('structured_events_found', 0)}",
+                    f"Fallback Extraction:    {'Yes' if exp.get('fallback_extraction_used') else 'No'}",
+                    f"File Observations:      {exp.get('file_observations_count', 0)}",
+                ]
+                generated = exp.get("generated_concepts", [])
+                if generated:
+                    debug_lines.append("")
+                    debug_lines.append("Generated Concepts:")
+                    for gc in generated:
+                        debug_lines.append(f"  \u2022 {gc}")
+                print(render_panel("Reflection Analysis", debug_lines, status="info"))
+
+        elif args.command == "reflect":
+            from oem_knowledge.services.reflection import ReflectionService
+            rs = ReflectionService(eng)
+            res = rs.reflect_session(project, args.chat)
+            if args.debug and "explainability" in res:
+                exp = res["explainability"]
+                debug_lines = [
+                    f"Chat Lines Processed:   {exp.get('chat_lines_processed', 0)}",
+                    f"Structured Events:      {exp.get('structured_events_found', 0)}",
+                    f"Fallback Extraction:    {'Yes' if exp.get('fallback_extraction_used') else 'No'}",
+                    f"File Observations:      {exp.get('file_observations_count', 0)}",
+                ]
+                generated = exp.get("generated_concepts", [])
+                file_obs = [
+                    f"Modified: {e['concept_candidates'][0]}"
+                    for e in res.get("canonical_events", [])
+                    if e.get("source") == "diff"
+                ]
+                if generated:
+                    debug_lines.append("")
+                    debug_lines.append("Generated Concepts:")
+                    for gc in generated:
+                        debug_lines.append(f"  \u2022 {gc}")
+                if file_obs:
+                    debug_lines.append("")
+                    debug_lines.append("File Observations:")
+                    for fo in file_obs:
+                        debug_lines.append(f"  \u2022 {fo}")
+                print(render_panel("Reflection Analysis", debug_lines, status="info"))
+            else:
+                events = res.get("knowledge_events", [])
+                lines = [f"Total events: {len(events)}"]
+                for ev in events[:10]:
+                    lines.append(f"  [{ev['type'].upper()}] {ev['concept'][:60]}")
+                print(render_panel("Reflection Result", lines, status="ok"))
 
         elif args.command == "rebuild":
             res = eng.rebuild_registry(project)

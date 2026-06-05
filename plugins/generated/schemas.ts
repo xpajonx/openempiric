@@ -76,6 +76,7 @@ export interface MetricsSchema {
   retrieval: RetrievalMetrics;
   context: ContextMetrics;
   knowledge_usage: KnowledgeUsageMetrics;
+  reflection: ReflectionMetrics;
 }
 
 export interface OutcomeMetrics {

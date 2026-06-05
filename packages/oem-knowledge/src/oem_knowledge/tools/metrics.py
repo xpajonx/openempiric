@@ -32,12 +32,18 @@ def update_metrics_file(metrics_file: Path, updates: dict):
             "agent_decisions_aligned": 0,
             "last_report_at": None,
         },
+        "reflection": {
+            "structured_events": 0,
+            "fallback_extractions": 0,
+            "empty_reflections": 0,
+            "file_observations": 0,
+        },
     }
     if metrics_file.exists():
         try:
             existing = json.loads(metrics_file.read_text(encoding="utf-8"))
             data.update(existing)
-            for k in ["retrieval", "context", "knowledge_usage"]:
+            for k in ["retrieval", "context", "knowledge_usage", "reflection"]:
                 if k in existing:
                     data[k].update(existing[k])
         except Exception:
@@ -51,6 +57,14 @@ def update_metrics_file(metrics_file: Path, updates: dict):
         data["knowledge_usage"]["concepts_ignored"] += updates["concepts_ignored"]
     if "agent_decisions_aligned" in updates:
         data["knowledge_usage"]["agent_decisions_aligned"] += updates["agent_decisions_aligned"]
+    if "structured_events" in updates:
+        data["reflection"]["structured_events"] += updates["structured_events"]
+    if "fallback_extractions" in updates:
+        data["reflection"]["fallback_extractions"] += updates["fallback_extractions"]
+    if "empty_reflections" in updates:
+        data["reflection"]["empty_reflections"] += updates["empty_reflections"]
+    if "file_observations" in updates:
+        data["reflection"]["file_observations"] += updates["file_observations"]
     data["knowledge_usage"]["last_report_at"] = now_str
 
     metrics_file.parent.mkdir(parents=True, exist_ok=True)

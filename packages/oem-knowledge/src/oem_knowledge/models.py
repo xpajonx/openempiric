@@ -90,10 +90,18 @@ class KnowledgeUsageMetrics(BaseModel):
     last_report_at: str | None = None
 
 
+class ReflectionMetrics(BaseModel):
+    structured_events: int = 0
+    fallback_extractions: int = 0
+    empty_reflections: int = 0
+    file_observations: int = 0
+
+
 class MetricsSchema(BaseModel):
     retrieval: RetrievalMetrics = Field(default_factory=RetrievalMetrics)
     context: ContextMetrics = Field(default_factory=ContextMetrics)
     knowledge_usage: KnowledgeUsageMetrics = Field(default_factory=KnowledgeUsageMetrics)
+    reflection: ReflectionMetrics = Field(default_factory=ReflectionMetrics)
 
 
 class OutcomeMetrics(BaseModel):
@@ -111,6 +119,13 @@ class OutcomeRecord(BaseModel):
     reason: str | None = None
     metrics: OutcomeMetrics = Field(default_factory=OutcomeMetrics)
     timestamp: str
+
+
+class ReflectionMetrics(BaseModel):
+    structured_events: int = 0
+    fallback_extractions: int = 0
+    empty_reflections: int = 0
+    file_observations: int = 0
 
 
 class ConceptFitness(BaseModel):
