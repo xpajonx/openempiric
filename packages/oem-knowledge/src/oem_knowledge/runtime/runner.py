@@ -40,25 +40,30 @@ def _link_plugin():
             logging.warning("Failed to copy plugin file to %s: %s", plugin_dest, e)
 
 
-def _ensure_workspace_ready(eng: KnowledgeEngine, project: str | None, adapter) -> None:
-    """Auto-init project + warm up model + verify plugin. Idempotent."""
-    # Check BEFORE _resolve_harness (which auto-creates .oem/)
+def _ensure_workspace_ready(eng: KnowledgeEngine, project: str | None, adapter, warnings: list[str]) -> None:
+    """Auto-init project + warm up model + verify plugin. Idempotent. Critical steps fail fast, optional steps fail open."""
+    # Critical - fail fast
     if not eng.is_initialized(project):
         logging.info("First-run detected — bootstrapping project...")
         eng.init_project(project or ".")
 
     harness = eng._resolve_harness(project)
 
+    # Optional - fail open
     try:
         eng.warmup_if_needed()
     except Exception as e:
         logging.warning("Embedding model warmup failed: %s", e)
+        warnings.append("Vector search unavailable")
 
-    if not adapter.verify_mcp():
-        logging.info("Plugin not linked — installing...")
-        _link_plugin()
-        adapter.install_skill()
-
+    try:
+        if not adapter.verify_mcp():
+            logging.info("Plugin not linked — installing...")
+            _link_plugin()
+            adapter.install_skill()
+    except Exception as e:
+        logging.warning("Plugin linkage/repair failed: %s", e)
+        warnings.append("Plugin integration disabled")
 
 
 def _auto_recover_stale_session(eng: KnowledgeEngine, project: str | None = None) -> None:
@@ -133,18 +138,20 @@ def _auto_recover_stale_session(eng: KnowledgeEngine, project: str | None = None
 
 
 def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None):
+    warnings = []
+
     # 0. Auto-recover stale sessions before starting new one
     _auto_recover_stale_session(eng, project)
 
-    # Resolve harness
+    # Resolve harness - Critical step, fails fast
     harness = eng._resolve_harness(project)
 
-    # Resolve adapter
+    # Resolve adapter - Critical step, fails fast
     from oem_knowledge.adapters import get_adapter
     adapter = get_adapter(agent_name, eng, project)
 
     # 1. Ensure workspace is ready (auto-init, warmup, plugin)
-    _ensure_workspace_ready(eng, project, adapter)
+    _ensure_workspace_ready(eng, project, adapter, warnings)
 
     # 2. Verify adapter health, auto-repair if needed
     if hasattr(adapter, "verify_health"):
@@ -152,13 +159,18 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None)
             healthy, msg = adapter.verify_health()
             if not healthy:
                 logging.warning("Adapter health check failed: %s — attempting repair", msg)
-                _link_plugin()
-                adapter.install_skill()
-                healthy, msg = adapter.verify_health()
+                try:
+                    _link_plugin()
+                    adapter.install_skill()
+                    healthy, msg = adapter.verify_health()
+                except Exception as e:
+                    healthy, msg = False, str(e)
                 if not healthy:
                     logging.warning("Adapter repair failed: %s — continuing without plugin", msg)
+                    warnings.append("Plugin integration disabled")
         except Exception as e:
             logging.warning("Adapter health check error: %s", e)
+            warnings.append("Plugin integration disabled")
 
     # 2. Pre-session: generate session_id, restore state, compile context
     session_id = uuid.uuid4().hex[:12]
@@ -171,9 +183,11 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None)
         h = eng._resolve_harness(project)
         transcript_path_str = str((h / "state" / f"chat_{session_id}.md").resolve())
 
-    harness = eng._resolve_harness(project)
     active_session_file = harness / "state" / "active_session.json"
-    active_session_file.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        active_session_file.parent.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        warnings.append(f"Session directory creation failed ({e})")
     
     session_state = SessionState.create(
         session_id=session_id,
@@ -187,7 +201,7 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None)
     try:
         session_state.save(active_session_file)
     except Exception as e:
-        logging.warning("Failed to write active session file: %s", e)
+        warnings.append(f"Session tracking state save failed ({e})")
 
     # Emit sessions_started metric
     try:
@@ -196,7 +210,23 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None)
     except Exception:
         pass
 
-    context = _compile_oem_context(eng)
+    try:
+        context = _compile_oem_context(eng)
+    except Exception as e:
+        logging.warning("Context compilation failed: %s. Falling back to minimal context.", e)
+        warnings.append("Context enrichment disabled")
+        context = {
+            "active_concepts": [],
+            "active_decisions": [],
+            "relevant_failures": [],
+            "open_questions": [],
+            "memory_context": (
+                "OEM is your long-term memory for this project. "
+                "Use the knowledge_search tool to retrieve details. "
+                "You do not need to search before every response — only when you need information you do not already have."
+            )
+        }
+
     try:
         _OEM_RUNTIME_CONTEXT_PATH.parent.mkdir(parents=True, exist_ok=True)
         _OEM_RUNTIME_CONTEXT_PATH.write_text(
@@ -204,6 +234,7 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None)
         )
     except Exception as e:
         logging.warning("Failed to write runtime context to %s: %s", _OEM_RUNTIME_CONTEXT_PATH, e)
+        warnings.append("Context enrichment disabled")
 
     try:
         _OEM_TEMP_INSTRUCTIONS.parent.mkdir(parents=True, exist_ok=True)
@@ -222,13 +253,14 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None)
         _OEM_TEMP_INSTRUCTIONS.write_text(instructions, encoding="utf-8")
     except Exception as e:
         logging.warning("Failed to write transient instructions to %s: %s", _OEM_TEMP_INSTRUCTIONS, e)
-
+        warnings.append("Transient instructions unavailable")
 
     try:
         logging.info("Restoring session state (session_id=%s)", session_id)
         eng.restore_session_state(project)
     except Exception as e:
         logging.warning("Pre-session restore failed: %s", e)
+        warnings.append("Session state restore failed")
 
     # Set status to running
     try:
@@ -236,6 +268,16 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None)
         session_state.save(active_session_file)
     except Exception:
         pass
+
+    # Print warnings if any were collected
+    if warnings:
+        from oem_tui.panels import render_panel
+        panel_lines = ["OEM started with degraded functionality:"]
+        for w in warnings:
+            panel_lines.append(f"- {w}")
+        panel_lines.append("")
+        panel_lines.append("Agent session continues normally.")
+        print(render_panel("Warning", panel_lines, status="warning"))
 
     # 3. Spawn agent with managed mode env vars
     managed_env = os.environ.copy()

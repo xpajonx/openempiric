@@ -148,65 +148,74 @@ class SearchService:
                     new_registry[path_str] = registry[path_str]
 
         if to_index:
-            col = self.collection
-            for fp, path_str, old_hash, cur_hash in to_index:
-                if old_hash is not None:
+            try:
+                col = self.collection
+            except Exception as e:
+                import logging
+                logging.warning("ChromaDB is unavailable for indexing: %s", e)
+                stats["failed"] += len(to_index)
+                col = None
+
+            if col is not None:
+                for fp, path_str, old_hash, cur_hash in to_index:
+                    if old_hash is not None:
+                        try:
+                            existing = col.get(where={"source": path_str})
+                            if existing and existing["ids"]:
+                                col.delete(ids=existing["ids"])
+                        except Exception:
+                            pass
+
                     try:
-                        existing = col.get(where={"source": path_str})
-                        if existing and existing["ids"]:
-                            col.delete(ids=existing["ids"])
+                        rel_path = str(fp.relative_to(harness.parent))
                     except Exception:
-                        pass
+                        rel_path = fp.name
 
-                try:
-                    rel_path = str(fp.relative_to(harness.parent))
-                except Exception:
-                    rel_path = fp.name
+                    chunks = self.chunk_markdown(fp, rel_path)
+                    if not chunks:
+                        continue
 
-                chunks = self.chunk_markdown(fp, rel_path)
-                if not chunks:
-                    continue
+                    mtime = os.path.getmtime(fp)
+                    imp = self.derive_importance(rel_path)
 
-                mtime = os.path.getmtime(fp)
-                imp = self.derive_importance(rel_path)
+                    ids = [c["chunk_id"] for c in chunks]
+                    texts = [c["text"] for c in chunks]
+                    metadatas = [
+                        {
+                            "source": path_str,
+                            "rel_path": rel_path,
+                            "title": c["title"],
+                            "content_hash": cur_hash,
+                            "linked_concepts": ",".join(c["linked_concepts"]),
+                            "created_at": str(mtime),
+                            "updated_at": str(mtime),
+                            "importance": imp,
+                        }
+                        for c in chunks
+                    ]
 
-                ids = [c["chunk_id"] for c in chunks]
-                texts = [c["text"] for c in chunks]
-                metadatas = [
-                    {
-                        "source": path_str,
-                        "rel_path": rel_path,
-                        "title": c["title"],
-                        "content_hash": cur_hash,
-                        "linked_concepts": ",".join(c["linked_concepts"]),
-                        "created_at": str(mtime),
-                        "updated_at": str(mtime),
-                        "importance": imp,
-                    }
-                    for c in chunks
-                ]
-
-                try:
-                    embeddings = self.embed(texts)
-                    assert embeddings, "embeddings must not be empty"
-                    assert all(
-                        isinstance(v, float) for emb in embeddings for v in emb
-                    ), f"expected list[list[float]], got element type {type(embeddings[0][0])}"
-                    col.add(
-                        ids=ids, embeddings=embeddings, documents=texts, metadatas=metadatas
-                    )
-                except Exception as e:
-                    print(f"Index error: {e}", file=sys.stderr)
-                    stats["failed"] += 1
+                    try:
+                        embeddings = self.embed(texts)
+                        assert embeddings, "embeddings must not be empty"
+                        assert all(
+                            isinstance(v, float) for emb in embeddings for v in emb
+                        ), f"expected list[list[float]], got element type {type(embeddings[0][0])}"
+                        col.add(
+                            ids=ids, embeddings=embeddings, documents=texts, metadatas=metadatas
+                        )
+                    except Exception as e:
+                        print(f"Index error: {e}", file=sys.stderr)
+                        stats["failed"] += 1
 
         deleted_paths = set(registry.keys()) - active_paths
         if deleted_paths:
             try:
                 col = self.collection
-                for path in deleted_paths:
-                    existing = col.get(where={"source": path})
-                    if existing and existing["ids"]:
-                        col.delete(ids=existing["ids"])
+                if col is not None:
+                    for path in deleted_paths:
+                        existing = col.get(where={"source": path})
+                        if existing and existing["ids"]:
+                            col.delete(ids=existing["ids"])
             except Exception:
                 pass
 
@@ -215,55 +224,145 @@ class SearchService:
         return stats
 
     def search(self, query: str, k: int = 3, hybrid: bool = True) -> list[dict]:
-        col = self.collection
-        if col.count() == 0:
-            return []
+        try:
+            col = self.collection
+            if col.count() == 0:
+                return []
 
-        candidate_count = min(col.count(), max(20, k * 4))
-        query_vec = self.embed([query])[0]
+            candidate_count = min(col.count(), max(20, k * 4))
+            query_vec = self.embed([query])[0]
 
-        results = col.query(query_embeddings=[query_vec], n_results=candidate_count)
+            results = col.query(query_embeddings=[query_vec], n_results=candidate_count)
 
-        if not results or not results["ids"] or not results["ids"][0]:
-            return []
+            if not results or not results["ids"] or not results["ids"][0]:
+                return []
 
-        doc_texts = results["documents"][0]
-        bm25_scores = (
-            self._compute_bm25(query, doc_texts) if hybrid else [0.0] * len(doc_texts)
-        )
-
-        formatted = []
-        seen_ids = set()
-        for i in range(len(results["ids"][0])):
-            doc_id = results["ids"][0][i]
-            if doc_id in seen_ids:
-                continue
-            seen_ids.add(doc_id)
-            meta = results["metadatas"][0][i]
-
-            dense = 1 - results["distances"][0][i]
-            sparse = bm25_scores[i]
-            recency = self._recency_score(meta.get("created_at", str(time.time())))
-            importance = self._importance_score(meta.get("importance", "medium"))
-
-            final = (
-                (0.45 * dense)
-                + (0.30 * sparse)
-                + (0.15 * recency)
-                + (0.10 * importance)
+            doc_texts = results["documents"][0]
+            bm25_scores = (
+                self._compute_bm25(query, doc_texts) if hybrid else [0.0] * len(doc_texts)
             )
 
-            formatted.append(
-                {
-                    "id": doc_id,
-                    "document": results["documents"][0][i],
-                    "metadata": meta,
-                    "score": final,
-                }
-            )
+            formatted = []
+            seen_ids = set()
+            for i in range(len(results["ids"][0])):
+                doc_id = results["ids"][0][i]
+                if doc_id in seen_ids:
+                    continue
+                seen_ids.add(doc_id)
+                meta = results["metadatas"][0][i]
 
-        formatted.sort(key=lambda x: x["score"], reverse=True)
-        return formatted[:k]
+                dense = 1 - results["distances"][0][i]
+                sparse = bm25_scores[i]
+                recency = self._recency_score(meta.get("created_at", str(time.time())))
+                importance = self._importance_score(meta.get("importance", "medium"))
+
+                final = (
+                    (0.45 * dense)
+                    + (0.30 * sparse)
+                    + (0.15 * recency)
+                    + (0.10 * importance)
+                )
+
+                formatted.append(
+                    {
+                        "id": doc_id,
+                        "document": results["documents"][0][i],
+                        "metadata": meta,
+                        "score": final,
+                    }
+                )
+
+            formatted.sort(key=lambda x: x["score"], reverse=True)
+            return formatted[:k]
+        except Exception as e:
+            import logging
+            logging.warning("Vector database search failed, falling back to registry-only: %s", e)
+            return self._search_registry_fallback(query, k)
+
+    def _search_registry_fallback(self, query: str, k: int = 3) -> list[dict]:
+        """Fallback keyword search using the concept registry and wiki markdown files directly."""
+        try:
+            registry = self.engine._load_registry()
+        except Exception:
+            return []
+
+        query = query.lower().strip()
+        query_terms = [t for t in re.findall(r"\w+", query) if len(t) > 1]
+        
+        candidates = []
+        concepts_dir = self.engine._concepts_dir()
+        
+        for cid, cdata in registry.items():
+            canonical = cdata.get("canonical_name", cid).lower()
+            aliases = [a.lower() for a in cdata.get("aliases", [])]
+            
+            # Read wiki content
+            wiki_path = concepts_dir / f"{cid}.md"
+            wiki_text = ""
+            if wiki_path.exists():
+                try:
+                    wiki_text = wiki_path.read_text(encoding="utf-8")
+                except Exception:
+                    pass
+            
+            # Compute score
+            score = 0.0
+            if canonical == query:
+                score = 1.0
+            elif query in aliases:
+                score = 0.85
+            else:
+                # Calculate basic term overlap and similarity
+                text_to_search = f"{canonical} {' '.join(aliases)} {wiki_text}".lower()
+                matched_terms = 0
+                for term in query_terms:
+                    if term in text_to_search:
+                        matched_terms += 1
+                if query_terms:
+                    score = 0.5 * (matched_terms / len(query_terms))
+                
+                # Check fuzzy match on canonical name or aliases
+                max_sim = 0.0
+                for term in [canonical] + aliases:
+                    sim = self._string_similarity(query, term)
+                    if sim > max_sim:
+                        max_sim = sim
+                if max_sim >= 0.80:
+                    score = max(score, 0.50 + 0.35 * max_sim)
+
+            if score > 0.1 or (not query_terms and not query):
+                document = wiki_text if wiki_text else f"Concept: {cdata.get('canonical_name', cid)}\nDescription: {cdata.get('description', '')}"
+                
+                try:
+                    h = self.engine._resolve_harness()
+                    rel_path = str(wiki_path.relative_to(h.parent))
+                except Exception:
+                    rel_path = f".oem/wiki/{cid}.md"
+
+                imp = self.derive_importance(rel_path)
+                importance_val = self._importance_score(imp)
+                final_score = 0.8 * score + 0.2 * importance_val
+                
+                candidates.append({
+                    "id": f"{cid}#fallback",
+                    "document": document,
+                    "metadata": {
+                        "source": str(wiki_path),
+                        "rel_path": rel_path,
+                        "title": cdata.get("canonical_name", cid),
+                        "content_hash": "",
+                        "linked_concepts": "",
+                        "importance": imp,
+                    },
+                    "score": final_score
+                })
+
+        candidates.sort(key=lambda x: x["score"], reverse=True)
+        return candidates[:k]
+
+    def _string_similarity(self, s1: str, s2: str) -> float:
+        import difflib
+        return difflib.SequenceMatcher(None, s1.lower(), s2.lower()).ratio()
 
     def _compute_bm25(self, query: str, documents: list[str]) -> list[float]:
         query_terms = [t.lower() for t in re.findall(r"\w+", query) if len(t) > 1]
@@ -321,8 +420,11 @@ class SearchService:
                 return 0.5
 
     def stats(self) -> dict:
-        col = self.collection
-        total_chunks = col.count()
+        try:
+            col = self.collection
+            total_chunks = col.count() if col is not None else 0
+        except Exception:
+            total_chunks = 0
         db_size = 0
         db_path = self.engine._resolve_harness() / ".local_vector_db"
         if db_path.exists():

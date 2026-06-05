@@ -565,49 +565,53 @@ export const OpenempiricPlugin: Plugin = async ({ $ }) => {
   const repoDir = resolveRepoDir()
   return {
     config: async (config) => {
-      // 1. Register MCP (safely merge existing config to preserve env context)
-      const existingMcp = config.mcp?.openempiric || {}
-      config.mcp = config.mcp || {}
-      config.mcp.openempiric = {
-        type: "local",
-        command: [
-          "uv",
-          "run",
-          "--directory",
-          repoDir,
-          "python",
-          "-m",
-          "oem_knowledge.server"
-        ],
-        enabled: true,
-        timeout: 60000,
-        ...existingMcp,
-        env: {
-          ...(existingMcp.env || {})
-        }
-      }
-
-      // 2. Read context using ContextAssembler dynamically from workspace
-      const tempInstPath = process.env.OEM_TEMP_INSTRUCTIONS ||
-        path.join(os.homedir(), ".config", "opencode", "plugins", ".openempiric_temp_instructions.md")
-
-      let instContent = "";
       try {
-        const assembler = new ContextAssembler();
-        const activeProject = config.directory || process.cwd();
-        instContent = assembler.assemble(activeProject);
-      } catch (e) {
-        console.error("ContextAssembler failed:", e);
-      }
-
-      config.instructions = config.instructions || []
-      try {
-        fs.writeFileSync(tempInstPath, instContent || "# openempiric Session Context\n\nNo active context available.", "utf-8")
-        if (!config.instructions.includes(tempInstPath)) {
-          config.instructions.push(tempInstPath)
+        // 1. Register MCP (safely merge existing config to preserve env context)
+        const existingMcp = config.mcp?.openempiric || {}
+        config.mcp = config.mcp || {}
+        config.mcp.openempiric = {
+          type: "local",
+          command: [
+            "uv",
+            "run",
+            "--directory",
+            repoDir,
+            "python",
+            "-m",
+            "oem_knowledge.server"
+          ],
+          enabled: true,
+          timeout: 60000,
+          ...existingMcp,
+          env: {
+            ...(existingMcp.env || {})
+          }
         }
-      } catch (e) {
-        console.error("Failed to write transient openempiric instructions:", e)
+
+        // 2. Read context using ContextAssembler dynamically from workspace
+        const tempInstPath = process.env.OEM_TEMP_INSTRUCTIONS ||
+          path.join(os.homedir(), ".config", "opencode", "plugins", ".openempiric_temp_instructions.md")
+
+        let instContent = "";
+        try {
+          const assembler = new ContextAssembler();
+          const activeProject = config.directory || process.cwd();
+          instContent = assembler.assemble(activeProject);
+        } catch (e) {
+          console.error("ContextAssembler failed:", e);
+        }
+
+        config.instructions = config.instructions || []
+        try {
+          fs.writeFileSync(tempInstPath, instContent || "# openempiric Session Context\n\nNo active context available.", "utf-8")
+          if (!config.instructions.includes(tempInstPath)) {
+            config.instructions.push(tempInstPath)
+          }
+        } catch (e) {
+          console.error("Failed to write transient openempiric instructions:", e)
+        }
+      } catch (error) {
+        console.error("openempiric plugin config hook failed, isolating error:", error);
       }
     },
 
