@@ -36,6 +36,12 @@ def test_context_injection(tmp_path):
             "aliases": []
         }
     }
+    engine._concepts_dir.return_value = oem_dir / "wiki"
+    engine._load_events.return_value = []
+    engine.restore_session_state.return_value = {
+        "active_goals": ["Implement stuff"],
+        "recommended_files": []
+    }
 
     adapter = AntigravityAdapter(engine)
     

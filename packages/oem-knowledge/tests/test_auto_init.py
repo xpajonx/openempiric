@@ -220,10 +220,10 @@ class TestMemoryContext:
         ctx = _compile_oem_context(engine)
         assert "memory_context" in ctx
         assert "long-term memory" in ctx["memory_context"].lower()
-        assert "search" in ctx["memory_context"].lower()
+        assert "use this information when relevant" in ctx["memory_context"].lower()
 
     def test_context_mentions_retrieval_when_relevant(self, engine, tmp_path):
         from oem_knowledge.runtime.context import _compile_oem_context
         ctx = _compile_oem_context(engine)
         mc = ctx["memory_context"].lower()
-        assert "do not need to search before every response" in mc
+        assert "do not assume work should continue" in mc

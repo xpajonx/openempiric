@@ -81,43 +81,56 @@ class AntigravityAdapter(BaseAdapter):
 
     def context_injection(self, project_path: Optional[str] = None) -> str:
         """Capabilities: context_injection."""
-        proj = Path(project_path) if project_path else Path.cwd()
-        oem_dir = proj / ".oem"
+        from oem_knowledge.runtime.context import _compile_oem_context
+        ctx = _compile_oem_context(self.engine)
         
-        # Read session-handoff
-        handoff_content = ""
-        handoff_path = oem_dir / "session-handoff.md"
-        if handoff_path.exists():
-            try:
-                handoff_content = handoff_path.read_text(encoding="utf-8")
-            except Exception as e:
-                logging.warning(f"Failed to read handoff: {e}")
+        lines = ["# Previous Session Context\n"]
+        
+        lines.append("## Last Topic")
+        lines.append(ctx.get("last_topic", "General development") + "\n")
+        
+        lines.append("## Recent Decisions")
+        decisions = ctx.get("recent_decisions", [])
+        if decisions:
+            for d in decisions:
+                lines.append(f"- {d}")
+        else:
+            lines.append("- None")
+        lines.append("")
+        
+        lines.append("## Open Questions")
+        questions = ctx.get("open_questions", [])
+        if questions:
+            for q in questions:
+                lines.append(f"- {q}")
+        else:
+            lines.append("- None")
+        lines.append("")
 
-        # Assemble core concept context
-        concepts_context = ""
-        try:
-            registry = self.engine._load_registry(project_path)
-            active_concepts = []
-            for cid, cdata in registry.items():
-                if cdata.get("status") in ("validated", "canonical", "global"):
-                    wiki_file = oem_dir / "wiki" / f"{cid}.md"
-                    desc = ""
-                    if wiki_file.exists():
-                        try:
-                            text = wiki_file.read_text(encoding="utf-8")
-                            # strip frontmatter/headers to find the first line/summary
-                            lines = [l.strip() for l in text.split("\n") if l.strip() and not l.startswith("---") and not l.startswith("#")]
-                            if lines:
-                                desc = lines[0][:150]
-                        except Exception:
-                            pass
-                    active_concepts.append(f"- **{cdata.get('canonical_name')}** ({cid}): {desc}")
-            if active_concepts:
-                concepts_context = "\n### Active Concepts\n" + "\n".join(active_concepts)
-        except Exception as e:
-            logging.warning(f"Failed to load registry: {e}")
-            
-        return f"# OpenEmpiric Context\n\n{handoff_content}\n{concepts_context}".strip()
+        lines.append("## Active Concepts")
+        concepts = ctx.get("active_concepts", [])
+        if concepts:
+            for c in concepts[:5]:
+                desc = c.get("description", "")
+                desc_str = f": {desc}" if desc else ""
+                lines.append(f"- **{c['name']}** ({c['id']}){desc_str}")
+        else:
+            lines.append("- None")
+        lines.append("")
+
+        lines.append("## Relevant Failures")
+        failures = ctx.get("relevant_failures", [])
+        if failures:
+            for f in failures:
+                lines.append(f"- {f}")
+        else:
+            lines.append("- None")
+        lines.append("")
+
+        lines.append("## Memory Context")
+        lines.append(ctx.get("memory_context", "") + "\n")
+        
+        return "\n".join(lines).strip()
 
     def session_start(self, project_path: Optional[str] = None) -> Dict[str, Any]:
         """Capabilities: session_start."""

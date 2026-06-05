@@ -97,9 +97,10 @@ def test_oem_runtime_context_injection(tmp_proj, mock_home):
             assert oem["active_concepts"][0]["name"] == "database-guidelines"
             assert oem["active_concepts"][0]["description"] == "Use PostgreSQL for storage."
 
-            assert oem["active_decisions"] == ["Use PostgreSQL for storage."]
+            assert oem["recent_decisions"] == ["Use PostgreSQL for storage."]
             assert oem["relevant_failures"] == ["Do not set timeout too low."]
-            assert oem["open_questions"] == ["Implement security keys."]
+            assert oem["last_topic"] == "Implement security keys."
+            assert oem["open_questions"] == []
 
         mock_run.side_effect = capture_context
         run_agent("opencode", eng)
