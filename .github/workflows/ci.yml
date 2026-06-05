@@ -33,6 +33,9 @@ jobs:
       - name: Validate Python Compilation (Syntax Check)
         run: uv run python -m compileall -q -f packages/
 
+      - name: Initialize OEM workspace
+        run: uv run oem init
+
       - name: Run OEM Custom Linter
         run: uv run oem lint
 
