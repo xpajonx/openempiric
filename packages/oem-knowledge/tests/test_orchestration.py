@@ -28,3 +28,32 @@ def test_engine_delegation(tmp_path):
     explanation = engine.explain_concept(concept_id="concept_001")
     # Should say not found or return error status because we haven't registered it yet
     assert explanation["status"] == "error"
+
+
+def test_embed_returns_python_floats(tmp_path):
+    numpy = pytest.importorskip("numpy")
+    from unittest.mock import PropertyMock, patch
+
+    engine = KnowledgeEngine(project_path=tmp_path)
+    engine.init_project("test_float_conversion")
+
+    svc = engine.search_service
+
+    fake_embeddings = [
+        numpy.array([numpy.float32(0.1), numpy.float32(-0.2), numpy.float32(0.3)]),
+        numpy.array([numpy.float32(0.4), numpy.float32(-0.5), numpy.float32(0.6)]),
+    ]
+
+    with patch(
+        "oem_knowledge.engine.KnowledgeEngine.model",
+        new_callable=PropertyMock,
+    ) as mock_model_prop:
+        mock_model_prop.return_value.embed.return_value = fake_embeddings
+        result = svc.embed(["text1", "text2"])
+
+    assert len(result) == 2
+    assert all(isinstance(v, float) for emb in result for v in emb), (
+        f"expected all float, got element type {type(result[0][0])}"
+    )
+    assert result[0] == pytest.approx([0.1, -0.2, 0.3])
+    assert result[1] == pytest.approx([0.4, -0.5, 0.6])

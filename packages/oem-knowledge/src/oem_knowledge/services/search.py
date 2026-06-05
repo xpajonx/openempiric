@@ -29,7 +29,7 @@ class SearchService:
         return self.engine.collection
 
     def embed(self, texts: list[str]) -> list[list[float]]:
-        return [list(e) for e in self.model.embed(texts)]
+        return [[float(x) for x in e] for e in self.model.embed(texts)]
 
     def cosine_similarity(self, a: list[float], b: list[float]) -> float:
         dot = sum(x * y for x, y in zip(a, b))
@@ -148,7 +148,6 @@ class SearchService:
                     new_registry[path_str] = registry[path_str]
 
         if to_index:
-            model = self.model
             col = self.collection
             for fp, path_str, old_hash, cur_hash in to_index:
                 if old_hash is not None:
@@ -188,7 +187,11 @@ class SearchService:
                 ]
 
                 try:
-                    embeddings = [list(e) for e in model.embed(texts)]
+                    embeddings = self.embed(texts)
+                    assert embeddings, "embeddings must not be empty"
+                    assert all(
+                        isinstance(v, float) for emb in embeddings for v in emb
+                    ), f"expected list[list[float]], got element type {type(embeddings[0][0])}"
                     col.add(
                         ids=ids, embeddings=embeddings, documents=texts, metadatas=metadatas
                     )
@@ -217,7 +220,7 @@ class SearchService:
             return []
 
         candidate_count = min(col.count(), max(20, k * 4))
-        query_vec = [list(e) for e in self.model.embed([query])][0]
+        query_vec = self.embed([query])[0]
 
         results = col.query(query_embeddings=[query_vec], n_results=candidate_count)
 

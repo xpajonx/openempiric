@@ -123,18 +123,59 @@ root/
 
 ---
 
-## Configure as OpenCode Plugin (WSL Optional)
+## OpenCode Adapter Installation (Optional)
 
-While `openempiric` is designed to be fully agent-agnostic and work with any wrapper, it features a native OpenCode plugin:
+OpenEmpiric is an agent-native knowledge runtime with a pluggable adapter architecture.
 
-1. **Install/Enable the Plugin:**
-   Symlink the plugin file to OpenCode's plugins directory:
+The OpenCode adapter provides:
+- Native MCP integration
+- Runtime lifecycle management
+- Context injection
+- Knowledge retrieval tools
+
+If you use OpenCode, install the adapter using the steps below.
+
+1. **Install the OpenCode Adapter:**
+   Symlink the adapter file to OpenCode's plugins directory:
    ```bash
    mkdir -p ~/.config/opencode/plugins
    ln -s $(pwd)/plugins/openempiric.ts ~/.config/opencode/plugins/openempiric.ts
    ```
 
-OpenCode automatically loads `.ts` plugins from the plugins directory. The plugin dynamically resolves the repository location (via symlink, environment variable `OPENEMPIRIC_DIR`, or home directory candidates) to register the `openempiric` MCP server and load the required instructions!
+The OpenCode adapter dynamically resolves the OpenEmpiric runtime location, registers OEM MCP capabilities, and enables managed runtime lifecycle features.
+
+---
+
+## Verify Installation
+
+Run:
+```bash
+oem doctor
+```
+
+This verifies:
+- OEM runtime installation
+- Adapter registration
+- Embedding cache status
+- Context injection pipeline
+- Search pipeline availability
+
+---
+
+## Launch with Managed Runtime
+
+Start OpenCode through the OpenEmpiric runtime:
+
+```bash
+oem run opencode
+```
+
+This enables:
+- Session lifecycle management
+- Automatic context injection
+- Knowledge retrieval
+- Session recovery
+- Outcome recording
 
 ---
 
@@ -142,7 +183,7 @@ OpenCode automatically loads `.ts` plugins from the plugins directory. The plugi
 
 To completely remove OpenEmpiric from your system:
 
-1. **Remove the OpenCode plugin link:**
+1. **Remove the OpenCode adapter link:**
    ```bash
    rm ~/.config/opencode/plugins/openempiric.ts
    ```

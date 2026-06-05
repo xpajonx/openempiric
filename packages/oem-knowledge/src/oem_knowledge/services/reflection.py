@@ -142,7 +142,6 @@ class ReflectionService:
                 "source": ev.get("source", "chat"),
                 "schema_version": 1,
             }
-            print("DEBUG CANONICAL EVENT:", canonical_event)
             canonical_events.append(canonical_event)
             self.engine._append_event(canonical_event, project)
 
