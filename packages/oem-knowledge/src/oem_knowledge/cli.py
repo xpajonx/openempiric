@@ -55,12 +55,12 @@ def _setup_parser() -> argparse.ArgumentParser:
     init_p = sub.add_parser("init", help=argparse.SUPPRESS)
     init_p.add_argument("project", type=str, nargs="?", default=".")
 
-    search_p = sub.add_parser("search", help="Search the project knowledge base")
+    search_p = sub.add_parser("search", help="[User] Search the project knowledge base")
     search_p.add_argument("query", type=str)
     search_p.add_argument("--k", type=int, default=3)
     search_p.add_argument("--project", type=str, default="")
 
-    rebuild_p = sub.add_parser("rebuild", help=argparse.SUPPRESS)
+    rebuild_p = sub.add_parser("rebuild", help="[Advanced] Replay the event store to rebuild the concept registry")
     rebuild_p.add_argument("--project", type=str, default="")
 
     events_p = sub.add_parser("events", help=argparse.SUPPRESS)
@@ -99,7 +99,7 @@ def _setup_parser() -> argparse.ArgumentParser:
     contradictions_p = sub.add_parser("contradictions", help=argparse.SUPPRESS)
     contradictions_p.add_argument("--project", type=str, default="")
 
-    merge_p = sub.add_parser("merge", help=argparse.SUPPRESS)
+    merge_p = sub.add_parser("merge", help="[Advanced] Merge two duplicate/overlapping registry concepts together")
     merge_p.add_argument("primary_id", type=str)
     merge_p.add_argument("secondary_id", type=str)
     merge_p.add_argument("--auto", action="store_true", help="Automatically merge")
@@ -110,15 +110,15 @@ def _setup_parser() -> argparse.ArgumentParser:
     lint_p.add_argument("--workers", type=int, default=4)
     lint_p.add_argument("--fix", action="store_true", help="Automatically heal links")
 
-    session_start_p = sub.add_parser("session-start", help=argparse.SUPPRESS)
+    session_start_p = sub.add_parser("session-start", help="[Internal] Restore pre-injection context and prepare workspace before agent run")
     session_start_p.add_argument("--project", type=str, default="")
 
-    reflect_p = sub.add_parser("reflect", help=argparse.SUPPRESS)
+    reflect_p = sub.add_parser("reflect", help="[Advanced] Dry-run session transcript reflection and concept extraction")
     reflect_p.add_argument("--chat", type=str, default="")
     reflect_p.add_argument("--debug", action="store_true", help="Show detailed extraction breakdown")
     reflect_p.add_argument("--project", type=str, default="")
 
-    session_end_p = sub.add_parser("session-end", help=argparse.SUPPRESS)
+    session_end_p = sub.add_parser("session-end", help="[Internal] Finalize context, run extraction, and commit learnings after agent exits")
     session_end_p.add_argument("--project", type=str, default="")
     session_end_p.add_argument("--chat", type=str, default="")
     session_end_p.add_argument("--session-id", type=str, default="")
@@ -127,11 +127,11 @@ def _setup_parser() -> argparse.ArgumentParser:
     session_status_p = sub.add_parser("session-status", help=argparse.SUPPRESS)
     session_status_p.add_argument("--project", type=str, default="")
 
-    run_p = sub.add_parser("run", help="Run a coding agent (e.g. opencode) within the knowledge runtime")
+    run_p = sub.add_parser("run", help="[User] Run a managed coding agent session with dynamic config injection")
     run_p.add_argument("agent", type=str, help="opencode, claude-code, cursor, or custom command")
     run_p.add_argument("--project", type=str, default="")
 
-    recover_p = sub.add_parser("recover", help=argparse.SUPPRESS)
+    recover_p = sub.add_parser("recover", help="[Internal] Recover, commit, or abort crashed or unfinished agent sessions")
     recover_p.add_argument("--project", type=str, default="")
     recover_p.add_argument("--abort", action="store_true", help="Abort/discard the unfinished session")
     recover_p.add_argument("--status", action="store_true", help="Print current active session status")
@@ -153,7 +153,7 @@ def _setup_parser() -> argparse.ArgumentParser:
 
     todo_p = sub.add_parser("todo", help=argparse.SUPPRESS)
     
-    outcome_p = sub.add_parser("outcome", help=argparse.SUPPRESS)
+    outcome_p = sub.add_parser("outcome", help="[Internal] Record manual session outcome status, concepts, and goal satisfaction")
     outcome_p.add_argument("status", choices=["success", "failure", "abandoned"])
     outcome_p.add_argument("referenced_concepts", type=str, nargs="*", default=[])
     outcome_p.add_argument("--reason", type=str, default="")
@@ -161,7 +161,7 @@ def _setup_parser() -> argparse.ArgumentParser:
     outcome_p.add_argument("--project", type=str, default="")
     outcome_p.add_argument("--goal-satisfaction", type=float, default=None, help="Goal satisfaction rating (0.0 to 1.0)")
 
-    health_p = sub.add_parser("health", help="Scan knowledge health (stale, duplicates, conflicts)")
+    health_p = sub.add_parser("health", help="[User] Scan the workspace for stale concepts, duplicates, and contradicting knowledge")
     health_p.add_argument("--project", type=str, default="")
     health_p.add_argument("--stale-sessions", type=int, default=5, help="Number of sessions to check for staleness")
     health_p.add_argument("--similarity-threshold", type=float, default=0.85, help="Similarity threshold for duplicates")
@@ -180,7 +180,7 @@ def _setup_parser() -> argparse.ArgumentParser:
     todo_advance_p.add_argument("--status", type=str, default="")
     todo_advance_p.add_argument("--project", type=str, default="")
 
-    doctor_p = sub.add_parser("doctor", help="Check workspace health and configuration")
+    doctor_p = sub.add_parser("doctor", help="[User] Check workspace health, plugin links, and warmer status")
     doctor_p.add_argument("--project", type=str, default="")
 
     warmup_p = sub.add_parser("warmup", help=argparse.SUPPRESS)
