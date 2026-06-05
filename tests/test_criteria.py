@@ -92,7 +92,7 @@ class TestCriteria:
         assert "Search" in result.content[0].text
 
     def test_c3_knowledge_session_commit(self, tmp_proj):
-        """C4: knowledge_session_commit writes session report + materializes concepts."""
+        """C4: Deprecated knowledge_session_commit remains available internally for backward compatibility."""
         _call("knowledge_init", {"project": tmp_proj})
 
         # Commit with structured conversation text
@@ -173,7 +173,7 @@ class TestCriteria:
         assert "Updated item" in result.content[0].text
 
     def test_c6_knowledge_session_start(self, tmp_proj):
-        """C6: knowledge_session_start reads state and returns pre-injection context."""
+        """C6: Deprecated knowledge_session_start remains available internally for backward compatibility."""
         _call("knowledge_init", {"project": tmp_proj})
 
         # Write some state

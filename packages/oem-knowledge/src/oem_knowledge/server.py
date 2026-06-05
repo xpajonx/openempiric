@@ -146,7 +146,10 @@ def mount_tools(mcp: object) -> None:
     def knowledge_session_commit(
         project: str = "", conversation_text: str = "", session_id: str = ""
     ) -> str:
-        """End-of-session pipeline: reflect → materialize concepts → update graph → re-index.
+        """Deprecated internal lifecycle hook.
+
+        Invoked automatically by OEM runtime.
+        Agents should not call this tool directly.
 
         Args:
             project: Project directory path. Defaults to current directory.

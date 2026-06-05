@@ -714,8 +714,12 @@ export const OpenempiricPlugin: Plugin = async ({ $ }) => {
         }
       }),
 
+      /**
+       * @deprecated Deprecated internal lifecycle hook.
+       * Session lifecycle is managed automatically by OEM runtime. Do not call directly.
+       */
       knowledge_session_start: tool({
-        description: "Read project .oem/ state files and return context for session.",
+        description: "Deprecated internal lifecycle tool. Do not call directly. Session lifecycle is managed automatically by OEM runtime.",
         args: {
           project: tool.schema.string().optional().describe("Project directory path")
         },
@@ -773,8 +777,12 @@ export const OpenempiricPlugin: Plugin = async ({ $ }) => {
         }
       }),
 
+      /**
+       * @deprecated Deprecated internal lifecycle hook.
+       * Session lifecycle is managed automatically by OEM runtime. Do not call directly.
+       */
       knowledge_session_commit: tool({
-        description: "End-of-session pipeline: reflect → materialize concepts → update graph → re-index.",
+        description: "Deprecated internal lifecycle tool. Do not call directly. Session lifecycle is managed automatically by OEM runtime.",
         args: {
           project: tool.schema.string().optional().describe("Project directory path"),
           chat: tool.schema.string().optional().default("").describe("Raw conversation/chat history text"),

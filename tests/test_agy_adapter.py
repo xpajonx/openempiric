@@ -55,6 +55,7 @@ def test_context_injection(tmp_path):
     assert "ai-safety" in context
 
 def test_session_start(tmp_path):
+    """Verify that the deprecated session_start remains available internally in the adapter."""
     engine = MagicMock(spec=KnowledgeEngine)
     engine.restore_session_state.return_value = {
         "active_goals": ["Goal 1"],

@@ -28,7 +28,7 @@ def test_oem_init(tmp_proj):
 
 
 def test_oem_session_start(tmp_proj):
-    """Verify that 'oem session-start' invokes restoration correctly."""
+    """Verify that the deprecated 'oem session-start' command remains available internally for backward compatibility."""
     # First initialize project
     with patch.object(sys, "argv", ["oem", "init", tmp_proj]):
         main()
@@ -39,7 +39,7 @@ def test_oem_session_start(tmp_proj):
 
 
 def test_oem_session_end(tmp_proj):
-    """Verify that 'oem session-end' runs session_commit pipeline successfully."""
+    """Verify that the deprecated 'oem session-end' command remains available internally for backward compatibility."""
     # First initialize project
     with patch.object(sys, "argv", ["oem", "init", tmp_proj]):
         main()
