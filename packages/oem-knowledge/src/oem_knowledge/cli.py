@@ -1191,7 +1191,7 @@ def main():
 
             # 12. Session Recovery Ready
             try:
-                active_file = harness / "state" / "active_session.json"
+                active_file = resolved_dir / "state" / "active_session.json"
                 _ = SessionState.load(active_file)
                 runtime_lines.append("✓ Session Recovery Ready")
             except Exception as e:
@@ -1220,7 +1220,7 @@ def main():
 
             # 15. Outcome Tracking Ready
             try:
-                outcomes_file = harness / "state" / "outcomes.jsonl"
+                outcomes_file = resolved_dir / "state" / "outcomes.jsonl"
                 outcomes_file.parent.mkdir(parents=True, exist_ok=True)
                 from oem_knowledge.services.state import StateService
                 _ = StateService
@@ -1229,6 +1229,7 @@ def main():
                 runtime_lines.append(f"✗ Outcome Tracking not ready: {e}")
 
             print(render_panel("OEM Environment Check", lines, status=status))
+
 
             if any("✗" in l for l in runtime_lines):
                 print(render_panel("Runtime Health", runtime_lines, status="error"))
