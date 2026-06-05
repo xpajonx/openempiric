@@ -15,3 +15,9 @@ class BaseAdapter:
         """Verify if the MCP server is registered for this adapter."""
         return False
 
+    def get_expected_transcript_path(self, session_id: str) -> Path:
+        """Get the expected path where the transcript is stored for recovery."""
+        h = self.engine._resolve_harness(self.project_path)
+        return h / "state" / f"chat_{session_id}.md"
+
+

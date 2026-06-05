@@ -9,8 +9,10 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import uuid
 from pathlib import Path
+
 
 from oem_tui.panels import render_panel
 from .engine import KnowledgeEngine, migrate_harness_to_oem
@@ -152,6 +154,35 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None)
 
     # 2. Pre-session: generate session_id, restore state, compile context
     session_id = uuid.uuid4().hex[:12]
+
+    # Resolve expected transcript path via adapter
+    try:
+        t_path = adapter.get_expected_transcript_path(session_id)
+        transcript_path_str = str(t_path.resolve())
+    except Exception:
+        h = eng._resolve_harness(project)
+        transcript_path_str = str((h / "state" / f"chat_{session_id}.md").resolve())
+
+    harness = eng._resolve_harness(project)
+    active_session_file = harness / "state" / "active_session.json"
+    active_session_file.parent.mkdir(parents=True, exist_ok=True)
+    
+    session_state = {
+        "session_id": session_id,
+        "agent": agent_name,
+        "status": "started",
+        "started_at": time.time(),
+        "project": str(Path(project or ".").resolve()),
+        "transcript_path": transcript_path_str,
+        "context_path": str(_OEM_RUNTIME_CONTEXT_PATH.resolve()),
+        "temp_instructions": str(_OEM_TEMP_INSTRUCTIONS.resolve())
+    }
+
+    try:
+        active_session_file.write_text(json.dumps(session_state, indent=2), encoding="utf-8")
+    except Exception as e:
+        logging.warning("Failed to write active session file: %s", e)
+
     context = _compile_oem_context(eng)
     try:
         _OEM_RUNTIME_CONTEXT_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -166,6 +197,13 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None)
         eng.restore_session_state(project)
     except Exception as e:
         logging.warning("Pre-session restore failed: %s", e)
+
+    # Set status to running
+    try:
+        session_state["status"] = "running"
+        active_session_file.write_text(json.dumps(session_state, indent=2), encoding="utf-8")
+    except Exception:
+        pass
 
     # 3. Spawn agent with managed mode env vars
     managed_env = os.environ.copy()
@@ -193,34 +231,46 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None)
     finally:
         # 4. Post-session: read deferred chat from plugin or from agent transcripts
         chat_text = ""
-        if hasattr(adapter, "discover_latest_transcript") and hasattr(adapter, "parse_transcript"):
-            latest_t = adapter.discover_latest_transcript()
-            if latest_t:
-                logging.info(f"Discovered transcript: {latest_t}")
-                chat_text = adapter.parse_transcript(latest_t)
-        else:
-            chat_path = harness / "state" / f"chat_{session_id}.md"
-            if chat_path.exists():
-                chat_text = chat_path.read_text(encoding="utf-8")
-                try:
-                    chat_path.unlink()
-                except Exception:
-                    pass
+        try:
+            transcript_file = Path(session_state["transcript_path"])
+            if transcript_file.exists():
+                if hasattr(adapter, "parse_transcript"):
+                    chat_text = adapter.parse_transcript(transcript_file)
+                else:
+                    chat_text = transcript_file.read_text(encoding="utf-8")
+        except Exception:
+            pass
+
+        if not chat_text:
+            if hasattr(adapter, "discover_latest_transcript") and hasattr(adapter, "parse_transcript"):
+                latest_t = adapter.discover_latest_transcript()
+                if latest_t:
+                    logging.info(f"Discovered transcript: {latest_t}")
+                    chat_text = adapter.parse_transcript(latest_t)
+            else:
+                chat_path = harness / "state" / f"chat_{session_id}.md"
+                if chat_path.exists():
+                    chat_text = chat_path.read_text(encoding="utf-8")
+                    try:
+                        chat_path.unlink()
+                    except Exception:
+                        pass
 
         # 5. Session commit (reflect → materialize → graph → index)
+        committed = False
         try:
             commit_res = eng.session_commit(project, conversation_text=chat_text, session_id=session_id)
             logging.info("Session commit: report=%s events=%d materialized=%d",
                          commit_res.get("report_path", "?"),
                          len(commit_res.get("canonical_events", [])),
                          len(commit_res.get("materialized_log", [])))
+            committed = True
         except Exception as e:
             logging.warning("Post-session commit failed: %s", e)
 
-
         # 6. Record outcome
         try:
-            eng.record_outcome("success", session_id=session_id, project=project)
+            eng.record_outcome("success" if committed else "failure", session_id=session_id, project=project)
         except Exception as e:
             logging.warning("Outcome recording failed: %s", e)
 
@@ -232,8 +282,146 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None)
                 except Exception:
                     pass
 
+        # Delete active session file on successful completion
+        try:
+            if active_session_file.exists():
+                if committed:
+                    session_state["status"] = "completed"
+                    active_session_file.unlink()
+                else:
+                    session_state["status"] = "failed"
+                    active_session_file.write_text(json.dumps(session_state, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+
+
+def cmd_recover(eng: KnowledgeEngine, project: str | None = None, abort: bool = False, status: bool = False):
+    harness = eng._resolve_harness(project)
+    active_session_file = harness / "state" / "active_session.json"
+    if not active_session_file.exists():
+        print(render_panel("OEM Recovery", ["No unfinished sessions detected."], status="info"))
+        return
+
+    try:
+        session_data = json.loads(active_session_file.read_text(encoding="utf-8"))
+    except Exception as e:
+        print(render_panel("Recovery Error", [f"Failed to read active session file: {e}"], status="error"))
+        sys.exit(1)
+
+    session_id = session_data.get("session_id")
+    agent_name = session_data.get("agent", "opencode")
+    started_at = session_data.get("started_at", 0.0)
+    current_status = session_data.get("status", "unknown")
+    transcript_path = session_data.get("transcript_path", "")
+
+    if status:
+        import datetime
+        started_str = datetime.datetime.fromtimestamp(started_at).isoformat() if started_at else "unknown"
+        lines = [
+            f"Session ID:      {session_id}",
+            f"Agent:           {agent_name}",
+            f"Lifecycle State: {current_status}",
+            f"Started At:      {started_str}",
+            f"Project:         {session_data.get('project')}",
+            f"Transcript Path: {transcript_path}",
+            f"Context Path:    {session_data.get('context_path')}",
+            f"Temp Inst Path:  {session_data.get('temp_instructions')}"
+        ]
+        print(render_panel("Active Session Status", lines, status="stats"))
+        return
+
+    if abort:
+        context_path = session_data.get("context_path")
+        temp_inst = session_data.get("temp_instructions")
+        for path_str in (context_path, temp_inst, str(_OEM_RUNTIME_CONTEXT_PATH), str(_OEM_TEMP_INSTRUCTIONS)):
+            if path_str:
+                p = Path(path_str)
+                if p.exists():
+                    try:
+                        p.unlink()
+                    except Exception:
+                        pass
+        try:
+            session_data["status"] = "failed"
+            active_session_file.unlink()
+        except Exception:
+            pass
+        print(render_panel("Session Aborted", [f"Session {session_id} has been discarded and cleaned up."], status="ok"))
+        return
+
+    print(render_panel("Recovering Session", [f"Attempting to recover session {session_id} (State: {current_status})"], status="info"))
+    
+    from oem_knowledge.adapters import get_adapter
+    adapter = get_adapter(agent_name, eng, project)
+
+    chat_text = ""
+    if transcript_path:
+        t_file = Path(transcript_path)
+        if t_file.exists():
+            if hasattr(adapter, "parse_transcript"):
+                chat_text = adapter.parse_transcript(t_file)
+            else:
+                chat_text = t_file.read_text(encoding="utf-8")
+
+    if not chat_text:
+        if hasattr(adapter, "discover_latest_transcript") and hasattr(adapter, "parse_transcript"):
+            latest_t = adapter.discover_latest_transcript()
+            if latest_t:
+                chat_text = adapter.parse_transcript(latest_t)
+        if not chat_text:
+            chat_path = harness / "state" / f"chat_{session_id}.md"
+            if chat_path.exists():
+                chat_text = chat_path.read_text(encoding="utf-8")
+                try:
+                    chat_path.unlink()
+                except Exception:
+                    pass
+
+    if not chat_text:
+        print(render_panel("Recovery Failed", ["Could not find any conversation transcript or log for the session."], status="error"))
+        sys.exit(1)
+
+    try:
+        commit_res = eng.session_commit(project, conversation_text=chat_text, session_id=session_id)
+        eng.record_outcome("success", session_id=session_id, project=project)
+        
+        try:
+            session_data["status"] = "completed"
+            active_session_file.unlink()
+        except Exception:
+            pass
+
+        context_path = session_data.get("context_path")
+        temp_inst = session_data.get("temp_instructions")
+        for path_str in (context_path, temp_inst, str(_OEM_RUNTIME_CONTEXT_PATH), str(_OEM_TEMP_INSTRUCTIONS)):
+            if path_str:
+                p = Path(path_str)
+                if p.exists():
+                    try:
+                        p.unlink()
+                    except Exception:
+                        pass
+
+        print(
+            render_panel(
+                "Recovery Complete",
+                [
+                    f"Successfully recovered and committed session {session_id}.",
+                    f"Report: {Path(commit_res['report_path']).name}",
+                    f"Materialized: {len(commit_res.get('materialized_log', []))}",
+                    f"Links: {commit_res.get('links_updated', 0)}",
+                ],
+                status="ok",
+            )
+        )
+    except Exception as e:
+        print(render_panel("Recovery Commit Failed", [f"Error committing recovered session: {e}"], status="error"))
+        sys.exit(1)
+
 
 def _setup_parser() -> argparse.ArgumentParser:
+
     parser = argparse.ArgumentParser(description="OpenEmpiric (oem) CLI")
     parser.add_argument("--version", action="version", version=f"oem {_VERSION}", help="Show version and exit")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -311,6 +499,12 @@ def _setup_parser() -> argparse.ArgumentParser:
     run_p.add_argument("agent", type=str, help="opencode, claude-code, cursor, or custom command")
     run_p.add_argument("--project", type=str, default="")
 
+    recover_p = sub.add_parser("recover", help="Recover an unfinished/crashed session")
+    recover_p.add_argument("--project", type=str, default="")
+    recover_p.add_argument("--abort", action="store_true", help="Abort/discard the unfinished session")
+    recover_p.add_argument("--status", action="store_true", help="Print current active session status")
+
+
     metrics_p = sub.add_parser("metrics")
     metrics_p.add_argument("--project", type=str, default="")
     metrics_p.add_argument("--reset", action="store_true", help="Reset all metrics to default")
@@ -359,6 +553,33 @@ def main():
     args = parser.parse_args()
     project = _resolve_project(args)
     eng = KnowledgeEngine(project)
+
+    # Check for unfinished session for run, status/stats commands
+    if args.command in ("status", "stats", "run"):
+        try:
+            harness = eng._resolve_harness(project)
+            active_session_file = harness / "state" / "active_session.json"
+            if active_session_file.exists():
+                try:
+                    session_data = json.loads(active_session_file.read_text(encoding="utf-8"))
+                    sid = session_data.get("session_id", "unknown")
+                    print(render_panel(
+                        "Warning: Unfinished Session Detected",
+                        [
+                            f"An unfinished session was found (ID: {sid}).",
+                            "The agent may have crashed or exited unexpectedly.",
+                            "",
+                            "To query status:       oem recover --status",
+                            "To commit learnings:   oem recover",
+                            "To discard session:    oem recover --abort"
+                        ],
+                        status="warning"
+                    ))
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
 
     try:
         if args.command in ("status", "stats"):
@@ -734,6 +955,10 @@ def main():
 
         elif args.command == "run":
             run_agent(args.agent, eng, project)
+
+        elif args.command == "recover":
+            cmd_recover(eng, project, abort=args.abort, status=args.status)
+
 
         elif args.command == "todo":
             from oem_knowledge.tools.todos import oem_todo_read, oem_todo_write, oem_todo_advance

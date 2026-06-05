@@ -165,3 +165,9 @@ class AntigravityAdapter(BaseAdapter):
         except Exception:
             return False
 
+    def get_expected_transcript_path(self, session_id: str) -> Path:
+        """Get the expected path where the transcript is stored for recovery."""
+        app_data = self.get_app_data_dir()
+        return app_data / "brain" / session_id / ".system_generated" / "logs" / "transcript.jsonl"
+
+
