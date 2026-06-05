@@ -765,3 +765,29 @@ class KnowledgeEngine:
         from oem_knowledge.evolution import ContradictionDetector
         detector = ContradictionDetector(self)
         return detector.detect_contradictions(project)
+
+    def embedding_cache_ready(self) -> bool:
+        """Inspect if the embedding model is present in fastembed cache without instantiating it."""
+        try:
+            from fastembed.common.utils import define_cache_dir
+            from pathlib import Path
+            cache_dir = Path(define_cache_dir(None))
+            
+            # Check HuggingFace model cache directory (standard/preferred)
+            hf_dir = cache_dir / "models--qdrant--bge-small-en-v1.5-onnx-q"
+            if hf_dir.is_dir() and any(hf_dir.iterdir()):
+                return True
+                
+            # Check GCS fallback directories
+            gcs_dir = cache_dir / "bge-small-en-v1.5"
+            if gcs_dir.is_dir() and any(gcs_dir.iterdir()):
+                return True
+                
+            fast_gcs_dir = cache_dir / "fast-bge-small-en-v1.5"
+            if fast_gcs_dir.is_dir() and any(fast_gcs_dir.iterdir()):
+                return True
+                
+            return False
+        except Exception:
+            return False
+

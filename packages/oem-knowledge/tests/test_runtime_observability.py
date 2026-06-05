@@ -220,3 +220,41 @@ class TestRuntimeMetricsEmission:
         data = json.loads(metrics_file.read_text())
         if mat_res.get("materialized"):
             assert data["runtime"]["materializations"] >= 1
+
+
+class TestRuntimeReadinessAndSupervisor:
+    def test_checks_pipeline(self, engine, tmp_path):
+        from oem_knowledge.runtime.readiness import RuntimeReadiness
+        from oem_knowledge.runtime.supervisor import render_supervisor_panel
+        
+        harness = engine._resolve_harness(str(tmp_path))
+        
+        class DummyAdapter:
+            def verify_health(self):
+                return True, "All good"
+            def verify_mcp(self):
+                return True
+                
+        adapter = DummyAdapter()
+        
+        readiness = RuntimeReadiness()
+        checks = readiness.check(
+            eng=engine,
+            agent_name="opencode",
+            project=str(tmp_path),
+            harness=harness,
+            adapter=adapter,
+            stale_existed=False,
+            recovery_failed=False
+        )
+        
+        assert len(checks) > 0
+        names = [c.name for c in checks]
+        assert "Project initialized" in names
+        assert "Harness resolved" in names
+        assert "Plugin healthy" in names
+        
+        panel_str = render_supervisor_panel(str(tmp_path), "opencode", checks)
+        assert "Project" in panel_str
+        assert "OpenCode" in panel_str
+

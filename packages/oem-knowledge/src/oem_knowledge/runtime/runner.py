@@ -159,9 +159,21 @@ def _auto_recover_stale_session(eng: KnowledgeEngine, project: str | None = None
 
 def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None):
     warnings = []
+    start_time = time.time()
 
-    # 0. Auto-recover stale sessions before starting new one
-    _auto_recover_stale_session(eng, project)
+    # Track stale session recovery status
+    stale_existed = False
+    recovery_failed = False
+    try:
+        h = eng._resolve_harness(project)
+        active_file = h / "state" / "active_session.json"
+        if active_file.exists():
+            stale_existed = True
+            _auto_recover_stale_session(eng, project)
+            if active_file.exists():
+                recovery_failed = True
+    except Exception:
+        recovery_failed = True
 
     # Resolve harness - Critical step, fails fast
     harness = eng._resolve_harness(project)
@@ -288,6 +300,38 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None)
         session_state.save(active_session_file)
     except Exception:
         pass
+
+    # Run Supervisor checks
+    try:
+        from .readiness import RuntimeReadiness
+        from .supervisor import render_supervisor_panel, print_project_memory_summary
+        
+        checks = RuntimeReadiness().check(
+            eng, agent_name, project,
+            harness=harness,
+            adapter=adapter,
+            stale_existed=stale_existed,
+            recovery_failed=recovery_failed
+        )
+        panel_str = render_supervisor_panel(project, agent_name, checks)
+        print(panel_str)
+        
+        agent_display = agent_name
+        if agent_name == "opencode":
+            agent_display = "OpenCode"
+        elif agent_name == "claude-code":
+            agent_display = "Claude Code"
+        elif agent_name == "cursor":
+            agent_display = "Cursor"
+        elif agent_name in ("agy", "antigravity"):
+            agent_display = "Antigravity"
+        else:
+            agent_display = agent_name.title()
+            
+        duration = time.time() - start_time
+        print_project_memory_summary(context, agent_display, duration)
+    except Exception as e:
+        logging.warning("Readiness pipeline display failed: %s", e)
 
     # Print warnings if any were collected
     if warnings:
