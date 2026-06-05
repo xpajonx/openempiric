@@ -5,9 +5,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from oem_knowledge.engine import KnowledgeEngine
 
-class AntigravityAdapter:
-    def __init__(self, engine: Optional[KnowledgeEngine] = None):
-        self.engine = engine or KnowledgeEngine()
+from oem_knowledge.adapters.base import BaseAdapter
+
+class AntigravityAdapter(BaseAdapter):
+    def __init__(self, engine: Optional[KnowledgeEngine] = None, project_path: Optional[str] = None):
+        eng = engine or KnowledgeEngine(project_path)
+        super().__init__(eng, project_path)
 
     def get_app_data_dir(self) -> Path:
         """Get the app data directory where Antigravity stores logs/transcripts."""

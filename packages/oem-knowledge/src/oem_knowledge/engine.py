@@ -117,6 +117,7 @@ DEFAULT_DIRS = [
     "sessions",
     "state",
     "graph",
+    "skills",
 ]
 
 def migrate_harness_to_oem(project_dir: Path):
@@ -251,6 +252,14 @@ class KnowledgeEngine:
             fp = harness / fname
             if not sfs.exists(fp):
                 sfs.write_text(fp, content, force_allow_truncation=True)
+
+        # Install default skills
+        try:
+            from oem_knowledge.adapters import get_adapter
+            adapter = get_adapter("opencode", self, project_path)
+            adapter.install_skill()
+        except Exception:
+            pass
 
     @property
     def model(self):
@@ -536,6 +545,15 @@ class KnowledgeEngine:
                 fp.parent.mkdir(parents=True, exist_ok=True)
                 fp.write_text(content)
                 created_files.append(fname)
+
+        # Install adapter skills
+        try:
+            from oem_knowledge.adapters import get_adapter
+            adapter = get_adapter("opencode", self, project_dir)
+            if adapter.install_skill():
+                created_files.append("skills/openempiric.yaml")
+        except Exception:
+            pass
 
         return {
             "status": "success",

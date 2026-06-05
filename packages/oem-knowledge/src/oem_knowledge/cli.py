@@ -127,6 +127,10 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None)
     # 0. Resolve project harness
     harness = eng._resolve_harness(project)
 
+    # Resolve adapter
+    from oem_knowledge.adapters import get_adapter
+    adapter = get_adapter(agent_name, eng, project)
+
     # 1. Ensure plugin is available in opencode plugins dir
     plugin_src = _REPO_ROOT / "plugins" / "openempiric.ts"
     _OPENCODE_PLUGINS_DIR.mkdir(parents=True, exist_ok=True)
@@ -189,12 +193,10 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None)
     finally:
         # 4. Post-session: read deferred chat from plugin or from agent transcripts
         chat_text = ""
-        if agent_name in ("agy", "antigravity"):
-            from oem_knowledge.adapters.antigravity.adapter import AntigravityAdapter
-            adapter = AntigravityAdapter(eng)
+        if hasattr(adapter, "discover_latest_transcript") and hasattr(adapter, "parse_transcript"):
             latest_t = adapter.discover_latest_transcript()
             if latest_t:
-                logging.info(f"Discovered Antigravity transcript: {latest_t}")
+                logging.info(f"Discovered transcript: {latest_t}")
                 chat_text = adapter.parse_transcript(latest_t)
         else:
             chat_path = harness / "state" / f"chat_{session_id}.md"
@@ -1051,6 +1053,19 @@ def main():
             except Exception:
                 lines.append("⚠ Embedding model (BAAI/bge-small-en-v1.5) is not cached")
                 lines.append("  → Run `oem warmup` once per machine to pre-download")
+
+            # 7. Skill installation check
+            try:
+                h_dir = eng._resolve_harness(project)
+                skills_file = h_dir / "skills" / "openempiric.yaml"
+                if skills_file.exists():
+                    lines.append("✓ OEM Skill Installed")
+                else:
+                    lines.append("✗ OEM Skill not installed (missing skills/openempiric.yaml)")
+                    status = "error"
+            except Exception as e:
+                lines.append(f"✗ Failed to verify OEM Skill installation: {e}")
+                status = "error"
 
             print(render_panel("OEM Environment Check", lines, status=status))
 
