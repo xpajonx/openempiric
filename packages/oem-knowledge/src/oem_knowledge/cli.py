@@ -47,101 +47,101 @@ def _setup_parser() -> argparse.ArgumentParser:
 
     parser = argparse.ArgumentParser(description="OpenEmpiric (oem) CLI")
     parser.add_argument("--version", action="version", version=f"oem {_VERSION}", help="Show version and exit")
-    sub = parser.add_subparsers(dest="command", required=True)
+    sub = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
 
-    sub.add_parser("status")
-    sub.add_parser("stats")
+    sub.add_parser("status", help=argparse.SUPPRESS)
+    sub.add_parser("stats", help=argparse.SUPPRESS)
 
-    init_p = sub.add_parser("init")
+    init_p = sub.add_parser("init", help=argparse.SUPPRESS)
     init_p.add_argument("project", type=str, nargs="?", default=".")
 
-    search_p = sub.add_parser("search")
+    search_p = sub.add_parser("search", help="Search the project knowledge base")
     search_p.add_argument("query", type=str)
     search_p.add_argument("--k", type=int, default=3)
     search_p.add_argument("--project", type=str, default="")
 
-    rebuild_p = sub.add_parser("rebuild")
+    rebuild_p = sub.add_parser("rebuild", help=argparse.SUPPRESS)
     rebuild_p.add_argument("--project", type=str, default="")
 
-    events_p = sub.add_parser("events")
+    events_p = sub.add_parser("events", help=argparse.SUPPRESS)
     events_p.add_argument("--project", type=str, default="")
     events_p.add_argument("--concept", type=str, default="")
     events_p.add_argument("--type", type=str, default="")
     events_p.add_argument("--session-id", type=str, default="")
 
-    event_p = sub.add_parser("event")
+    event_p = sub.add_parser("event", help=argparse.SUPPRESS)
     event_p.add_argument("event_id", type=str)
     event_p.add_argument("--project", type=str, default="")
 
-    explain_p = sub.add_parser("explain")
+    explain_p = sub.add_parser("explain", help=argparse.SUPPRESS)
     explain_p.add_argument("type", choices=["concept", "event"])
     explain_p.add_argument("id", type=str)
     explain_p.add_argument("--history", action="store_true", help="Show revision history")
     explain_p.add_argument("--project", type=str, default="")
 
-    vault_p = sub.add_parser("vault")
+    vault_p = sub.add_parser("vault", help=argparse.SUPPRESS)
     vault_p.add_argument("action", choices=["sync", "candidates", "promote", "demote"])
     vault_p.add_argument("concept_id", type=str, nargs="?", default="")
     vault_p.add_argument("--project", type=str, default="")
 
-    identity_p = sub.add_parser("identity")
+    identity_p = sub.add_parser("identity", help=argparse.SUPPRESS)
     identity_p.add_argument("action", choices=["scan", "review"])
     identity_p.add_argument("concept_a", type=str, nargs="?", default="")
     identity_p.add_argument("concept_b", type=str, nargs="?", default="")
     identity_p.add_argument("--project", type=str, default="")
 
-    concept_p = sub.add_parser("concept")
+    concept_p = sub.add_parser("concept", help=argparse.SUPPRESS)
     concept_p.add_argument("action", choices=["evolve", "health", "fitness"])
     concept_p.add_argument("concept_id", type=str, nargs="?", default="")
     concept_p.add_argument("--format", choices=["text", "yaml", "json"], default="text")
     concept_p.add_argument("--project", type=str, default="")
 
-    contradictions_p = sub.add_parser("contradictions")
+    contradictions_p = sub.add_parser("contradictions", help=argparse.SUPPRESS)
     contradictions_p.add_argument("--project", type=str, default="")
 
-    merge_p = sub.add_parser("merge")
+    merge_p = sub.add_parser("merge", help=argparse.SUPPRESS)
     merge_p.add_argument("primary_id", type=str)
     merge_p.add_argument("secondary_id", type=str)
     merge_p.add_argument("--auto", action="store_true", help="Automatically merge")
     merge_p.add_argument("--project", type=str, default="")
 
-    lint_p = sub.add_parser("lint")
+    lint_p = sub.add_parser("lint", help=argparse.SUPPRESS)
     lint_p.add_argument("--project", type=str, default="")
     lint_p.add_argument("--workers", type=int, default=4)
     lint_p.add_argument("--fix", action="store_true", help="Automatically heal links")
 
-    session_start_p = sub.add_parser("session-start")
+    session_start_p = sub.add_parser("session-start", help=argparse.SUPPRESS)
     session_start_p.add_argument("--project", type=str, default="")
 
-    reflect_p = sub.add_parser("reflect", help="Analyze session content for concept extraction (debug)")
+    reflect_p = sub.add_parser("reflect", help=argparse.SUPPRESS)
     reflect_p.add_argument("--chat", type=str, default="")
     reflect_p.add_argument("--debug", action="store_true", help="Show detailed extraction breakdown")
     reflect_p.add_argument("--project", type=str, default="")
 
-    session_end_p = sub.add_parser("session-end")
+    session_end_p = sub.add_parser("session-end", help=argparse.SUPPRESS)
     session_end_p.add_argument("--project", type=str, default="")
     session_end_p.add_argument("--chat", type=str, default="")
     session_end_p.add_argument("--session-id", type=str, default="")
     session_end_p.add_argument("--verbose", action="store_true", help="Show detailed reflection analysis")
 
-    session_status_p = sub.add_parser("session-status", help="Show active session runtime status")
+    session_status_p = sub.add_parser("session-status", help=argparse.SUPPRESS)
     session_status_p.add_argument("--project", type=str, default="")
 
-    run_p = sub.add_parser("run")
+    run_p = sub.add_parser("run", help="Run a coding agent (e.g. opencode) within the knowledge runtime")
     run_p.add_argument("agent", type=str, help="opencode, claude-code, cursor, or custom command")
     run_p.add_argument("--project", type=str, default="")
 
-    recover_p = sub.add_parser("recover", help="Recover an unfinished/crashed session")
+    recover_p = sub.add_parser("recover", help=argparse.SUPPRESS)
     recover_p.add_argument("--project", type=str, default="")
     recover_p.add_argument("--abort", action="store_true", help="Abort/discard the unfinished session")
     recover_p.add_argument("--status", action="store_true", help="Print current active session status")
 
 
-    runtime_summary_p = sub.add_parser("runtime-summary", help="Show aggregate runtime metrics summary")
+    runtime_summary_p = sub.add_parser("runtime-summary", help=argparse.SUPPRESS)
     runtime_summary_p.add_argument("--days", type=int, default=7)
     runtime_summary_p.add_argument("--project", type=str, default="")
 
-    metrics_p = sub.add_parser("metrics")
+    metrics_p = sub.add_parser("metrics", help=argparse.SUPPRESS)
     metrics_p.add_argument("--project", type=str, default="")
     metrics_p.add_argument("--reset", action="store_true", help="Reset all metrics to default")
     metrics_p.add_argument("--export", type=str, help="Export raw metrics JSON to file path")
@@ -151,9 +151,9 @@ def _setup_parser() -> argparse.ArgumentParser:
     metrics_p.add_argument("--ignored", type=str, default="[]", help="JSON array of ignored concept IDs")
     metrics_p.add_argument("--decisions", type=str, default="[]", help="JSON array of decisions aligned")
 
-    todo_p = sub.add_parser("todo", help="Manage session todo list")
+    todo_p = sub.add_parser("todo", help=argparse.SUPPRESS)
     
-    outcome_p = sub.add_parser("outcome", help="Record session outcome")
+    outcome_p = sub.add_parser("outcome", help=argparse.SUPPRESS)
     outcome_p.add_argument("status", choices=["success", "failure", "abandoned"])
     outcome_p.add_argument("referenced_concepts", type=str, nargs="*", default=[])
     outcome_p.add_argument("--reason", type=str, default="")
@@ -183,9 +183,10 @@ def _setup_parser() -> argparse.ArgumentParser:
     doctor_p = sub.add_parser("doctor", help="Check workspace health and configuration")
     doctor_p.add_argument("--project", type=str, default="")
 
-    warmup_p = sub.add_parser("warmup", help="Pre-download embedding model (one-time per machine)")
+    warmup_p = sub.add_parser("warmup", help=argparse.SUPPRESS)
     warmup_p.add_argument("--project", type=str, default="")
 
+    sub._choices_actions = [a for a in sub._choices_actions if a.help is not argparse.SUPPRESS]
     return parser
 
 

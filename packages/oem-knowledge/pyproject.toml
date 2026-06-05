@@ -22,3 +22,10 @@ dev = ["pytest>=8"]
 
 [tool.uv.sources]
 oem-tui = { workspace = true }
+
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.package-data]
+oem_knowledge = ["plugins/openempiric.ts"]

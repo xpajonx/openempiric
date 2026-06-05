@@ -21,6 +21,10 @@ if TYPE_CHECKING:
 def _link_plugin():
     """Symlink the TypeScript plugin into opencode's plugins directory. Idempotent."""
     plugin_src = _REPO_ROOT / "plugins" / "openempiric.ts"
+    if not plugin_src.exists():
+        plugin_src = Path(__file__).resolve().parent.parent / "plugins" / "openempiric.ts"
+    if not plugin_src.exists():
+        plugin_src = _REPO_ROOT / "plugins" / "openempiric.ts"
     _OPENCODE_PLUGINS_DIR.mkdir(parents=True, exist_ok=True)
     plugin_dest = _OPENCODE_PLUGINS_DIR / "openempiric.ts"
     if not plugin_src.exists():

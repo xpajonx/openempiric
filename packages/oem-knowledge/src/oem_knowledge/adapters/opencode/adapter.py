@@ -50,14 +50,19 @@ best_practices:
 
     def verify_health(self) -> tuple[bool, str]:
         import os
-        from oem_knowledge.runtime.config import _REPO_ROOT
         plugins_dir = Path(os.environ.get("OPENCODE_PLUGINS_DIR", Path.home() / ".config" / "opencode" / "plugins"))
         plugin_dest = plugins_dir / "openempiric.ts"
 
         if not (plugin_dest.exists() or plugin_dest.is_symlink()):
             return False, "Plugin openempiric.ts not found in plugins dir"
 
+        from oem_knowledge.runtime.config import _REPO_ROOT
         plugin_src = _REPO_ROOT / "plugins" / "openempiric.ts"
+        if not plugin_src.exists():
+            plugin_src = Path(__file__).resolve().parent.parent.parent / "plugins" / "openempiric.ts"
+        if not plugin_src.exists():
+            plugin_src = _REPO_ROOT / "plugins" / "openempiric.ts"
+
         if plugin_src.exists() and plugin_dest.is_symlink():
             try:
                 if plugin_dest.readlink().resolve() != plugin_src.resolve():
