@@ -1,0 +1,108 @@
+import json
+import sys
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+from oem_knowledge.engine import KnowledgeEngine
+from oem_knowledge.cli import main
+
+@pytest.fixture
+def engine(tmp_path):
+    eng = KnowledgeEngine(project_path=tmp_path)
+    eng.init_project(str(tmp_path))
+    return eng
+
+def test_detect_stale_concepts(engine, tmp_path):
+    # Setup registry with two concepts
+    harness = engine._resolve_harness(str(tmp_path))
+    registry = {
+        "concept_a": {
+            "canonical_name": "Concept A",
+            "sessions": ["session_1", "session_2"]
+        },
+        "concept_b": {
+            "canonical_name": "Concept B",
+            "sessions": ["session_4", "session_5"]
+        }
+    }
+    (harness / "concept_registry.json").write_text(json.dumps(registry), encoding="utf-8")
+
+    # Record 5 outcomes sequentially
+    # concept_a is referenced in session_1 and session_2
+    # concept_b is referenced in session_4 and session_5
+    for i in range(1, 6):
+        referenced = []
+        if i in (1, 2):
+            referenced.append("concept_a")
+        if i in (4, 5):
+            referenced.append("concept_b")
+        engine.record_outcome(
+            outcome="success",
+            referenced_concepts=referenced,
+            session_id=f"session_{i}",
+            project=str(tmp_path)
+        )
+
+    # 1. With n_sessions=3, the last 3 sessions are: session_3, session_4, session_5
+    # concept_a is stale because it hasn't been referenced in session_3, 4, or 5
+    stale_3 = engine.detect_stale_concepts(n_sessions=3, project=str(tmp_path))
+    assert len(stale_3) == 1
+    assert stale_3[0]["concept_id"] == "concept_a"
+    assert stale_3[0]["sessions_since_reference"] == 3  # last ref in session_2 (index 1), total 5: 5 - 2 = 3 sessions ago
+
+    # concept_b is not stale in the last 3 sessions (it was referenced in session_4 and 5)
+    # 2. With n_sessions=1, the last session is session_5
+    # concept_a is stale, concept_b is not stale
+    stale_1 = engine.detect_stale_concepts(n_sessions=1, project=str(tmp_path))
+    assert any(x["concept_id"] == "concept_a" for x in stale_1)
+    assert not any(x["concept_id"] == "concept_b" for x in stale_1)
+
+
+def test_propose_merges(engine, tmp_path):
+    harness = engine._resolve_harness(str(tmp_path))
+    registry = {
+        "concept_parser": {
+            "canonical_name": "Code Parser Engine",
+            "status": "validated",
+            "evidence_count": 5
+        },
+        "concept_parsers": {
+            "canonical_name": "Code Parser Engines",
+            "status": "candidate",
+            "evidence_count": 1
+        }
+    }
+    (harness / "concept_registry.json").write_text(json.dumps(registry), encoding="utf-8")
+
+    merges = engine.propose_merges(similarity_threshold=0.85, project=str(tmp_path))
+    assert len(merges) == 1
+    assert merges[0]["primary_id"] == "concept_parser"
+    assert merges[0]["secondary_id"] == "concept_parsers"
+
+
+def test_health_cli_command(engine, tmp_path):
+    harness = engine._resolve_harness(str(tmp_path))
+    registry = {
+        "concept_parser": {
+            "canonical_name": "Code Parser Engine",
+            "status": "validated",
+            "evidence_count": 5
+        }
+    }
+    (harness / "concept_registry.json").write_text(json.dumps(registry), encoding="utf-8")
+
+    with patch.object(sys, "argv", ["oem", "health", "--project", str(tmp_path)]):
+        with patch("builtins.print") as mock_print:
+            try:
+                main()
+            except SystemExit:
+                pass
+            
+            # Verify panel was outputted
+            called = False
+            for call in mock_print.call_args_list:
+                args = call[0]
+                if args and any("Knowledge Health Scan" in str(arg) for arg in args):
+                    called = True
+            assert called

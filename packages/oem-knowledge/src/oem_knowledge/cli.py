@@ -161,6 +161,11 @@ def _setup_parser() -> argparse.ArgumentParser:
     outcome_p.add_argument("--project", type=str, default="")
     outcome_p.add_argument("--goal-satisfaction", type=float, default=None, help="Goal satisfaction rating (0.0 to 1.0)")
 
+    health_p = sub.add_parser("health", help="Scan knowledge health (stale, duplicates, conflicts)")
+    health_p.add_argument("--project", type=str, default="")
+    health_p.add_argument("--stale-sessions", type=int, default=5, help="Number of sessions to check for staleness")
+    health_p.add_argument("--similarity-threshold", type=float, default=0.85, help="Similarity threshold for duplicates")
+
     todo_sub = todo_p.add_subparsers(dest="todo_action", required=True)
 
     todo_read_p = todo_sub.add_parser("read")
@@ -633,6 +638,43 @@ def main():
                 lines.append(f"     Description: {c['description']}")
                 lines.append("")
             print(render_panel("Contradiction Scan", lines, status="error" if contradictions else "ok"))
+
+        elif args.command == "health":
+            stale = eng.detect_stale_concepts(args.stale_sessions, project)
+            merges = eng.propose_merges(args.similarity_threshold, project)
+            conflicts = eng.detect_contradictions(project)
+            
+            lines = []
+            
+            # Stale concepts section
+            lines.append("Stale Concepts:")
+            if stale:
+                for s in stale:
+                    lines.append(f"  ○ {s['canonical_name']} ({s['concept_id']}) - untouched for {s['sessions_since_reference']} sessions")
+            else:
+                lines.append("  None")
+            lines.append("")
+            
+            # Merge proposals section
+            lines.append("Duplicate Merge Proposals:")
+            if merges:
+                for m in merges:
+                    lines.append(f"  ✦ Suggest merging {m['secondary_name']} ({m['secondary_id']}) into {m['primary_name']} ({m['primary_id']})")
+                    lines.append(f"    Reason: {m['reason']}")
+            else:
+                lines.append("  None")
+            lines.append("")
+            
+            # Contradictions section
+            lines.append("Contradictions Detected:")
+            if conflicts:
+                for c in conflicts:
+                    lines.append(f"  ✗ Conflict between {c['name_a']} ({c['concept_a']}) and {c['name_b']} ({c['concept_b']})")
+                    lines.append(f"    Description: {c['description']}")
+            else:
+                lines.append("  None")
+                
+            print(render_panel("Knowledge Health Scan", lines, status="stats"))
 
         elif args.command == "merge":
             res = eng.merge_concepts(project, args.primary_id, args.secondary_id)

@@ -481,3 +481,46 @@ class StateService:
             "goal_satisfaction": resolved_satisfaction,
             "metrics": log_entry["metrics"],
         }
+
+    def detect_stale_concepts(self, n_sessions: int = 5, project: str | None = None) -> list[dict]:
+        """Identify concepts that have not been referenced in the last N sessions."""
+        registry = self.engine._load_registry(project)
+        harness = self.engine._resolve_harness(project)
+        outcomes_file = harness / "state" / "outcomes.jsonl"
+        
+        all_sessions = []
+        if outcomes_file.exists():
+            try:
+                for line in outcomes_file.read_text(encoding="utf-8").splitlines():
+                    if line.strip():
+                        record = json.loads(line)
+                        sid = record.get("session_id")
+                        if sid:
+                            all_sessions.append(sid)
+            except Exception:
+                pass
+
+        if len(all_sessions) < n_sessions:
+            return []
+
+        last_n_sessions = set(all_sessions[-n_sessions:])
+        
+        stale_concepts = []
+        for cid, cdata in registry.items():
+            concept_sessions = set(cdata.get("sessions", []))
+            if not concept_sessions.intersection(last_n_sessions):
+                last_ref = None
+                sessions_since = len(all_sessions)
+                if cdata.get("sessions"):
+                    last_ref = cdata.get("sessions")[-1]
+                    if last_ref in all_sessions:
+                        sessions_since = len(all_sessions) - all_sessions.index(last_ref) - 1
+                
+                stale_concepts.append({
+                    "concept_id": cid,
+                    "canonical_name": cdata.get("canonical_name", cid),
+                    "last_referenced_session": last_ref,
+                    "sessions_since_reference": sessions_since
+                })
+
+        return stale_concepts

@@ -750,3 +750,16 @@ class KnowledgeEngine:
 
     def calculate_fitness(self, project: str | None = None) -> dict[str, ConceptFitness]:
         return self.fitness_service.calculate_fitness(project)
+
+    def detect_stale_concepts(self, n_sessions: int = 5, project: str | None = None) -> list[dict]:
+        return self.state_service.detect_stale_concepts(n_sessions, project)
+
+    def propose_merges(self, similarity_threshold: float = 0.85, project: str | None = None) -> list[dict]:
+        from oem_knowledge.evolution import ConceptEvolutionEngine
+        ev = ConceptEvolutionEngine(self)
+        return ev.propose_merges(similarity_threshold, project)
+
+    def detect_contradictions(self, project: str | None = None) -> list[dict]:
+        from oem_knowledge.evolution import ContradictionDetector
+        detector = ContradictionDetector(self)
+        return detector.detect_contradictions(project)

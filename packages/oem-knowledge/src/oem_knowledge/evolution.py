@@ -60,6 +60,63 @@ class ConceptEvolutionEngine:
             "learnings_count": len(unique_learnings)
         }
 
+    def propose_merges(self, similarity_threshold: float = 0.85, project: str | None = None) -> list[dict]:
+        """Propose merging concepts with highly similar canonical names or aliases."""
+        registry = self.engine._load_registry(project)
+        cids = list(registry.keys())
+        proposals = []
+        
+        import difflib
+        
+        def similarity(s1: str, s2: str) -> float:
+            return difflib.SequenceMatcher(None, s1.lower(), s2.lower()).ratio()
+            
+        for i in range(len(cids)):
+            for j in range(i + 1, len(cids)):
+                cid_a = cids[i]
+                cid_b = cids[j]
+                data_a = registry[cid_a]
+                data_b = registry[cid_b]
+                
+                name_a = data_a.get("canonical_name", "")
+                name_b = data_b.get("canonical_name", "")
+                
+                sim = similarity(name_a, name_b)
+                
+                aliases_a = data_a.get("aliases", [])
+                aliases_b = data_b.get("aliases", [])
+                
+                max_alias_sim = 0.0
+                for a in aliases_a:
+                    max_alias_sim = max(max_alias_sim, similarity(a, name_b))
+                for b in aliases_b:
+                    max_alias_sim = max(max_alias_sim, similarity(b, name_a))
+                for a in aliases_a:
+                    for b in aliases_b:
+                        max_alias_sim = max(max_alias_sim, similarity(a, b))
+                        
+                best_sim = max(sim, max_alias_sim)
+                if best_sim >= similarity_threshold:
+                    status_rank = {"canonical": 4, "validated": 3, "emerging": 2, "candidate": 1}
+                    rank_a = (status_rank.get(data_a.get("status"), 0), data_a.get("evidence_count", 0))
+                    rank_b = (status_rank.get(data_b.get("status"), 0), data_b.get("evidence_count", 0))
+                    
+                    if rank_a >= rank_b:
+                        primary, secondary = cid_a, cid_b
+                    else:
+                        primary, secondary = cid_b, cid_a
+                        
+                    proposals.append({
+                        "primary_id": primary,
+                        "secondary_id": secondary,
+                        "primary_name": registry[primary].get("canonical_name", primary),
+                        "secondary_name": registry[secondary].get("canonical_name", secondary),
+                        "similarity": round(best_sim, 4),
+                        "reason": f"High naming similarity ({round(best_sim * 100)}%) between '{registry[primary].get('canonical_name')}' and '{registry[secondary].get('canonical_name')}'"
+                    })
+                    
+        return proposals
+
 
 class ContradictionDetector:
     def __init__(self, engine):

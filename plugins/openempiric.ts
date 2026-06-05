@@ -805,6 +805,20 @@ export const OpenempiricPlugin: Plugin = async ({ $ }) => {
         }
       }),
 
+      knowledge_health_check: tool({
+        description: "Scan the knowledge base for stale concepts, duplicate concepts (merge proposals), and architectural contradictions.",
+        args: {
+          stale_sessions: tool.schema.number().optional().default(5).describe("Number of sessions threshold to consider a concept stale"),
+          similarity_threshold: tool.schema.number().optional().default(0.85).describe("Similarity threshold to propose merges"),
+          project: tool.schema.string().optional().describe("Project directory path")
+        },
+        async execute({ stale_sessions, similarity_threshold, project }, context) {
+          const root = project || context.directory || process.cwd();
+          const cmdArgs = ["health", "--stale-sessions", String(stale_sessions), "--similarity-threshold", String(similarity_threshold)];
+          return runOemCli(repoDir, cmdArgs, root);
+        }
+      }),
+
       knowledge_stats: tool({
         description: "Show oem/ knowledge statistics.",
         args: {
