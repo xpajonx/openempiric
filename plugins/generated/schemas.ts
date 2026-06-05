@@ -109,6 +109,7 @@ export interface OutcomeRecord {
   referenced_concepts: string[];
   retrieved_concepts: string[];
   reason?: string | null;
+  goal_satisfaction?: number | null;
   metrics: OutcomeMetrics;
   timestamp: string;
 }

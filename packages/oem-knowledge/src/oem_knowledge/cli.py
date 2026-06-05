@@ -159,6 +159,7 @@ def _setup_parser() -> argparse.ArgumentParser:
     outcome_p.add_argument("--reason", type=str, default="")
     outcome_p.add_argument("--session-id", type=str, default="")
     outcome_p.add_argument("--project", type=str, default="")
+    outcome_p.add_argument("--goal-satisfaction", type=float, default=None, help="Goal satisfaction rating (0.0 to 1.0)")
 
     todo_sub = todo_p.add_subparsers(dest="todo_action", required=True)
 
@@ -713,11 +714,13 @@ def main():
                 reason=reason,
                 session_id=session_id,
                 project=project,
+                goal_satisfaction=args.goal_satisfaction,
             )
             lines = [
-                f"Session ID:  {res['session_id']}",
-                f"Outcome:     {res['outcome'].upper()}",
-                f"Concepts:    {', '.join(res['referenced_concepts']) if res['referenced_concepts'] else 'None'}",
+                f"Session ID:   {res['session_id']}",
+                f"Outcome:      {res['outcome'].upper()}",
+                f"Satisfaction: {res['goal_satisfaction']:.2f}",
+                f"Concepts:     {', '.join(res['referenced_concepts']) if res['referenced_concepts'] else 'None'}",
             ]
             if res["reason"]:
                 lines.append(f"Reason:      {res['reason']}")

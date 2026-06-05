@@ -127,6 +127,7 @@ class OutcomeRecord(BaseModel):
     referenced_concepts: list[str] = Field(default_factory=list)
     retrieved_concepts: list[str] = Field(default_factory=list)
     reason: str | None = None
+    goal_satisfaction: float | None = Field(default=None, ge=0.0, le=1.0)
     metrics: OutcomeMetrics = Field(default_factory=OutcomeMetrics)
     timestamp: str
 

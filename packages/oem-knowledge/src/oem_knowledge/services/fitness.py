@@ -47,6 +47,7 @@ class FitnessService:
                 "ignored": 0,
                 "successful_sessions": 0,
                 "failed_sessions": 0,
+                "satisfaction_sum": 0.0,
                 "evidence_count": data.get("evidence_count", 0),
             }
 
@@ -67,6 +68,11 @@ class FitnessService:
                     retrieved_resolved = {self._find_concept_id(c, registry) for c in retrieved_raw}
                     referenced_resolved = {self._find_concept_id(c, registry) for c in referenced_raw}
 
+                    # Parse goal satisfaction
+                    satisfaction = record.get("goal_satisfaction")
+                    if satisfaction is None:
+                        satisfaction = 1.0 if outcome == "success" else 0.0
+
                     # We also want to record unregistered concepts if they show up in telemetry
                     all_resolved_cids = retrieved_resolved.union(referenced_resolved)
                     for cid in all_resolved_cids:
@@ -79,6 +85,7 @@ class FitnessService:
                                 "ignored": 0,
                                 "successful_sessions": 0,
                                 "failed_sessions": 0,
+                                "satisfaction_sum": 0.0,
                                 "evidence_count": 0,
                             }
 
@@ -89,6 +96,7 @@ class FitnessService:
 
                     for cid in referenced_resolved:
                         stats[cid]["referenced"] += 1
+                        stats[cid]["satisfaction_sum"] += satisfaction
                         if outcome == "success":
                             stats[cid]["successful_sessions"] += 1
                         elif outcome == "failure":
@@ -101,7 +109,7 @@ class FitnessService:
             total_resolved = s["successful_sessions"] + s["failed_sessions"]
             score = 0.0
             if total_resolved > 0:
-                score = round(s["successful_sessions"] / total_resolved, 4)
+                score = round(s["satisfaction_sum"] / total_resolved, 4)
 
             results[cid] = ConceptFitness(
                 concept_id=s["concept_id"],

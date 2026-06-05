@@ -34,6 +34,7 @@ best_practices:
   - Summarize experiments and results.
   - Capture tradeoffs.
   - Describe outcomes and impact.
+  - Record session outcomes (success/failure/abandoned) along with goal satisfaction levels (0.0 to 1.0) using outcome tools to refine long-term memory ranking.
 """
             skills_file.write_text(SKILLS_YAML_CONTENT, encoding="utf-8")
             return True

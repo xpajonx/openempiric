@@ -121,3 +121,48 @@ def test_record_outcome_append_only_history(tmp_proj):
 
     assert entry3["session_id"] == "session_3"
     assert entry3["outcome"] == "abandoned"
+
+
+def test_record_outcome_with_goal_satisfaction(tmp_proj):
+    eng = KnowledgeEngine(tmp_proj)
+    eng.init_project(tmp_proj)
+
+    res = eng.record_outcome(
+        outcome="success",
+        referenced_concepts=["concept_001"],
+        reason="Completed with minor feedback",
+        session_id="session_sat_123",
+        project=tmp_proj,
+        goal_satisfaction=0.7,
+    )
+
+    assert res["status"] == "success"
+    assert res["goal_satisfaction"] == 0.7
+
+    outcomes_file = Path(tmp_proj) / OEM_DIR / "state" / "outcomes.jsonl"
+    lines = outcomes_file.read_text(encoding="utf-8").splitlines()
+    entry = json.loads(lines[0])
+    assert entry["goal_satisfaction"] == 0.7
+
+
+def test_weighted_fitness_calculation(tmp_proj):
+    eng = KnowledgeEngine(tmp_proj)
+    eng.init_project(tmp_proj)
+
+    # Setup concept registry
+    harness = eng._resolve_harness(tmp_proj)
+    registry = {
+        "concept_a": {"canonical_name": "Concept A", "status": "validated"},
+        "concept_b": {"canonical_name": "Concept B", "status": "validated"}
+    }
+    (harness / "concept_registry.json").write_text(json.dumps(registry), encoding="utf-8")
+
+    # Record outcomes with varying goal satisfactions
+    eng.record_outcome("success", ["concept_a"], "reason 1", "session_1", tmp_proj, goal_satisfaction=1.0)
+    eng.record_outcome("failure", ["concept_a"], "reason 2", "session_2", tmp_proj, goal_satisfaction=0.5)
+    eng.record_outcome("success", ["concept_b"], "reason 3", "session_3", tmp_proj, goal_satisfaction=0.8)
+
+    fitness = eng.calculate_fitness(tmp_proj)
+    assert fitness["concept_a"].fitness_score == 0.75
+    assert fitness["concept_b"].fitness_score == 0.8
+

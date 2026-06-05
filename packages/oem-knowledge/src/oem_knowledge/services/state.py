@@ -402,6 +402,7 @@ class StateService:
         reason: str | None = None,
         session_id: str | None = None,
         project: str | None = None,
+        goal_satisfaction: float | None = None,
     ) -> dict:
         harness = self.engine._resolve_harness(project)
         state_dir = harness / "state"
@@ -440,6 +441,11 @@ class StateService:
             except Exception:
                 pass
 
+        # Handle default goal satisfaction based on binary outcome
+        resolved_satisfaction = goal_satisfaction
+        if resolved_satisfaction is None:
+            resolved_satisfaction = 1.0 if outcome == "success" else 0.0
+
         outcomes_file = state_dir / "outcomes.jsonl"
         log_entry = {
             "schema_version": 1,
@@ -448,6 +454,7 @@ class StateService:
             "referenced_concepts": referenced_concepts,
             "retrieved_concepts": injected_concepts,
             "reason": reason,
+            "goal_satisfaction": resolved_satisfaction,
             "metrics": {
                 "concepts_injected": concepts_injected,
                 "concepts_referenced": concepts_referenced,
@@ -460,7 +467,7 @@ class StateService:
             f.write(json.dumps(log_entry) + "\n")
 
         self.engine._log_action(
-            f"Outcome | Logged session outcome '{outcome}' for {resolved_session_id}",
+            f"Outcome | Logged session outcome '{outcome}' for {resolved_session_id} (satisfaction: {resolved_satisfaction})",
             project,
         )
 
@@ -471,5 +478,6 @@ class StateService:
             "referenced_concepts": referenced_concepts,
             "retrieved_concepts": injected_concepts,
             "reason": reason,
+            "goal_satisfaction": resolved_satisfaction,
             "metrics": log_entry["metrics"],
         }

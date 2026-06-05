@@ -742,9 +742,10 @@ class KnowledgeEngine:
         reason: str | None = None,
         session_id: str | None = None,
         project: str | None = None,
+        goal_satisfaction: float | None = None,
     ) -> dict:
         return self.state_service.record_outcome(
-            outcome, referenced_concepts, reason, session_id, project
+            outcome, referenced_concepts, reason, session_id, project, goal_satisfaction
         )
 
     def calculate_fitness(self, project: str | None = None) -> dict[str, ConceptFitness]:
