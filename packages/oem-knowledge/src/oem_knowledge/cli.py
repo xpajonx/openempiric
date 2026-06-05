@@ -1115,8 +1115,7 @@ def main():
                 if shutil.which("oem"):
                     lines.append("✓ OEM executable available")
                 else:
-                    lines.append("✗ OEM executable not found in PATH")
-                    status = "error"
+                    lines.append("⚠ OEM executable not found in PATH — install via `uv tool install oem-knowledge`")
                 try:
                     import oem_knowledge  # noqa: F401
                     lines.append("✓ Package importable")
@@ -1220,8 +1219,7 @@ def main():
                 if shutil.which(bin_name):
                     lines.append("✓ Managed Runtime Available")
                 else:
-                    lines.append(f"✗ Managed Runtime not available (executable '{bin_name}' not found in PATH)")
-                    status = "error"
+                    lines.append(f"⚠ Managed Runtime not available (executable '{bin_name}' not found in PATH)")
             except Exception as e:
                 lines.append(f"✗ Failed to check Managed Runtime: {e}")
                 status = "error"
