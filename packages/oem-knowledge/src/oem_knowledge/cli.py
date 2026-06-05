@@ -875,6 +875,18 @@ def main():
             else:
                 lines.append("✓ Running as globally installed user tool")
                 lines.append(f"✓ Project directory: {workspace_root.resolve()}")
+                if shutil.which("oem"):
+                    lines.append("✓ OEM executable available")
+                else:
+                    lines.append("✗ OEM executable not found in PATH")
+                    status = "error"
+                try:
+                    import oem_knowledge  # noqa: F401
+                    lines.append("✓ Package importable")
+                except ImportError:
+                    lines.append("✗ Package not importable")
+                    status = "error"
+                lines.append("⚠ Development workspace not detected")
 
             # 5. Events log schema version check
             try:
