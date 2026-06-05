@@ -97,11 +97,21 @@ class ReflectionMetrics(BaseModel):
     file_observations: int = 0
 
 
+class RuntimeMetrics(BaseModel):
+    sessions_started: int = 0
+    sessions_completed: int = 0
+    sessions_failed: int = 0
+    sessions_recovered: int = 0
+    reflections: int = 0
+    materializations: int = 0
+
+
 class MetricsSchema(BaseModel):
     retrieval: RetrievalMetrics = Field(default_factory=RetrievalMetrics)
     context: ContextMetrics = Field(default_factory=ContextMetrics)
     knowledge_usage: KnowledgeUsageMetrics = Field(default_factory=KnowledgeUsageMetrics)
     reflection: ReflectionMetrics = Field(default_factory=ReflectionMetrics)
+    runtime: RuntimeMetrics = Field(default_factory=RuntimeMetrics)
 
 
 class OutcomeMetrics(BaseModel):
@@ -119,13 +129,6 @@ class OutcomeRecord(BaseModel):
     reason: str | None = None
     metrics: OutcomeMetrics = Field(default_factory=OutcomeMetrics)
     timestamp: str
-
-
-class ReflectionMetrics(BaseModel):
-    structured_events: int = 0
-    fallback_extractions: int = 0
-    empty_reflections: int = 0
-    file_observations: int = 0
 
 
 class ConceptFitness(BaseModel):

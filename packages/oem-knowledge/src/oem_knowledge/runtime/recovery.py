@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from oem_tui.panels import render_panel
 from .config import _OEM_RUNTIME_CONTEXT_PATH, _OEM_TEMP_INSTRUCTIONS
 from .session import SessionState
+from oem_knowledge.tools.metrics import update_metrics_file
 
 if TYPE_CHECKING:
     from oem_knowledge.engine import KnowledgeEngine
@@ -95,7 +96,14 @@ def cmd_recover(eng: KnowledgeEngine, project: str | None = None, abort: bool = 
     try:
         commit_res = eng.session_commit(project, conversation_text=chat_text, session_id=session_id)
         eng.record_outcome("success", session_id=session_id, project=project)
-        
+
+        # Emit sessions_recovered metric
+        try:
+            metrics_file = harness / "state" / "metrics.json"
+            update_metrics_file(metrics_file, {"sessions_recovered": 1})
+        except Exception:
+            pass
+
         try:
             session_state.status = "completed"
             active_session_file.unlink()

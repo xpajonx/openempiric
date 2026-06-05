@@ -38,12 +38,20 @@ def update_metrics_file(metrics_file: Path, updates: dict):
             "empty_reflections": 0,
             "file_observations": 0,
         },
+        "runtime": {
+            "sessions_started": 0,
+            "sessions_completed": 0,
+            "sessions_failed": 0,
+            "sessions_recovered": 0,
+            "reflections": 0,
+            "materializations": 0,
+        },
     }
     if metrics_file.exists():
         try:
             existing = json.loads(metrics_file.read_text(encoding="utf-8"))
             data.update(existing)
-            for k in ["retrieval", "context", "knowledge_usage", "reflection"]:
+            for k in ["retrieval", "context", "knowledge_usage", "reflection", "runtime"]:
                 if k in existing:
                     data[k].update(existing[k])
         except Exception:
@@ -65,6 +73,18 @@ def update_metrics_file(metrics_file: Path, updates: dict):
         data["reflection"]["empty_reflections"] += updates["empty_reflections"]
     if "file_observations" in updates:
         data["reflection"]["file_observations"] += updates["file_observations"]
+    if "sessions_started" in updates:
+        data["runtime"]["sessions_started"] += updates["sessions_started"]
+    if "sessions_completed" in updates:
+        data["runtime"]["sessions_completed"] += updates["sessions_completed"]
+    if "sessions_failed" in updates:
+        data["runtime"]["sessions_failed"] += updates["sessions_failed"]
+    if "sessions_recovered" in updates:
+        data["runtime"]["sessions_recovered"] += updates["sessions_recovered"]
+    if "reflections" in updates:
+        data["runtime"]["reflections"] += updates["reflections"]
+    if "materializations" in updates:
+        data["runtime"]["materializations"] += updates["materializations"]
     data["knowledge_usage"]["last_report_at"] = now_str
 
     metrics_file.parent.mkdir(parents=True, exist_ok=True)

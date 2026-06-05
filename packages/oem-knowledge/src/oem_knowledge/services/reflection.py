@@ -1,6 +1,7 @@
 from __future__ import annotations
 import json
 import re
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -271,6 +272,7 @@ project: {project or "default"}
                 "fallback_extractions": 1 if fallback_extraction_used else 0,
                 "file_observations": file_observations_count,
                 "empty_reflections": 1 if structured_events_found == 0 and not fallback_extraction_used and file_observations_count == 0 else 0,
+                "reflections": 1,
             })
         except Exception:
             pass

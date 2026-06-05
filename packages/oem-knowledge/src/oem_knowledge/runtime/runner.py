@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .config import _REPO_ROOT, _OPENCODE_PLUGINS_DIR, _OEM_RUNTIME_CONTEXT_PATH, _OEM_TEMP_INSTRUCTIONS
+from oem_knowledge.tools.metrics import update_metrics_file
 from .context import _compile_oem_context
 from .session import SessionState
 
@@ -71,6 +72,13 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None)
         session_state.save(active_session_file)
     except Exception as e:
         logging.warning("Failed to write active session file: %s", e)
+
+    # Emit sessions_started metric
+    try:
+        metrics_file = harness / "state" / "metrics.json"
+        update_metrics_file(metrics_file, {"sessions_started": 1})
+    except Exception:
+        pass
 
     context = _compile_oem_context(eng)
     try:
@@ -163,7 +171,17 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None)
         except Exception as e:
             logging.warning("Outcome recording failed: %s", e)
 
-        # 7. Cleanup temp files
+        # 7. Emit runtime metrics
+        try:
+            metrics_file = harness / "state" / "metrics.json"
+            update_metrics_file(metrics_file, {
+                "sessions_completed": 1 if committed else 0,
+                "sessions_failed": 0 if committed else 1,
+            })
+        except Exception:
+            pass
+
+        # 8. Cleanup temp files
         for p in [_OEM_RUNTIME_CONTEXT_PATH, _OEM_TEMP_INSTRUCTIONS]:
             if p.exists():
                 try:

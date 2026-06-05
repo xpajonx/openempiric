@@ -259,6 +259,19 @@ aliases: {json.dumps(cdata.get("aliases", []))}
                 )
 
         self.engine._save_registry(registry, project)
+
+        # Emit materializations metric
+        try:
+            from oem_knowledge.tools.metrics import update_metrics_file
+            from oem_knowledge.engine import find_harness_root, OEM_DIR
+            p = Path(project or ".").resolve()
+            root = find_harness_root(p) or p
+            metrics_file = (root / OEM_DIR / "state" / "metrics.json")
+            if materialized_log:
+                update_metrics_file(metrics_file, {"materializations": len(materialized_log)})
+        except Exception:
+            pass
+
         return {"status": "success", "materialized": materialized_log}
 
     def update_graph(self, project: str | None = None) -> dict:

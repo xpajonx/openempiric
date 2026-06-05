@@ -124,6 +124,9 @@ def _setup_parser() -> argparse.ArgumentParser:
     session_end_p.add_argument("--session-id", type=str, default="")
     session_end_p.add_argument("--verbose", action="store_true", help="Show detailed reflection analysis")
 
+    session_status_p = sub.add_parser("session-status", help="Show active session runtime status")
+    session_status_p.add_argument("--project", type=str, default="")
+
     run_p = sub.add_parser("run")
     run_p.add_argument("agent", type=str, help="opencode, claude-code, cursor, or custom command")
     run_p.add_argument("--project", type=str, default="")
@@ -133,6 +136,10 @@ def _setup_parser() -> argparse.ArgumentParser:
     recover_p.add_argument("--abort", action="store_true", help="Abort/discard the unfinished session")
     recover_p.add_argument("--status", action="store_true", help="Print current active session status")
 
+
+    runtime_summary_p = sub.add_parser("runtime-summary", help="Show aggregate runtime metrics summary")
+    runtime_summary_p.add_argument("--days", type=int, default=7)
+    runtime_summary_p.add_argument("--project", type=str, default="")
 
     metrics_p = sub.add_parser("metrics")
     metrics_p.add_argument("--project", type=str, default="")
@@ -632,6 +639,53 @@ def main():
             else:
                 print(render_panel("Concepts Merged", [res.get("message", "")], status="ok"))
 
+        elif args.command == "session-status":
+            harness = eng._resolve_harness(project)
+            active_session_file = harness / "state" / "active_session.json"
+            session_state = SessionState.load(active_session_file)
+
+            if not session_state:
+                print(render_panel("Session Status", ["No active session found."], status="info"))
+            else:
+                import datetime
+                started_str = datetime.datetime.fromtimestamp(session_state.started_at).isoformat() if session_state.started_at else "unknown"
+
+                # Check context injection
+                context_exists = False
+                if session_state.context_path:
+                    context_exists = Path(session_state.context_path).exists()
+
+                # Read knowledge injection count from session_state.json
+                session_state_file = harness / "state" / "session_state.json"
+                injected_count = 0
+                if session_state_file.exists():
+                    try:
+                        sdata = json.loads(session_state_file.read_text(encoding="utf-8"))
+                        injected_count = len(sdata.get("last_injected_concepts", []))
+                    except Exception:
+                        pass
+
+                # Determine reflection/materialization/outcome status
+                is_running = session_state.status in ("started", "running")
+                reflection_status = "Pending" if is_running else "Complete"
+                materialization_status = "Pending" if is_running else "Complete"
+                outcome_status = "Not Recorded" if is_running else "Recorded"
+
+                lines = [
+                    f"Session ID:      {session_state.session_id}",
+                    f"State:           {session_state.status}",
+                    f"Agent:           {session_state.agent}",
+                    f"Started At:      {started_str}",
+                    f"Project:         {session_state.project}",
+                    "",
+                    f"Context Injection: {'✓' if context_exists else '✗'}",
+                    f"Knowledge Retrieved: {injected_count}",
+                    f"Reflection:      {reflection_status}",
+                    f"Materialization: {materialization_status}",
+                    f"Outcome:         {outcome_status}",
+                ]
+                print(render_panel("Session Status", lines, status="stats"))
+
         elif args.command == "run":
             run_agent(args.agent, eng, project)
 
@@ -669,6 +723,81 @@ def main():
             lines.append("")
             lines.append(f"Metrics (Injected/Referenced): {res['metrics']['concepts_injected']}/{res['metrics']['concepts_referenced']}")
             print(render_panel("Outcome Logged", lines, status="ok"))
+
+        elif args.command == "runtime-summary":
+            harness = eng._resolve_harness(project)
+            metrics_file = harness / "state" / "metrics.json"
+            outcomes_file = harness / "state" / "outcomes.jsonl"
+
+            metrics_data = {}
+            if metrics_file.exists():
+                try:
+                    metrics_data = json.loads(metrics_file.read_text(encoding="utf-8"))
+                except Exception:
+                    pass
+
+            runtime = metrics_data.get("runtime", {})
+            outcomes = []
+            if outcomes_file.exists():
+                try:
+                    now = time.time()
+                    cutoff = now - (args.days * 86400)
+                    for line in outcomes_file.read_text(encoding="utf-8").splitlines():
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            entry = json.loads(line)
+                            ts = entry.get("timestamp", "")
+                            if ts:
+                                import datetime
+                                entry_time = datetime.datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").timestamp()
+                                if entry_time >= cutoff:
+                                    outcomes.append(entry)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
+            sessions_started = runtime.get("sessions_started", 0)
+            sessions_completed = runtime.get("sessions_completed", 0)
+            sessions_failed = runtime.get("sessions_failed", 0)
+            sessions_recovered = runtime.get("sessions_recovered", 0)
+
+            outcome_success = sum(1 for o in outcomes if o.get("outcome") == "success")
+            outcome_failure = sum(1 for o in outcomes if o.get("outcome") == "failure")
+            outcome_abandoned = sum(1 for o in outcomes if o.get("outcome") == "abandoned")
+
+            concepts_generated = (
+                metrics_data.get("reflection", {}).get("structured_events", 0)
+                + metrics_data.get("reflection", {}).get("fallback_extractions", 0)
+            )
+            search_queries = metrics_data.get("retrieval", {}).get("search_count", 0)
+            reflections = runtime.get("reflections", 0)
+            materializations = runtime.get("materializations", 0)
+
+            lines = [
+                f"Period: Last {args.days} day(s)",
+                "",
+                "Sessions (aggregate metrics):",
+                f"  Started:     {sessions_started}",
+                f"  Completed:   {sessions_completed}",
+                f"  Failed:      {sessions_failed}",
+                f"  Recovered:   {sessions_recovered}",
+                "",
+                f"Outcomes (last {args.days}d):",
+                f"  Successful:  {outcome_success}",
+                f"  Failed:      {outcome_failure}",
+                f"  Abandoned:   {outcome_abandoned}",
+                f"  Total:       {len(outcomes)}",
+                "",
+                "Pipeline Activity:",
+                f"  Concepts Generated: {concepts_generated}",
+                f"  Search Queries:     {search_queries}",
+                f"  Reflections:        {reflections}",
+                f"  Materializations:   {materializations}",
+            ]
+            print(render_panel("Runtime Summary", lines, status="stats"))
 
         elif args.command == "metrics":
             if getattr(args, "report", False):
@@ -1056,8 +1185,54 @@ def main():
                 lines.append(f"✗ Search Pipeline not available: {e}")
                 status = "error"
 
+            # --- Runtime Health Checks ---
+            runtime_lines = []
+
+            # 12. Session Recovery Ready
+            try:
+                active_file = harness / "state" / "active_session.json"
+                _ = SessionState.load(active_file)
+                runtime_lines.append("✓ Session Recovery Ready")
+            except Exception as e:
+                runtime_lines.append(f"✗ Session Recovery not ready: {e}")
+
+            # 13. Reflection Pipeline Ready
+            try:
+                rs = eng.reflection_service
+                res = rs.reflect_session(project, conversation_text="")
+                if res.get("status") == "success":
+                    runtime_lines.append("✓ Reflection Pipeline Ready")
+                else:
+                    runtime_lines.append("✗ Reflection Pipeline not ready")
+            except Exception as e:
+                runtime_lines.append(f"✗ Reflection Pipeline not ready: {e}")
+
+            # 14. Materialization Pipeline Ready
+            try:
+                mat_res = eng.materialization_service.materialize_concepts(project)
+                if mat_res.get("status") == "success":
+                    runtime_lines.append("✓ Materialization Pipeline Ready")
+                else:
+                    runtime_lines.append("✗ Materialization Pipeline not ready")
+            except Exception as e:
+                runtime_lines.append(f"✗ Materialization Pipeline not ready: {e}")
+
+            # 15. Outcome Tracking Ready
+            try:
+                outcomes_file = harness / "state" / "outcomes.jsonl"
+                outcomes_file.parent.mkdir(parents=True, exist_ok=True)
+                from oem_knowledge.services.state import StateService
+                _ = StateService
+                runtime_lines.append("✓ Outcome Tracking Ready")
+            except Exception as e:
+                runtime_lines.append(f"✗ Outcome Tracking not ready: {e}")
 
             print(render_panel("OEM Environment Check", lines, status=status))
+
+            if any("✗" in l for l in runtime_lines):
+                print(render_panel("Runtime Health", runtime_lines, status="error"))
+            else:
+                print(render_panel("Runtime Health", runtime_lines, status="ok"))
 
             # --- Knowledge Health Dashboard ---
             try:

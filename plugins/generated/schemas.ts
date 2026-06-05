@@ -72,11 +72,28 @@ export interface KnowledgeUsageMetrics {
   last_report_at?: string | null;
 }
 
+export interface ReflectionMetrics {
+  structured_events: number;
+  fallback_extractions: number;
+  empty_reflections: number;
+  file_observations: number;
+}
+
+export interface RuntimeMetrics {
+  sessions_started: number;
+  sessions_completed: number;
+  sessions_failed: number;
+  sessions_recovered: number;
+  reflections: number;
+  materializations: number;
+}
+
 export interface MetricsSchema {
   retrieval: RetrievalMetrics;
   context: ContextMetrics;
   knowledge_usage: KnowledgeUsageMetrics;
   reflection: ReflectionMetrics;
+  runtime: RuntimeMetrics;
 }
 
 export interface OutcomeMetrics {

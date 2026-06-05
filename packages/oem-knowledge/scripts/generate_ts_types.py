@@ -52,6 +52,8 @@ def generate_ts() -> str:
         models.RetrievalMetrics,
         models.ContextMetrics,
         models.KnowledgeUsageMetrics,
+        models.ReflectionMetrics,
+        models.RuntimeMetrics,
         models.MetricsSchema,
         models.OutcomeMetrics,
         models.OutcomeRecord,
