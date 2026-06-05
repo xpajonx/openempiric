@@ -87,7 +87,7 @@ def generate_ts() -> str:
 
 def main():
     ts_code = generate_ts()
-    out_dir = Path(__file__).resolve().parent.parent.parent.parent / "plugins" / "generated"
+    out_dir = Path(__file__).resolve().parent.parent / "src" / "oem_knowledge" / "plugins" / "generated"
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / "schemas.ts"
     out_path.write_text(ts_code, encoding="utf-8")

@@ -23,12 +23,13 @@ def test_runtime_already_active(tmp_proj):
     context = _compile_oem_context(eng)
     memory_ctx = context["memory_context"]
     
-    assert "OpenEmpiric is already active for this session" in memory_ctx
+    # Verify Runtime Notice is present at the very beginning of the memory context
+    assert memory_ctx.startswith("# OEM Runtime Notice")
+    assert "Session lifecycle is automatic. Do not manually initialize OEM, activate memory, or call" in memory_ctx
+    assert "knowledge_session_start / knowledge_session_commit." in memory_ctx
     
-    # Must not contain lifecycle hooks or initialization/activation commands
-    forbidden = ["knowledge_session_start", "knowledge_session_commit", "initialize oem", "activate oem"]
-    for phrase in forbidden:
-        assert phrase not in memory_ctx.lower()
+    # Verify other active session indicators are present
+    assert "OpenEmpiric is already active for this session" in memory_ctx
 
 def test_memory_is_context_not_instruction(tmp_proj):
     # Test 2: Validate that memory context behaves as historical context,

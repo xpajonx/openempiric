@@ -17,8 +17,8 @@ def test_schema_sync_guard():
         if sys.path[0] == str(scripts_dir):
             sys.path.pop(0)
 
-    schema_path = Path(__file__).resolve().parent.parent.parent.parent / "plugins" / "generated" / "schemas.ts"
-    assert schema_path.exists(), "TypeScript schema file plugins/generated/schemas.ts does not exist!"
+    schema_path = Path(__file__).resolve().parent.parent / "src" / "oem_knowledge" / "plugins" / "generated" / "schemas.ts"
+    assert schema_path.exists(), "TypeScript schema file does not exist!"
 
     actual_ts = schema_path.read_text(encoding="utf-8")
     assert actual_ts == expected_ts, (

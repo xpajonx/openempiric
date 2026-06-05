@@ -248,7 +248,15 @@ class KnowledgeEngine:
             ),
             (
                 "session-handoff.md",
-                "# Session Handoff\n\n## Next Action\nComplete phase one.\n",
+                (
+                    "# Session Handoff\n\n"
+                    "## Historical Context\n"
+                    "Complete phase one.\n\n"
+                    "## Previous Decisions\n"
+                    "- Setup initial directory structure.\n\n"
+                    "## Open Questions\n"
+                    "- What goals/concepts should be mapped next?\n"
+                ),
             ),
         ]:
             fp = harness / fname
@@ -493,7 +501,15 @@ class KnowledgeEngine:
             ),
             (
                 "session-handoff.md",
-                "# Session Handoff\n\n## Next Action\nImplement OpenEmpiric Runtime Overhaul commands.\n",
+                (
+                    "# Session Handoff\n\n"
+                    "## Historical Context\n"
+                    "Initialized project layout.\n\n"
+                    "## Previous Decisions\n"
+                    "- Setup initial directory structure.\n\n"
+                    "## Open Questions\n"
+                    "- What goals/concepts should be mapped next?\n"
+                ),
             ),
             (
                 "state/workflow_state.json",
@@ -616,9 +632,40 @@ class KnowledgeEngine:
                 text = fp.read_text()
                 full_content += text + "\n"
                 if attr == "handoff":
-                    m = re.search(r"## Next Action\s*\n\s*(?:-\s*)?([^\n#]+)", text)
-                    if m:
-                        active_goals.append(m.group(1).strip())
+                    # Parse "Historical Context"
+                    hist_match = re.search(r"## Historical Context\s*\n\s*([^#]+)", text)
+                    if hist_match:
+                        lines_of_hist = hist_match.group(1).strip().split("\n")
+                        if lines_of_hist:
+                            first_line = lines_of_hist[0].strip().lstrip("-").strip()
+                            if first_line:
+                                active_goals.append(first_line)
+                    
+                    # Parse "Previous Decisions"
+                    dec_match = re.search(r"## Previous Decisions\s*\n\s*([^#]+)", text)
+                    if dec_match:
+                        for line in dec_match.group(1).splitlines():
+                            s = line.strip()
+                            if s.startswith("-"):
+                                clean = re.sub(r"^-\s*(?:\[[ xX/]\])?\s*", "", s).strip()
+                                if clean and clean not in discoveries:
+                                    discoveries.append(clean)
+                    
+                    # Parse "Open Questions"
+                    q_match = re.search(r"## Open Questions\s*\n\s*([^#]+)", text)
+                    if q_match:
+                        for line in q_match.group(1).splitlines():
+                            s = line.strip()
+                            if s.startswith("-"):
+                                clean = re.sub(r"^-\s*(?:\[[ xX/]\])?\s*", "", s).strip()
+                                if clean and clean not in active_goals:
+                                    active_goals.append(clean)
+
+                    # Fallback to Next Action
+                    if not active_goals:
+                        m = re.search(r"## Next Action\s*\n\s*(?:-\s*)?([^\n#]+)", text)
+                        if m:
+                            active_goals.append(m.group(1).strip())
                 elif attr == "goals":
                     for line in text.splitlines():
                         s = line.strip()

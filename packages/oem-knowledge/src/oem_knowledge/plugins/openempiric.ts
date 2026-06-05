@@ -264,34 +264,22 @@ class ContextAssembler {
       try {
         const oemContext = JSON.parse(fs.readFileSync(contextPath, "utf-8"));
         
-        let instContent = "# openempiric Session Context\n\n";
-        instContent += "## Active Concepts\n";
-        const concepts = oemContext.active_concepts || [];
-        const injectedIds: string[] = [];
-        if (concepts.length > 0) {
-          for (const c of concepts.slice(0, this.budget.conceptCountLimit)) {
-            instContent += `- **${c.name}** (${c.id}): ${c.description || 'No description available.'}\n`;
-            injectedIds.push(c.id);
-          }
-        } else {
-          instContent += "- None\n";
-        }
+        let instContent = `# OEM Runtime Notice
+Session lifecycle is automatic. Do not manually initialize OEM, activate memory, or call knowledge_session_start / knowledge_session_commit. Use OEM tools only when knowledge search or health checks are needed.
 
-        instContent += "\n## Active Decisions\n";
-        const decisions = oemContext.active_decisions || [];
+# Previous Session Context
+
+`;
+        
+        instContent += "## Last Topic\n";
+        instContent += (oemContext.last_topic || "General development") + "\n\n";
+
+        instContent += "## Recent Decisions\n";
+        const decisions = oemContext.recent_decisions || [];
+        const injectedIds: string[] = [];
         if (decisions.length > 0) {
           for (const d of decisions.slice(0, 5)) {
             instContent += `- ${d}\n`;
-          }
-        } else {
-          instContent += "- None\n";
-        }
-
-        instContent += "\n## Relevant Failures\n";
-        const failures = oemContext.relevant_failures || [];
-        if (failures.length > 0) {
-          for (const f of failures.slice(0, 5)) {
-            instContent += `- ${f}\n`;
           }
         } else {
           instContent += "- None\n";
@@ -307,8 +295,29 @@ class ContextAssembler {
           instContent += "- None\n";
         }
 
+        instContent += "\n## Active Concepts\n";
+        const concepts = oemContext.active_concepts || [];
+        if (concepts.length > 0) {
+          for (const c of concepts.slice(0, this.budget.conceptCountLimit)) {
+            instContent += `- **${c.name}** (${c.id}): ${c.description || 'No description available.'}\n`;
+            injectedIds.push(c.id);
+          }
+        } else {
+          instContent += "- None\n";
+        }
+
+        instContent += "\n## Relevant Failures\n";
+        const failures = oemContext.relevant_failures || [];
+        if (failures.length > 0) {
+          for (const f of failures.slice(0, 5)) {
+            instContent += `- ${f}\n`;
+          }
+        } else {
+          instContent += "- None\n";
+        }
+
         instContent += "\n## Memory Context\n";
-        instContent += oemContext.memory_context || "OEM is your long-term memory for this project. The concepts and context above represent what you already know. Use `knowledge_search` when you need details on a specific concept. You do not need to search before every response — only when you lack information.\n";
+        instContent += oemContext.memory_context || "OEM is your long-term memory for this project. Use this information when relevant. Do not assume work should continue unless the user requests it.\n";
         instContent += "\n";
 
         // Save injected concepts to session state
@@ -389,47 +398,85 @@ class ContextAssembler {
       }
     };
 
-    const activeGoals = readList("state/current-goals.md");
+    let activeGoals = readList("state/current-goals.md");
     const blockers = readList("state/open-issues.md");
     const discoveries = readList("state/active-decisions.md");
 
-    // Parse session-handoff
+    let lastTopic = "General development";
+    // Parse neutralized session-handoff
     const handoffPath = path.join(oemDir, "session-handoff.md");
     if (fs.existsSync(handoffPath)) {
       try {
         const text = fs.readFileSync(handoffPath, "utf-8");
-        const m = text.match(/## Next Action\s*\n\s*(?:-\s*)?([^\n#]+)/);
-        if (m && m[1]) {
-          activeGoals.unshift(m[1].trim());
+        
+        // Parse "Historical Context"
+        const histMatch = text.match(/## Historical Context\s*\n\s*([^#]+)/);
+        if (histMatch && histMatch[1]) {
+          const firstLine = histMatch[1].trim().split("\n")[0].trim().replace(/^-\s*/, "");
+          if (firstLine) {
+            lastTopic = firstLine;
+          }
+        }
+        
+        // Parse "Previous Decisions"
+        const decMatch = text.match(/## Previous Decisions\s*\n\s*([^#]+)/);
+        if (decMatch && decMatch[1]) {
+          const lines = decMatch[1].split("\n");
+          for (const line of lines) {
+            const clean = line.trim();
+            if (clean.startsWith("-")) {
+              const content = clean.replace(/^-\s*(\[[ xX/]])?\s*/, "").trim();
+              if (content && !discoveries.includes(content)) {
+                discoveries.push(content);
+              }
+            }
+          }
+        }
+        
+        // Parse "Open Questions"
+        const qMatch = text.match(/## Open Questions\s*\n\s*([^#]+)/);
+        if (qMatch && qMatch[1]) {
+          const lines = qMatch[1].split("\n");
+          for (const line of lines) {
+            const clean = line.trim();
+            if (clean.startsWith("-")) {
+              const content = clean.replace(/^-\s*(\[[ xX/]])?\s*/, "").trim();
+              if (content && !activeGoals.includes(content)) {
+                activeGoals.push(content);
+              }
+            }
+          }
+        }
+
+        // Support legacy Next Action as fallback
+        if (lastTopic === "General development") {
+          const m = text.match(/## Next Action\s*\n\s*(?:-\s*)?([^\n#]+)/);
+          if (m && m[1]) {
+            lastTopic = m[1].trim();
+          }
         }
       } catch (e) {
         // Ignore
       }
+    } else if (activeGoals.length > 0) {
+      lastTopic = activeGoals[0];
+      activeGoals = activeGoals.slice(1);
     }
 
     // 3. Format dynamic markdown instructions under budget constraints
-    let instContent = "# openempiric Session Context\n\n";
+    let instContent = `# OEM Runtime Notice
+Session lifecycle is automatic. Do not manually initialize OEM, activate memory, or call knowledge_session_start / knowledge_session_commit. Use OEM tools only when knowledge search or health checks are needed.
 
-    instContent += "## Active Concepts\n";
+# Previous Session Context
+
+`;
+
+    instContent += "## Last Topic\n";
+    instContent += lastTopic + "\n\n";
+
+    instContent += "## Recent Decisions\n";
     let budgetUsedChars = instContent.length;
     const charLimit = this.budget.tokenBudgetLimit * 4; // Approx 4 chars per token
-    let conceptCount = 0;
-    const injectedIds: string[] = [];
-
-    for (const c of concepts) {
-      if (conceptCount >= this.budget.conceptCountLimit) break;
-      const conceptStr = `- **${c.name}** (${c.id}): ${c.description || 'No description available.'}\n`;
-      if (budgetUsedChars + conceptStr.length > charLimit) break;
-      instContent += conceptStr;
-      budgetUsedChars += conceptStr.length;
-      conceptCount++;
-      injectedIds.push(c.id);
-    }
-    if (conceptCount === 0) {
-      instContent += "- None\n";
-    }
-
-    instContent += "\n## Active Decisions\n";
     let decisionCount = 0;
     for (const d of discoveries.slice(0, 5)) {
       const decisionStr = `- ${d}\n`;
@@ -439,19 +486,6 @@ class ContextAssembler {
       decisionCount++;
     }
     if (decisionCount === 0) {
-      instContent += "- None\n";
-    }
-
-    instContent += "\n## Relevant Failures\n";
-    let failureCount = 0;
-    for (const b of blockers.slice(0, 5)) {
-      const failureStr = `- ${b}\n`;
-      if (budgetUsedChars + failureStr.length > charLimit) break;
-      instContent += failureStr;
-      budgetUsedChars += failureStr.length;
-      failureCount++;
-    }
-    if (failureCount === 0) {
       instContent += "- None\n";
     }
 
@@ -468,12 +502,41 @@ class ContextAssembler {
       instContent += "- None\n";
     }
 
-    // 4. Memory context: frame OEM as long-term memory, not a search requirement
+    instContent += "\n## Active Concepts\n";
+    let conceptCount = 0;
+    const injectedIds: string[] = [];
+
+    for (const c of concepts) {
+      if (conceptCount >= this.budget.conceptCountLimit) break;
+      const conceptStr = `- **${c.name}** (${c.id}): ${c.description || 'No description available.'}\n`;
+      if (budgetUsedChars + conceptStr.length > charLimit) break;
+      instContent += conceptStr;
+      budgetUsedChars += conceptStr.length;
+      conceptCount++;
+      injectedIds.push(c.id);
+    }
+    if (conceptCount === 0) {
+      instContent += "- None\n";
+    }
+
+    instContent += "\n## Relevant Failures\n";
+    let failureCount = 0;
+    for (const b of blockers.slice(0, 5)) {
+      const failureStr = `- ${b}\n`;
+      if (budgetUsedChars + failureStr.length > charLimit) break;
+      instContent += failureStr;
+      budgetUsedChars += failureStr.length;
+      failureCount++;
+    }
+    if (failureCount === 0) {
+      instContent += "- None\n";
+    }
+
+    // 4. Memory context: frame OEM as long-term memory
     instContent += "\n## Memory Context\n";
     instContent += "OEM is your long-term memory for this project. ";
-    instContent += "The concepts and context above represent what you already know. ";
-    instContent += "Use `knowledge_search` when you need details on a specific concept. ";
-    instContent += "You do not need to search before every response — only when you lack information.\n";
+    instContent += "Use this information when relevant. ";
+    instContent += "Do not assume work should continue unless the user requests it.\n";
 
     // Save injected concepts to session state
     const sessionStatePath = path.join(projectPath, ".oem", "state", "session_state.json");
@@ -714,104 +777,7 @@ export const OpenempiricPlugin: Plugin = async ({ $ }) => {
         }
       }),
 
-      /**
-       * @deprecated Deprecated internal lifecycle hook.
-       * Session lifecycle is managed automatically by OEM runtime. Do not call directly.
-       */
-      knowledge_session_start: tool({
-        description: "Deprecated internal lifecycle tool. Do not call directly. Session lifecycle is managed automatically by OEM runtime.",
-        args: {
-          project: tool.schema.string().optional().describe("Project directory path")
-        },
-        async execute({ project }, context) {
-          const startTime = performance.now();
-          const root = project || context.directory || process.cwd();
-          const oemDir = path.join(root, ".oem");
 
-          const readList = (filename: string): string[] => {
-            const fp = path.join(oemDir, filename);
-            if (!fs.existsSync(fp)) return [];
-            try {
-              const text = fs.readFileSync(fp, "utf-8");
-              return text.split("\n")
-                .map(line => line.trim())
-                .filter(line => line.startsWith("-"))
-                .map(line => line.replace(/^-\s*(\[[ xX/]])?\s*/, "").trim());
-            } catch (e) {
-              return [];
-            }
-          };
-
-          const activeGoals = readList("state/current-goals.md");
-          const blockers = readList("state/open-issues.md");
-          const discoveries = readList("state/active-decisions.md");
-
-          const handoffPath = path.join(oemDir, "session-handoff.md");
-          if (fs.existsSync(handoffPath)) {
-            try {
-              const text = fs.readFileSync(handoffPath, "utf-8");
-              const m = text.match(/## Next Action\s*\n\s*(?:-\s*)?([^\n#]+)/);
-              if (m && m[1]) {
-                activeGoals.unshift(m[1].trim());
-              }
-            } catch (e) {
-              // Ignore
-            }
-          }
-
-          const lines = [
-            `Active Goals:`,
-            ...activeGoals.slice(0, 5).map(g => `  🎯 ${g}`),
-            "",
-            `Blockers / Open Issues:`,
-            ...blockers.slice(0, 5).map(b => `  ⚠️ ${b}`),
-            "",
-            `Recent Discoveries:`,
-            ...discoveries.slice(0, 5).map(d => `  💡 ${d}`)
-          ];
-
-          const duration = performance.now() - startTime;
-          updateMetrics(root, { context_latency: duration });
-
-          return renderPanel("Session Start", lines, "restore");
-        }
-      }),
-
-      /**
-       * @deprecated Deprecated internal lifecycle hook.
-       * Session lifecycle is managed automatically by OEM runtime. Do not call directly.
-       */
-      knowledge_session_commit: tool({
-        description: "Deprecated internal lifecycle tool. Do not call directly. Session lifecycle is managed automatically by OEM runtime.",
-        args: {
-          project: tool.schema.string().optional().describe("Project directory path"),
-          chat: tool.schema.string().optional().default("").describe("Raw conversation/chat history text"),
-          session_id: tool.schema.string().optional().describe("Optional session ID for correlation")
-        },
-        async execute({ project, chat, session_id }, context) {
-          const root = project || context.directory || process.cwd();
-          if (process.env.OEM_MANAGED === "1") {
-            const sid = process.env.OEM_SESSION_ID || session_id || `fallback_${Date.now()}`;
-            const oemDir = path.join(root, ".oem");
-            const stateDir = path.join(oemDir, "state");
-            const chatFile = path.join(stateDir, `chat_${sid}.md`);
-            fs.mkdirSync(stateDir, { recursive: true });
-            fs.writeFileSync(chatFile, chat || "", "utf-8");
-            return renderPanel("Session Deferred", [
-              `Session ${sid} chat logged to runtime.`,
-              "OEM runtime will commit on agent exit."
-            ], "ok");
-          }
-          const cmdArgs = ["session-end"];
-          if (chat) {
-            cmdArgs.push("--chat", chat);
-          }
-          if (session_id) {
-            cmdArgs.push("--session-id", session_id);
-          }
-          return runOemCli(repoDir, cmdArgs, root);
-        }
-      }),
 
       knowledge_health_check: tool({
         description: "Scan the knowledge base for stale concepts, duplicate concepts (merge proposals), and architectural contradictions.",

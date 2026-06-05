@@ -84,7 +84,13 @@ class AntigravityAdapter(BaseAdapter):
         from oem_knowledge.runtime.context import _compile_oem_context
         ctx = _compile_oem_context(self.engine)
         
-        lines = ["# Previous Session Context\n"]
+        lines = [
+            "# OEM Runtime Notice",
+            "Session lifecycle is automatic. Do not manually initialize OEM, activate memory, or call "
+            "knowledge_session_start / knowledge_session_commit. Use OEM tools only when knowledge search or "
+            "health checks are needed.\n",
+            "# Previous Session Context\n"
+        ]
         
         lines.append("## Last Topic")
         lines.append(ctx.get("last_topic", "General development") + "\n")

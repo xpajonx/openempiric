@@ -7,6 +7,15 @@ from oem_knowledge.adapters.registry import register_adapter
 class OpenCodeAdapter(BaseAdapter):
     def install_skill(self) -> bool:
         try:
+            # Purge stale skill cache
+            import shutil
+            cache_dir = Path.home() / ".config" / "opencode" / "skills" / "openempiric"
+            if cache_dir.exists():
+                if cache_dir.is_dir():
+                    shutil.rmtree(cache_dir)
+                else:
+                    cache_dir.unlink()
+
             harness = self.engine._resolve_harness(self.project_path)
             skills_dir = harness / "skills"
             skills_dir.mkdir(parents=True, exist_ok=True)

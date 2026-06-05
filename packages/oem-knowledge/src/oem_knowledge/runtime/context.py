@@ -112,6 +112,10 @@ def _compile_oem_context(eng: KnowledgeEngine) -> dict:
         "open_questions": open_questions,
         "last_topic": last_topic,
         "memory_context": (
+            "# OEM Runtime Notice\n"
+            "Session lifecycle is automatic. Do not manually initialize OEM, activate memory, or call "
+            "knowledge_session_start / knowledge_session_commit. Use OEM tools only when knowledge search or "
+            "health checks are needed.\n\n"
             "OpenEmpiric is already active for this session; do not initialize it manually. "
             "Relevant project memory has been restored automatically into your context as long-term memory. "
             "Use this information when relevant. "
