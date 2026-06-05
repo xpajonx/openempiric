@@ -259,8 +259,97 @@ class ContextAssembler {
   }
 
   assemble(projectPath: string): string {
+    const contextPath = process.env.OEM_RUNTIME_CONTEXT_PATH || path.join(os.homedir(), ".config", "opencode", "plugins", ".oem_runtime_context.json");
+    if (fs.existsSync(contextPath)) {
+      try {
+        const oemContext = JSON.parse(fs.readFileSync(contextPath, "utf-8"));
+        
+        let instContent = "# openempiric Session Context\n\n";
+        instContent += "## Active Concepts\n";
+        const concepts = oemContext.active_concepts || [];
+        const injectedIds: string[] = [];
+        if (concepts.length > 0) {
+          for (const c of concepts.slice(0, this.budget.conceptCountLimit)) {
+            instContent += `- **${c.name}** (${c.id}): ${c.description || 'No description available.'}\n`;
+            injectedIds.push(c.id);
+          }
+        } else {
+          instContent += "- None\n";
+        }
+
+        instContent += "\n## Active Decisions\n";
+        const decisions = oemContext.active_decisions || [];
+        if (decisions.length > 0) {
+          for (const d of decisions.slice(0, 5)) {
+            instContent += `- ${d}\n`;
+          }
+        } else {
+          instContent += "- None\n";
+        }
+
+        instContent += "\n## Relevant Failures\n";
+        const failures = oemContext.relevant_failures || [];
+        if (failures.length > 0) {
+          for (const f of failures.slice(0, 5)) {
+            instContent += `- ${f}\n`;
+          }
+        } else {
+          instContent += "- None\n";
+        }
+
+        instContent += "\n## Open Questions\n";
+        const questions = oemContext.open_questions || [];
+        if (questions.length > 0) {
+          for (const q of questions.slice(0, 5)) {
+            instContent += `- ${q}\n`;
+          }
+        } else {
+          instContent += "- None\n";
+        }
+
+        instContent += "\n## Memory Context\n";
+        instContent += oemContext.memory_context || "OEM is your long-term memory for this project. The concepts and context above represent what you already know. Use `knowledge_search` when you need details on a specific concept. You do not need to search before every response — only when you lack information.\n";
+        instContent += "\n";
+
+        // Save injected concepts to session state
+        const sessionStatePath = path.join(projectPath, ".oem", "state", "session_state.json");
+        try {
+          fs.mkdirSync(path.dirname(sessionStatePath), { recursive: true });
+          const sessionId = `session_${Date.now()}`;
+          fs.writeFileSync(sessionStatePath, JSON.stringify({
+            session_id: sessionId,
+            last_injected_concepts: injectedIds,
+            last_injected_at: new Date().toISOString()
+          }, null, 2), "utf-8");
+        } catch (e) {
+          // Ignore
+        }
+
+        // Increment injected concepts count immediately
+        const injectedCount = injectedIds.length;
+        const metricsDir = path.join(projectPath, ".oem", "state");
+        const metricsPath = path.join(metricsDir, "metrics.json");
+        try {
+          let mData = { knowledge_usage: { concepts_injected: 0 } };
+          if (fs.existsSync(metricsPath)) {
+            mData = JSON.parse(fs.readFileSync(metricsPath, "utf-8"));
+          }
+          mData.knowledge_usage = mData.knowledge_usage || { concepts_injected: 0 };
+          mData.knowledge_usage.concepts_injected = (mData.knowledge_usage.concepts_injected || 0) + injectedCount;
+          fs.writeFileSync(metricsPath, JSON.stringify(mData, null, 2), "utf-8");
+        } catch (e) {
+          // ignore
+        }
+
+        return instContent;
+      } catch (e) {
+        console.error("Failed to assemble context from context file, falling back to TS-native: ", e);
+      }
+    }
+
     const oemDir = path.join(projectPath, ".oem");
     const registry = registryCache.getRegistry(projectPath);
+
 
     // 1. Load active concepts from registry prioritizing validated/canonical/global
     const concepts: Array<{ id: string; name: string; description: string; score: number }> = [];

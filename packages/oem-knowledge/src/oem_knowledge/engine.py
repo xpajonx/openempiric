@@ -578,6 +578,16 @@ class KnowledgeEngine:
         print("[OEM] Embedding model ready (cached globally, one-time per machine).", file=sys.stderr)
         return {"status": "success", "model": "BAAI/bge-small-en-v1.5"}
 
+    def warmup_if_needed(self) -> dict:
+        """Warm up embedding model if not already cached/loaded."""
+        try:
+            from fastembed import TextEmbedding
+            TextEmbedding(model_name="BAAI/bge-small-en-v1.5", local_files_only=True)
+            return {"status": "success", "cached": True}
+        except Exception:
+            return self.warmup()
+
+
     def restore_session_state(self, project: str | None = None) -> dict:
         h = self._resolve_harness(project)
         state_dir = h / "state"

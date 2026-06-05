@@ -50,16 +50,15 @@ def _ensure_workspace_ready(eng: KnowledgeEngine, project: str | None, adapter) 
     harness = eng._resolve_harness(project)
 
     try:
-        from fastembed import TextEmbedding
-        TextEmbedding(model_name="BAAI/bge-small-en-v1.5", local_files_only=True)
-    except Exception:
-        logging.info("Embedding model not cached — running warmup...")
-        eng.warmup()
+        eng.warmup_if_needed()
+    except Exception as e:
+        logging.warning("Embedding model warmup failed: %s", e)
 
     if not adapter.verify_mcp():
         logging.info("Plugin not linked — installing...")
         _link_plugin()
         adapter.install_skill()
+
 
 
 def _auto_recover_stale_session(eng: KnowledgeEngine, project: str | None = None) -> None:

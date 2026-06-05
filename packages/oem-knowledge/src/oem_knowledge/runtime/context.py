@@ -12,6 +12,22 @@ def _compile_oem_context(eng: KnowledgeEngine) -> dict:
     active_concepts = []
     try:
         registry = eng._load_registry()
+        
+        # Determine recommended concept IDs from session state (pre-search)
+        rec_ids = set()
+        try:
+            session_state = eng.restore_session_state()
+            rec_files = session_state.get("recommended_files", [])
+            for f in rec_files:
+                from pathlib import Path
+                stem = Path(f).stem
+                if stem.startswith("concept_") and stem in registry:
+                    rec_ids.add(stem)
+        except Exception:
+            pass
+
+        from oem_knowledge.health import calculate_concept_health
+
         for cid, cdata in registry.items():
             if cdata.get("status") in ("validated", "canonical", "global"):
                 desc = ""
@@ -27,13 +43,27 @@ def _compile_oem_context(eng: KnowledgeEngine) -> dict:
                         desc = body.split("\n")[0][:150].strip()
                     except Exception:
                         pass
+                
+                health = calculate_concept_health(cdata)
+                boost = 50.0 if cid in rec_ids else 0.0
+                priority_score = health + boost
+
                 active_concepts.append({
                     "id": cid,
                     "name": cdata.get("canonical_name", cid),
                     "description": desc,
+                    "priority_score": priority_score,
                 })
+        
+        # Sort concepts by priority_score descending
+        active_concepts.sort(key=lambda c: c["priority_score"], reverse=True)
+        # Clean up the priority_score key
+        for c in active_concepts:
+            c.pop("priority_score", None)
+
     except Exception as e:
         logging.warning("Failed to compile active concepts: %s", e)
+
 
     active_decisions = []
     relevant_failures = []
