@@ -91,21 +91,25 @@ The diagram below outlines the sequential lifecycle of an agent running under Op
 
 ## 4. Adapter Contract
 
-Adapters subclass `BaseAdapter` and register their capability sets using YAML metadata in `skills/`.
+Adapters subclass `BaseAdapter` and register themselves using the `@register_adapter("name")` decorator.
 
-### Required Hooks
-Your adapter must implement these three hooks to function:
+Sane default implementations are provided in `BaseAdapter` for all methods, meaning **no overrides are strictly required to subclass it**. However, most adapter authors will want to override the following core methods:
 
-1. **`session_start(project_path)`**: Registers session states, restores goals, and initializes session-level telemetry.
-2. **`context_injection(project_path)`**: Gathers registry concepts and outputs the system instructions wrapper.
-3. **`session_commit(conversation_text, outcome, reason, session_id, project_path)`**: Passes the transcript and outcome back to the OEM Core reflection and materialization services.
+### Recommended Overrides
+These methods define how OpenCode detects your environment and loads transcripts:
 
-### Optional Hooks
-These hooks can be added for deeper agent integrations:
+1. **`verify_mcp()`**: Diagnoses whether your adapter/agent is installed and configured (e.g. checks if configuration files exist or symlinks are present). Used by the `oem doctor` command.
+2. **`parse_transcript(path)`**: Parses dialogue lines (User vs. Agent) from your agent's proprietary log formats into plain text. (The default implementation reads the file directly as plain text).
 
+### Optional Lifecycle Hooks
+These hooks can be overridden to intercept and customize session setup or runtime execution:
+
+* **`pre_session()`**: Setup tasks executed immediately before spawning the agent subprocess.
+* **`context_injection()`**: Compiles context metadata from the registry and generates workspace prompt instructions.
+* **`knowledge_search(query)`**: Intercepts or filters queries to the semantic knowledge graph.
+* **`post_session(committed)`**: Cleanup tasks executed after the agent process terminates and learnings are committed.
 * **`install_skill()`**: Installs declarative YAML configurations containing requirements and tool metadata into `.oem/skills/`.
-* **`verify_mcp()`**: Diagnoses whether the agent has registered the MCP server. Used by the `oem doctor` command.
-* **`parse_transcript(path)`**: Custom file parser for extracting User/Agent text from proprietary logs.
+* **`get_expected_transcript_path(session_id)`**: Customize the expected path where the session transcript is saved for recovery.
 
 ---
 
