@@ -1,8 +1,8 @@
 # OpenEmpiric Best Practices
 
-OpenEmpiric learns by listening to how you work with coding agents. It captures decisions, failures, tradeoffs, experiments, and outcomes from your conversations and converts them into structured, reusable knowledge.
+OpenEmpiric is an **agent-first knowledge runtime**. It learns by listening to how you work with coding agents, capturing decisions, failures, tradeoffs, experiments, and outcomes from your conversations and converting them into structured, reusable knowledge.
 
-The quality of what OEM learns depends on how you communicate. This guide explains what conversation patterns produce valuable knowledge — without requiring any special syntax or tags.
+Because the agent is the primary consumer of this knowledge runtime, it uses these accumulated learnings to proactively avoid repeating past errors, align with project architecture choices, and build on validated concepts. The quality of what the agent learns and retrieves depends on how you communicate. This guide explains what conversation patterns produce valuable knowledge — without requiring any special syntax or tags.
 
 ---
 

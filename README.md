@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>Agent-agnostic event-sourced knowledge operating system and agent runtime for AI.</strong>
+  <strong>Agent-first event-sourced knowledge runtime for AI coding sessions.</strong>
 </p>
 
 <p align="center">
@@ -23,25 +23,27 @@
 
 ---
 
-Most AI memory systems focus on *remembering*. We believe the harder and more important problem is **learning**.
+Most AI memory systems focus on *remembering* raw chat transcripts. We believe the harder and more important problem is **learning**.
 
-`openempiric` is an agent-agnostic event-sourced knowledge runtime for coding agents that continuously converts conversations, experiments, decisions, successes, and failures into structured, durable organizational knowledge that improves over time.
+`openempiric` is an **agent-first event-sourced knowledge runtime** for coding agents. It continuously converts conversations, experiments, decisions, successes, and failures into structured, durable organizational knowledge. The agent is the primary consumer: every feature is optimized to make the agent smarter, faster, and more autonomous, removing cognitive overhead and configuration friction from the developer.
 
 ---
 
 ## Core Capabilities
 
-`openempiric` is first and foremost a **knowledge accumulation system** and **agent runtime** (the `oem` CLI):
+`openempiric` is built from the ground up as an **agent-first knowledge runtime** (via the `oem` CLI):
 
-### 🧠 Knowledge Layer
+### 🧠 Agent-First Knowledge Layer
 - 🕸️ **Knowledge Graph** — Hybrid vector + BM25 search over your project's historical knowledge.
 - 📂 **Isolated Contexts** — Each project keeps its own `.oem/` folder containing its private vector DB, sessions, and concept registry.
+- 🩺 **Autonomous Self-Healing** — Background stale concept detection, conflict monitoring, and merge recommendations keep the knowledge base clean with human-in-the-loop control.
 - 🛡️ **Safety Guards** — Enforces path traversal sandboxing and a >50% truncation prevention guard during writes.
 - 📋 **Todo Tracking** — Maintain persistent task lists directly alongside validated concept growth.
 
-### ⚡ Agent Runtime (`oem`)
-- 🤖 **Agent Wrapping (`oem run`)** — Automatically injects openempiric settings into your coding agent on the fly, and restores original files on exit.
-- 🔄 **Session Lifecycle Automation** — Spawns agent processes with pre-injection context loaded from past sessions, committing and reflecting on learnings automatically upon exit.
+### ⚡ Session Lifecycle Automation (`oem run`)
+- 🤖 **Agent Wrapping** — Injects OpenEmpiric tools and environment settings into your coding agent on the fly, restoring original configuration on exit.
+- 🔄 **Proactive Context Injection** — Spawns agent processes with pre-injection context loaded from past sessions. The runtime automatically reflects, commits, and consolidates learnings when the agent exits.
+- 🩺 **Zero-Touch Readiness** — Automatically handles bootstrapping (`oem init`), embedding model warming (`oem warmup`), and plugin linking, enabling instant execution.
 
 ---
 
