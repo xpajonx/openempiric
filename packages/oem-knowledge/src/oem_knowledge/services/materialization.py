@@ -161,69 +161,77 @@ class MaterializationService:
                 "materialized": [],
             }
 
-        latest = session_files[-1]
-        content = latest.read_text()
-
-        knowledge_events = []
-        json_match = re.search(r"```json\n(.*?)\n```", content, re.DOTALL)
-        if json_match:
-            try:
-                data = json.loads(json_match.group(1))
-                if "knowledge_events" in data:
-                    knowledge_events = data["knowledge_events"]
-            except Exception:
-                pass
-
-        if not knowledge_events:
-            return {
-                "status": "success",
-                "message": "No knowledge events found.",
-                "materialized": [],
-            }
-
         registry = self.engine._load_registry(project)
         fitness_data = self.engine.calculate_fitness(project)
         materialized_log = []
 
-        for event in knowledge_events:
-            concept = event.get("concept", "General Learning")
-            e_type = event.get("type", "observation").lower()
-            evidence = event.get("evidence", "")
+        # Derive already processed session IDs from the registry
+        processed_sessions = set()
+        for cdata in registry.values():
+            processed_sessions.update(cdata.get("sessions", []))
 
-            cid, cdata = self.engine._resolve_concept(concept, registry)
+        registry_updated = False
 
-            if evidence:
-                cdata["evidence_count"] = cdata.get("evidence_count", 0) + 1
+        for session_file in session_files:
+            session_id = session_file.stem
+            if session_id in processed_sessions:
+                continue
 
-            cdata = self.engine.evaluate_concept_status(cdata, e_type, session_id=latest.stem, fitness_data=fitness_data)
-            new_status = cdata["status"]
-            registry[cid] = cdata
+            content = session_file.read_text(encoding="utf-8")
+            knowledge_events = []
+            json_match = re.search(r"```json\n(.*?)\n```", content, re.DOTALL)
+            if json_match:
+                try:
+                    data = json.loads(json_match.group(1))
+                    if "knowledge_events" in data:
+                        knowledge_events = data["knowledge_events"]
+                except Exception:
+                    pass
 
-            concept_file = concepts_dir / f"{cid}.md"
+            if not knowledge_events:
+                continue
 
-            if new_status in ("validated", "canonical", "needs_review"):
-                existing_body = ""
-                is_new = not concept_file.exists()
-                if not is_new:
-                    try:
-                        text = concept_file.read_text()
-                        fm = re.match(r"^---\s*\n.*?\n---\s*\n(.*)$", text, re.DOTALL)
-                        existing_body = fm.group(1).strip() if fm else text.strip()
-                    except Exception:
-                        pass
+            registry_updated = True
 
-                learning = f"- **{e_type.title()}**: {evidence}" if evidence else ""
-                if is_new:
-                    if new_status == "needs_review":
-                        body = f"# {cdata['canonical_name'].replace('-', ' ').title()}\n\nThis concept requires review due to repeated session failures.\n\n## Learnings\n{learning}\n"
+            for event in knowledge_events:
+                concept = event.get("concept", "General Learning")
+                e_type = event.get("type", "observation").lower()
+                evidence = event.get("evidence", "")
+
+                cid, cdata = self.engine._resolve_concept(concept, registry)
+
+                if evidence:
+                    cdata["evidence_count"] = cdata.get("evidence_count", 0) + 1
+
+                cdata = self.engine.evaluate_concept_status(cdata, e_type, session_id=session_id, fitness_data=fitness_data)
+                new_status = cdata["status"]
+                registry[cid] = cdata
+
+                concept_file = concepts_dir / f"{cid}.md"
+
+                if new_status in ("validated", "canonical", "needs_review"):
+                    existing_body = ""
+                    is_new = not concept_file.exists()
+                    if not is_new:
+                        try:
+                            text = concept_file.read_text(encoding="utf-8")
+                            fm = re.match(r"^---\s*\n.*?\n---\s*\n(.*)$", text, re.DOTALL)
+                            existing_body = fm.group(1).strip() if fm else text.strip()
+                        except Exception:
+                            pass
+
+                    learning = f"- **{e_type.title()}**: {evidence}" if evidence else ""
+                    if is_new:
+                        if new_status == "needs_review":
+                            body = f"# {cdata['canonical_name'].replace('-', ' ').title()}\n\nThis concept requires review due to repeated session failures.\n\n## Learnings\n{learning}\n"
+                        else:
+                            body = f"# {cdata['canonical_name'].replace('-', ' ').title()}\n\nThis concept is a validated organizational knowledge node.\n\n## Learnings\n{learning}\n"
                     else:
-                        body = f"# {cdata['canonical_name'].replace('-', ' ').title()}\n\nThis concept is a validated organizational knowledge node.\n\n## Learnings\n{learning}\n"
-                else:
-                    body = existing_body
-                    if learning:
-                        body += f"\n\n## Learnings ({time.strftime('%Y-%m-%d')})\n{learning}\n"
+                        body = existing_body
+                        if learning:
+                            body += f"\n\n## Learnings ({time.strftime('%Y-%m-%d')})\n{learning}\n"
 
-                concept_content = f"""---
+                    concept_content = f"""---
 concept_id: {cid}
 canonical_name: {cdata["canonical_name"]}
 status: {new_status}
@@ -234,31 +242,32 @@ aliases: {json.dumps(cdata.get("aliases", []))}
 ---
 {body}"""
 
-                self._safe_write_concept_file(concept_file, concept_content, project)
-                self._log_action(
-                    f"Ingest | Materialized concept {cid} ({cdata['canonical_name']}) as {new_status}",
-                    project,
-                )
-                self._sync_index(cdata["canonical_name"], cid, project)
-                materialized_log.append(
-                    f"{cid} ({cdata['canonical_name']}) = {new_status}"
-                )
-
-            elif new_status == "deprecated":
-                if concept_file.exists():
-                    concept_file.unlink()
+                    self._safe_write_concept_file(concept_file, concept_content, project)
                     self._log_action(
-                        f"Delete | Deprecated concept {cid} ({cdata['canonical_name']})",
+                        f"Ingest | Materialized concept {cid} ({cdata['canonical_name']}) as {new_status}",
                         project,
                     )
-                materialized_log.append(f"Deprecated: {cid}")
+                    self._sync_index(cdata["canonical_name"], cid, project)
+                    materialized_log.append(
+                        f"{cid} ({cdata['canonical_name']}) = {new_status}"
+                    )
 
-            else:
-                materialized_log.append(
-                    f"{cid} ({cdata['canonical_name']}) = {new_status} (not materialized)"
-                )
+                elif new_status == "deprecated":
+                    if concept_file.exists():
+                        concept_file.unlink()
+                        self._log_action(
+                            f"Delete | Deprecated concept {cid} ({cdata['canonical_name']})",
+                            project,
+                        )
+                    materialized_log.append(f"Deprecated: {cid}")
 
-        self.engine._save_registry(registry, project)
+                else:
+                    materialized_log.append(
+                        f"{cid} ({cdata['canonical_name']}) = {new_status} (not materialized)"
+                    )
+
+        if registry_updated:
+            self.engine._save_registry(registry, project)
 
         # Emit materializations metric
         try:

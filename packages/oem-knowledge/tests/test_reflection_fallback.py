@@ -145,3 +145,28 @@ def test_no_double_dedup(engine, tmp_path):
     assert len(fallback_events) == 1, (
         f"Expected deduplication to produce 1 event, got {len(fallback_events)}"
     )
+
+
+def test_list_tolerant_fallback_extraction(engine, tmp_path):
+    chat = (
+        "- Fixed doctor null pointer.\n"
+        "* Added reflection guidelines.\n"
+        "1. Implemented list support.\n"
+        "- [x] Refactored fallback parser.\n"
+    )
+    res = engine.reflect_session(
+        project=str(tmp_path),
+        conversation_text=chat,
+        session_id="test_list_tolerant_1",
+    )
+    concepts = [
+        e["concept_candidates"][0]
+        for e in res["canonical_events"]
+        if e.get("source") == "chat-fallback"
+    ]
+    assert "doctor-null-pointer" in concepts
+    assert "reflection-guidelines" in concepts
+    assert "list-support" in concepts
+    assert "fallback-parser" in concepts
+
+

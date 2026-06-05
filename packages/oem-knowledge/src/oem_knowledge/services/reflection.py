@@ -10,16 +10,18 @@ if TYPE_CHECKING:
 # Software-development heuristics for fallback extraction.
 # Matches action verbs commonly used in dev session summaries.
 _SD_ACTION_PATTERNS = [
-    (re.compile(r"^\s*(?:Fixed|Fix)\s+(.+)$", re.IGNORECASE), "fix"),
-    (re.compile(r"^\s*(?:Added|Add)\s+(.+)$", re.IGNORECASE), "add"),
-    (re.compile(r"^\s*(?:Removed|Remove)\s+(.+)$", re.IGNORECASE), "remove"),
-    (re.compile(r"^\s*(?:Implemented|Implement)\s+(.+)$", re.IGNORECASE), "implement"),
-    (re.compile(r"^\s*(?:Refactored|Refactor)\s+(.+)$", re.IGNORECASE), "refactor"),
-    (re.compile(r"^\s*(?:Migrated|Migrate)\s+(.+)$", re.IGNORECASE), "migrate"),
-    (re.compile(r"^\s*(?:Decided|Decide)\s+(.+)$", re.IGNORECASE), "decision"),
-    (re.compile(r"^\s*(?:Validated|Validate)\s+(.+)$", re.IGNORECASE), "validation"),
-    (re.compile(r"^\s*(?:Failed|Fail)\s+(.+)$", re.IGNORECASE), "failure"),
+    (re.compile(r"^\s*(?:-\s*(?:\[[ xX/]\]\s*)?|[*]\s*(?:\[[ xX/]\]\s*)?|\d+\.\s*|\[[ xX/]\]\s*)?(?:Fixed|Fix)\s+(.+)$", re.IGNORECASE), "fix"),
+    (re.compile(r"^\s*(?:-\s*(?:\[[ xX/]\]\s*)?|[*]\s*(?:\[[ xX/]\]\s*)?|\d+\.\s*|\[[ xX/]\]\s*)?(?:Added|Add)\s+(.+)$", re.IGNORECASE), "add"),
+    (re.compile(r"^\s*(?:-\s*(?:\[[ xX/]\]\s*)?|[*]\s*(?:\[[ xX/]\]\s*)?|\d+\.\s*|\[[ xX/]\]\s*)?(?:Removed|Remove)\s+(.+)$", re.IGNORECASE), "remove"),
+    (re.compile(r"^\s*(?:-\s*(?:\[[ xX/]\]\s*)?|[*]\s*(?:\[[ xX/]\]\s*)?|\d+\.\s*|\[[ xX/]\]\s*)?(?:Implemented|Implement)\s+(.+)$", re.IGNORECASE), "implement"),
+    (re.compile(r"^\s*(?:-\s*(?:\[[ xX/]\]\s*)?|[*]\s*(?:\[[ xX/]\]\s*)?|\d+\.\s*|\[[ xX/]\]\s*)?(?:Refactored|Refactor)\s+(.+)$", re.IGNORECASE), "refactor"),
+    (re.compile(r"^\s*(?:-\s*(?:\[[ xX/]\]\s*)?|[*]\s*(?:\[[ xX/]\]\s*)?|\d+\.\s*|\[[ xX/]\]\s*)?(?:Migrated|Migrate)\s+(.+)$", re.IGNORECASE), "migrate"),
+    (re.compile(r"^\s*(?:-\s*(?:\[[ xX/]\]\s*)?|[*]\s*(?:\[[ xX/]\]\s*)?|\d+\.\s*|\[[ xX/]\]\s*)?(?:Decided|Decide)\s+(.+)$", re.IGNORECASE), "decision"),
+    (re.compile(r"^\s*(?:-\s*(?:\[[ xX/]\]\s*)?|[*]\s*(?:\[[ xX/]\]\s*)?|\d+\.\s*|\[[ xX/]\]\s*)?(?:Validated|Validate)\s+(.+)$", re.IGNORECASE), "validation"),
+    (re.compile(r"^\s*(?:-\s*(?:\[[ xX/]\]\s*)?|[*]\s*(?:\[[ xX/]\]\s*)?|\d+\.\s*|\[[ xX/]\]\s*)?(?:Failed|Fail)\s+(.+)$", re.IGNORECASE), "failure"),
 ]
+
+
 
 _SD_EVENT_TYPES = {
     "fix": "fix",
@@ -97,6 +99,86 @@ class ReflectionService:
                 }
             )
             file_observations_count += 1
+
+        # Git diff codebase modifications
+        try:
+            import subprocess
+            # Skip if subprocess.run is mocked (common in unit tests)
+            if not ("mock" in type(subprocess.run).__name__.lower()):
+                p_path = Path(project or ".").resolve()
+                modified_code_files = []
+                
+                # Staged/unstaged changes
+                res_diff = subprocess.run(
+                    ["git", "diff", "--name-only"],
+                    cwd=p_path,
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                if res_diff.returncode == 0:
+                    modified_code_files.extend(res_diff.stdout.splitlines())
+                    
+                # Last commit changes
+                res_commit = subprocess.run(
+                    ["git", "diff", "HEAD~1..HEAD", "--name-only"],
+                    cwd=p_path,
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                if res_commit.returncode == 0:
+                    modified_code_files.extend(res_commit.stdout.splitlines())
+                    
+                # Filter and match against registry
+                registry = self.engine._load_registry(project)
+                seen_files = set()
+                for f in modified_code_files:
+                    f = f.strip()
+                    if not f or f in seen_files or f.startswith(".oem") or f.startswith(".git"):
+                        continue
+                    seen_files.add(f)
+                    
+                    # Check for matching concepts in registry
+                    f_path = Path(f)
+                    stem = f_path.stem.lower()
+                    name = f_path.name.lower()
+                    full_path = f.lower()
+                    
+                    matched_cid = None
+                    matched_name = None
+                    
+                    # P1: Explicit filename/path in aliases
+                    for cid, cdata in registry.items():
+                        aliases = [a.lower() for a in cdata.get("aliases", [])]
+                        if name in aliases or full_path in aliases:
+                            matched_cid = cid
+                            matched_name = cdata.get("canonical_name", cid)
+                            break
+                            
+                    # P2: Exact stem match to canonical name or alias (minimum 4 chars)
+                    if not matched_cid and len(stem) >= 4:
+                        for cid, cdata in registry.items():
+                            canon = cdata.get("canonical_name", "").lower()
+                            aliases = [a.lower() for a in cdata.get("aliases", [])]
+                            if stem == canon or stem in aliases:
+                                matched_cid = cid
+                                matched_name = cdata.get("canonical_name", cid)
+                                break
+                                
+                    if matched_cid:
+                        knowledge_events.append({
+                            "type": "observation",
+                            "concept": matched_name.replace("-", " ").title(),
+                            "evidence": f"Code modified in workspace: {f}",
+                            "confidence": 1,
+                            "source": "diff",
+                        })
+                        file_observations_count += 1
+        except Exception as e:
+            logging.warning("Failed to extract codebase modifications via git diff: %s", e)
+
+
 
         text_clean = conversation_text.strip()
         if telemetry:

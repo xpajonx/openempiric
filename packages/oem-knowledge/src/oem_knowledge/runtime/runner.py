@@ -206,6 +206,25 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None)
         logging.warning("Failed to write runtime context to %s: %s", _OEM_RUNTIME_CONTEXT_PATH, e)
 
     try:
+        _OEM_TEMP_INSTRUCTIONS.parent.mkdir(parents=True, exist_ok=True)
+        instructions = (
+            "# openempiric Reflection Guidelines\n\n"
+            "## Knowledge Capture\n"
+            "OEM is your long-term memory for this project. During this session, you should identify and record critical learning events (hypotheses, experiments, validations, decisions, failures) using structured format patterns. This allows the reflection pipeline to extract and persist learnings automatically.\n\n"
+            "## Reflection Format\n"
+            "To record an event, write a line in your response matching one of these prefixes:\n"
+            "- `Hypothesis: <statement>` (or `Hyp: <statement>`)\n"
+            "- `Experiment: <statement>` (or `Exp: <statement>`)\n"
+            "- `Validation: <statement>` (or `Val: <statement>`)\n"
+            "- `Failure: <statement>` (or `Fail: <statement>`)\n"
+            "- `Decision: <statement>` (or `Dec: <statement>`)\n"
+        )
+        _OEM_TEMP_INSTRUCTIONS.write_text(instructions, encoding="utf-8")
+    except Exception as e:
+        logging.warning("Failed to write transient instructions to %s: %s", _OEM_TEMP_INSTRUCTIONS, e)
+
+
+    try:
         logging.info("Restoring session state (session_id=%s)", session_id)
         eng.restore_session_state(project)
     except Exception as e:
