@@ -34,6 +34,15 @@ class BaseAdapter:
         """[RECOMMENDED] Verify if the adapter environment is registered/ready (e.g. plugin linked/installed)."""
         return False
 
+    def verify_health(self) -> tuple[bool, str]:
+        """Check if adapter runtime environment is healthy.
+
+        Returns (healthy, message) tuple.
+        Default: delegates to verify_mcp().
+        """
+        healthy = self.verify_mcp()
+        return healthy, "MCP registered" if healthy else "MCP not registered"
+
     def get_expected_transcript_path(self, session_id: str) -> Path:
         """[RECOMMENDED] Get the expected path where the session transcript is stored for recovery."""
         h = self.engine._resolve_harness(self.project_path)

@@ -75,4 +75,11 @@ def _compile_oem_context(eng: KnowledgeEngine) -> dict:
         "active_decisions": active_decisions,
         "relevant_failures": relevant_failures,
         "open_questions": open_questions,
+        "memory_context": (
+            "OEM is your long-term memory for this project. "
+            "The concepts, decisions, failures, and questions above represent "
+            "what you already know. Use the knowledge_search tool to retrieve "
+            "details on any of them. You do not need to search before every "
+            "response — only when you need information you do not already have."
+        ),
     }

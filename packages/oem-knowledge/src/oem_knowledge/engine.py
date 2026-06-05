@@ -562,6 +562,15 @@ class KnowledgeEngine:
             "created_files": created_files,
         }
 
+    def is_initialized(self, project: str | None = None) -> bool:
+        """Check if project has been initialized (has .oem/ dir with state/)."""
+        p = Path(project or self.project_path or ".").resolve()
+        root = find_harness_root(p)
+        if root is None:
+            return False
+        harness = root / OEM_DIR
+        return (harness / "state").is_dir()
+
     def warmup(self) -> dict:
         import sys
         print("[OEM] Warming up embedding model 'BAAI/bge-small-en-v1.5'...", file=sys.stderr)

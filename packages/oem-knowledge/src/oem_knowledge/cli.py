@@ -190,8 +190,9 @@ def main():
     project = _resolve_project(args)
     eng = KnowledgeEngine(project)
 
-    # Check for unfinished session for run, status/stats commands
-    if args.command in ("status", "stats", "run"):
+    # Check for unfinished session for status/stats commands only
+    # (run command auto-recovers in runner.py)
+    if args.command in ("status", "stats"):
         try:
             harness = eng._resolve_harness(project)
             active_session_file = harness / "state" / "active_session.json"

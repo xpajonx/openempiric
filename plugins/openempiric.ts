@@ -379,6 +379,13 @@ class ContextAssembler {
       instContent += "- None\n";
     }
 
+    // 4. Memory context: frame OEM as long-term memory, not a search requirement
+    instContent += "\n## Memory Context\n";
+    instContent += "OEM is your long-term memory for this project. ";
+    instContent += "The concepts and context above represent what you already know. ";
+    instContent += "Use `knowledge_search` when you need details on a specific concept. ";
+    instContent += "You do not need to search before every response — only when you lack information.\n";
+
     // Save injected concepts to session state
     const sessionStatePath = path.join(projectPath, ".oem", "state", "session_state.json");
     try {
