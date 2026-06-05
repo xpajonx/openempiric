@@ -26,6 +26,12 @@ tools:
   - oem
   - knowledge_search
   - knowledge_session_start
+best_practices:
+  - Explicitly state decisions and rationale.
+  - Record failures and root causes.
+  - Summarize experiments and results.
+  - Capture tradeoffs.
+  - Describe outcomes and impact.
 """
             skills_file.write_text(SKILLS_YAML_CONTENT, encoding="utf-8")
             return True

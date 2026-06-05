@@ -179,6 +179,21 @@ This enables:
 
 ---
 
+## Best Practices
+
+OpenEmpiric learns most effectively when decisions, failures, experiments, and outcomes are made explicit during conversations.
+
+Examples:
+
+✓ "We chose TypeScript because Python MCP startup latency caused timeouts."
+✓ "The indexing pipeline failed because ChromaDB rejected np.float32 embeddings."
+✗ "Use TypeScript."
+✗ "It doesn't work."
+
+See [docs/best-practices.md](docs/best-practices.md) for detailed guidance.
+
+---
+
 ## Uninstallation
 
 To completely remove OpenEmpiric from your system:

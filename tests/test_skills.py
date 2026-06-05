@@ -60,6 +60,8 @@ def test_opencode_skill_installation(tmp_path):
     assert "search_existing_knowledge_before_work" in data["required"]
     assert "knowledge_search_before_work" in data["required"]
     assert "knowledge_search" in data["tools"]
+    assert any("decisions" in bp for bp in data["best_practices"])
+    assert any("failures" in bp for bp in data["best_practices"])
 
 
 def test_init_installs_skill(tmp_path):
