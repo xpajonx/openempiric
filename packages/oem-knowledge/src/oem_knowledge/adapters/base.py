@@ -10,3 +10,8 @@ class BaseAdapter:
     def install_skill(self) -> bool:
         """Install skill metadata into the project workspace."""
         return False
+
+    def verify_mcp(self) -> bool:
+        """Verify if the MCP server is registered for this adapter."""
+        return False
+

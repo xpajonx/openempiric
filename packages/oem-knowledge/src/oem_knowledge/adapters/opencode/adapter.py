@@ -30,3 +30,11 @@ tools:
             return True
         except Exception:
             return False
+
+    def verify_mcp(self) -> bool:
+        """Verify if OpenCode has the plugin linked/installed."""
+        import os
+        plugins_dir = Path(os.environ.get("OPENCODE_PLUGINS_DIR", Path.home() / ".config" / "opencode" / "plugins"))
+        plugin_dest = plugins_dir / "openempiric.ts"
+        return plugin_dest.exists() or plugin_dest.is_symlink()
+

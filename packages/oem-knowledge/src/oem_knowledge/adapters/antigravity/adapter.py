@@ -157,3 +157,11 @@ class AntigravityAdapter(BaseAdapter):
             logging.warning(f"Failed to record outcome: {e}")
             
         return res
+
+    def verify_mcp(self) -> bool:
+        """Verify if Antigravity has the app data directory created."""
+        try:
+            return self.get_app_data_dir().exists()
+        except Exception:
+            return False
+

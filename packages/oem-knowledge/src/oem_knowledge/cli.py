@@ -1045,27 +1045,101 @@ def main():
                 lines.append(f"✗ Events schema check failed: {e}")
                 status = "error"
 
-            # 6. Embedding model cache check
-            try:
-                from fastembed import TextEmbedding
-                TextEmbedding(model_name="BAAI/bge-small-en-v1.5", local_files_only=True)
-                lines.append("✓ Embedding model (BAAI/bge-small-en-v1.5) is cached locally")
-            except Exception:
-                lines.append("⚠ Embedding model (BAAI/bge-small-en-v1.5) is not cached")
-                lines.append("  → Run `oem warmup` once per machine to pre-download")
-
-            # 7. Skill installation check
+            # 6. Skill installation check & adapter detection
+            adapter_name = "opencode"
             try:
                 h_dir = eng._resolve_harness(project)
                 skills_file = h_dir / "skills" / "openempiric.yaml"
                 if skills_file.exists():
                     lines.append("✓ OEM Skill Installed")
+                    try:
+                        import yaml
+                        with open(skills_file, "r", encoding="utf-8") as f:
+                            data = yaml.safe_load(f)
+                            if data and "adapter" in data:
+                                adapter_name = data["adapter"]
+                    except Exception:
+                        pass
                 else:
                     lines.append("✗ OEM Skill not installed (missing skills/openempiric.yaml)")
                     status = "error"
             except Exception as e:
                 lines.append(f"✗ Failed to verify OEM Skill installation: {e}")
                 status = "error"
+
+            # 7. MCP Registered check (adapter-aware)
+            try:
+                from oem_knowledge.adapters import get_adapter
+                adapter = get_adapter(adapter_name, eng, project)
+                if adapter.verify_mcp():
+                    lines.append("✓ MCP Registered")
+                else:
+                    lines.append(f"✗ MCP not registered (for adapter: {adapter_name})")
+                    status = "error"
+            except Exception as e:
+                lines.append(f"✗ Failed to verify MCP registration: {e}")
+                status = "error"
+
+            # 8. Embedding Cache Ready check
+            try:
+                from fastembed import TextEmbedding
+                TextEmbedding(model_name="BAAI/bge-small-en-v1.5", local_files_only=True)
+                lines.append("✓ Embedding Cache Ready")
+            except Exception:
+                lines.append("✗ Embedding Cache not ready")
+                lines.append("  → Run `oem warmup` once per machine to pre-download")
+                status = "error"
+
+            # 9. Context Injection Working check
+            try:
+                _ = _compile_oem_context(eng)
+                if adapter_name == "opencode":
+                    context_dir = _OEM_RUNTIME_CONTEXT_PATH.parent
+                elif adapter_name in ("agy", "antigravity"):
+                    from oem_knowledge.adapters import get_adapter
+                    adapter = get_adapter(adapter_name, eng, project)
+                    context_dir = adapter.get_app_data_dir()
+                else:
+                    context_dir = Path.home() / ".config" / "opencode" / "plugins"
+                
+                context_dir.mkdir(parents=True, exist_ok=True)
+                test_file = context_dir / ".oem_doctor_write_test"
+                test_file.write_text("test", encoding="utf-8")
+                test_file.unlink()
+                lines.append("✓ Context Injection Working")
+            except Exception as e:
+                lines.append(f"✗ Context Injection not working: {e}")
+                status = "error"
+
+            # 10. Managed Runtime Available check
+            try:
+                bin_name = "opencode"
+                if adapter_name == "opencode":
+
+                    bin_name = "opencode"
+                elif adapter_name in ("agy", "antigravity"):
+                    bin_name = "agy"
+                else:
+                    bin_name = adapter_name
+                
+                if shutil.which(bin_name):
+                    lines.append("✓ Managed Runtime Available")
+                else:
+                    lines.append(f"✗ Managed Runtime not available (executable '{bin_name}' not found in PATH)")
+                    status = "error"
+            except Exception as e:
+                lines.append(f"✗ Failed to check Managed Runtime: {e}")
+                status = "error"
+
+            # 11. Search Pipeline Available check
+            try:
+                _ = eng.search_service.stats()
+                eng.search_service.search("test", k=1)
+                lines.append("✓ Search Pipeline Available")
+            except Exception as e:
+                lines.append(f"✗ Search Pipeline not available: {e}")
+                status = "error"
+
 
             print(render_panel("OEM Environment Check", lines, status=status))
 
