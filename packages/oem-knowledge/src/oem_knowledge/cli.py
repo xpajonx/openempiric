@@ -136,6 +136,17 @@ def check_mcp_server(command: list[str]) -> tuple[bool, bool, int, str]:
             bufsize=1
         )
         
+        def _get_stderr_log() -> str:
+            try:
+                import os
+                fd = proc.stderr.fileno()
+                fl = os.fcntl(fd, os.F_GETFL)
+                os.fcntl(fd, os.F_SETFL, fl | os.O_NONBLOCK)
+                content = proc.stderr.read() or ""
+                return content.strip()
+            except Exception:
+                return ""
+        
         # 1. Reachability check: Send initialize
         init_req = {
             "jsonrpc": "2.0",
@@ -150,15 +161,24 @@ def check_mcp_server(command: list[str]) -> tuple[bool, bool, int, str]:
         proc.stdin.write(json.dumps(init_req) + "\n")
         proc.stdin.flush()
         
-        ready = select.select([proc.stdout], [], [], 3.0)
+        # Increase initial connection timeout to 10.0 seconds to allow interpreter startup
+        ready = select.select([proc.stdout], [], [], 10.0)
         if not ready[0]:
+            stderr_log = _get_stderr_log()
             proc.kill()
-            return False, False, 0, "Timeout waiting for initialize response"
+            err_msg = "Timeout waiting for initialize response"
+            if stderr_log:
+                err_msg += f". Server stderr:\n{stderr_log}"
+            return False, False, 0, err_msg
             
         init_resp_line = proc.stdout.readline()
         if not init_resp_line:
+            stderr_log = _get_stderr_log()
             proc.kill()
-            return False, False, 0, "Empty response on initialize"
+            err_msg = "Empty response on initialize"
+            if stderr_log:
+                err_msg += f". Server stderr:\n{stderr_log}"
+            return False, False, 0, err_msg
             
         # 2. Tool count check: Send tools/list
         tools_req = {
@@ -169,15 +189,24 @@ def check_mcp_server(command: list[str]) -> tuple[bool, bool, int, str]:
         proc.stdin.write(json.dumps(tools_req) + "\n")
         proc.stdin.flush()
         
-        ready = select.select([proc.stdout], [], [], 3.0)
+        # Subsequent requests take 5.0 seconds max
+        ready = select.select([proc.stdout], [], [], 5.0)
         if not ready[0]:
+            stderr_log = _get_stderr_log()
             proc.kill()
-            return True, False, 0, "Timeout waiting for tools/list response"
+            err_msg = "Timeout waiting for tools/list response"
+            if stderr_log:
+                err_msg += f". Server stderr:\n{stderr_log}"
+            return True, False, 0, err_msg
             
         tools_resp_line = proc.stdout.readline()
         if not tools_resp_line:
+            stderr_log = _get_stderr_log()
             proc.kill()
-            return True, False, 0, "Empty response on tools/list"
+            err_msg = "Empty response on tools/list"
+            if stderr_log:
+                err_msg += f". Server stderr:\n{stderr_log}"
+            return True, False, 0, err_msg
             
         tools_resp = json.loads(tools_resp_line)
         if "error" in tools_resp:
@@ -200,16 +229,24 @@ def check_mcp_server(command: list[str]) -> tuple[bool, bool, int, str]:
         proc.stdin.write(json.dumps(call_req) + "\n")
         proc.stdin.flush()
         
-        ready = select.select([proc.stdout], [], [], 3.0)
+        ready = select.select([proc.stdout], [], [], 5.0)
         if not ready[0]:
+            stderr_log = _get_stderr_log()
             proc.kill()
-            return True, False, num_tools, "Timeout waiting for tool call response"
+            err_msg = "Timeout waiting for tool call response"
+            if stderr_log:
+                err_msg += f". Server stderr:\n{stderr_log}"
+            return True, False, num_tools, err_msg
             
         call_resp_line = proc.stdout.readline()
         proc.kill()
         
         if not call_resp_line:
-            return True, False, num_tools, "Empty response on tool call"
+            stderr_log = _get_stderr_log()
+            err_msg = "Empty response on tool call"
+            if stderr_log:
+                err_msg += f". Server stderr:\n{stderr_log}"
+            return True, False, num_tools, err_msg
             
         call_resp = json.loads(call_resp_line)
         if "error" in call_resp:
@@ -657,11 +694,42 @@ def cmd_setup_opencode(repair: bool = False) -> None:
     except Exception:
         pass
         
+    mcp_verified = False
+    mcp_error = ""
+    if plugin_installed and inst_installed and config_verified:
+        # Check MCP server status using mcp_config
+        cmd = mcp_config.get("command")
+        args_list = mcp_config.get("args", [])
+        if isinstance(cmd, str):
+            mcp_cmd = [cmd] + args_list
+        elif isinstance(cmd, list):
+            mcp_cmd = cmd + args_list
+        else:
+            mcp_cmd = []
+
+        if mcp_cmd:
+            with Spinner("Verifying registered OEM MCP server..."):
+                reachable, functional, num_tools, err = check_mcp_server(mcp_cmd)
+                if reachable and functional:
+                    mcp_verified = True
+                else:
+                    mcp_error = err
+        else:
+            mcp_error = "Could not resolve MCP server configuration command"
+
     # Report summary
     lines = []
     lines.append("✓ Plugin installed" if plugin_installed else "✗ Plugin installation failed")
     lines.append("✓ Instructions installed" if inst_installed else "✗ Instructions installation failed")
     lines.append("✓ Configuration verified" if config_verified else "✗ Configuration verification failed")
+    
+    if plugin_installed and inst_installed and config_verified:
+        if mcp_verified:
+            lines.append("✓ MCP Server reachable and functional")
+        else:
+            lines.append(f"✗ MCP Server verification failed: {mcp_error}")
+            lines.append("  → Verify that 'uv' or 'oem' is in your PATH.")
+            lines.append("  → Run 'oem doctor' to troubleshoot environment problems.")
     
     if migrated_plugin:
         lines.append("ℹ Migrated legacy plugin openempiric.ts")
@@ -670,7 +738,7 @@ def cmd_setup_opencode(repair: bool = False) -> None:
     if repair:
         lines.append("ℹ Re-installed all components (--repair)")
         
-    if plugin_installed and inst_installed and config_verified:
+    if plugin_installed and inst_installed and config_verified and mcp_verified:
         lines.append("")
         lines.append("OpenCode integration ready.")
         print(render_panel("OEM OpenCode Setup", lines, status="ok"))

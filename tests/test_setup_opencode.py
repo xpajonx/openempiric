@@ -26,6 +26,12 @@ def tmp_proj():
     shutil.rmtree(d)
 
 
+@pytest.fixture(autouse=True)
+def mock_setup_mcp_check():
+    with patch("oem_knowledge.cli.check_mcp_server", return_value=(True, True, 19, "")):
+        yield
+
+
 def test_setup_opencode_basic(temp_home, tmp_proj):
     """Verify that oem setup opencode initializes all folders and configuration correctly."""
     # Write a dummy opencode.jsonc beforehand
