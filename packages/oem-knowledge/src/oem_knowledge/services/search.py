@@ -230,7 +230,15 @@ class SearchService:
         try:
             col = self.collection
             if col.count() == 0:
-                return []
+                harness = self.engine._resolve_harness()
+                wiki_dir = harness / "wiki"
+                has_md_files = (wiki_dir.exists() and any(wiki_dir.glob("*.md"))) or any(harness.glob("*.md"))
+                if has_md_files:
+                    import logging
+                    logging.info("[OEM] Vector database is empty. Auto-indexing existing wiki concepts...")
+                    self.index_all()
+                else:
+                    return []
 
             candidate_count = min(col.count(), max(20, k * 4))
             query_vec = self.embed([query])[0]

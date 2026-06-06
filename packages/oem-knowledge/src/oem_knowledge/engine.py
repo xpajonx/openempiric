@@ -284,12 +284,53 @@ class KnowledgeEngine:
                 self._model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5", local_files_only=False)
         return self._model
 
+    def _validate_vector_db(self, db_path: Path) -> bool:
+        """Runs a validation check in a subprocess to ensure ChromaDB is not corrupted."""
+        import subprocess
+        import sys
+        script = f"""
+import chromadb
+try:
+    client = chromadb.PersistentClient(path={repr(str(db_path))})
+    col = client.get_or_create_collection(name="oem_knowledge", metadata={{"hnsw:space": "cosine"}})
+    col.count()
+    print("OK")
+except Exception:
+    import sys
+    sys.exit(1)
+"""
+        try:
+            res = subprocess.run(
+                [sys.executable, "-c", script],
+                capture_output=True,
+                text=True,
+                timeout=3.0,
+            )
+            return res.returncode == 0 and "OK" in res.stdout
+        except Exception:
+            return False
+
     @property
     def chroma_client(self):
         if self._chroma_client is None:
             import chromadb
-            db_path = str(self._resolve_harness() / ".local_vector_db")
+            import shutil
+            import logging
+            db_dir = self._resolve_harness() / ".local_vector_db"
+            db_path = str(db_dir)
             os.makedirs(db_path, exist_ok=True)
+            
+            if any(db_dir.iterdir()):
+                if not self._validate_vector_db(db_dir):
+                    logging.warning(
+                        "[OEM] Local vector database is corrupted or incompatible. Recreating clean database..."
+                    )
+                    try:
+                        shutil.rmtree(db_path)
+                    except Exception:
+                        pass
+                    os.makedirs(db_path, exist_ok=True)
+            
             self._chroma_client = chromadb.PersistentClient(path=db_path)
         return self._chroma_client
 
