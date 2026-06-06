@@ -147,3 +147,128 @@ def test_doctor_integration_diagnostics(temp_home, tmp_proj):
                                 main()
                             except SystemExit as exc:
                                 assert exc.value.code == 0 or exc.value.code is None
+
+
+def test_setup_opencode_config_merge(temp_home, tmp_proj):
+    """Verify that setup opencode merges configuration cleanly and does not delete unrelated keys."""
+    import re
+    opencode_dir = temp_home / ".config" / "opencode"
+    opencode_dir.mkdir(parents=True, exist_ok=True)
+    jsonc_file = opencode_dir / "opencode.jsonc"
+    
+    initial_content = (
+        "{\n"
+        "  // Existing server configuration\n"
+        "  \"mcp\": {\n"
+        "    \"github\": {\"key\": \"val\"}\n"
+        "  },\n"
+        "  \"model\": \"gpt-4\"\n"
+        "}"
+    )
+    jsonc_file.write_text(initial_content, encoding="utf-8")
+    
+    with patch("pathlib.Path.home", return_value=temp_home):
+        with patch.object(sys, "argv", ["oem", "setup", "opencode"]):
+            main()
+            
+    # Verify file text has instructions key but retains mcp and model and comments
+    text = jsonc_file.read_text(encoding="utf-8")
+    assert '"mcp"' in text
+    assert '"github"' in text
+    assert '"model"' in text
+    assert 'Existing server configuration' in text
+    assert '"instructions"' in text
+    
+    # Also verify loaded json parses correctly and matches merged state
+    cleaned = re.sub(r'("(?:\\.|[^"\\])*")|//[^\r\n]*|/\*[\s\S]*?\*/', lambda m: m.group(1) if m.group(1) else "", text)
+    data = json.loads(cleaned)
+    assert data["mcp"]["github"]["key"] == "val"
+    assert data["model"] == "gpt-4"
+    assert len(data["instructions"]) == 1
+
+
+def test_setup_opencode_backup_creation(temp_home, tmp_proj):
+    """Verify that a timestamped backup of the config file is created before modification."""
+    opencode_dir = temp_home / ".config" / "opencode"
+    opencode_dir.mkdir(parents=True, exist_ok=True)
+    jsonc_file = opencode_dir / "opencode.jsonc"
+    jsonc_file.write_text("{\n  \"instructions\": []\n}", encoding="utf-8")
+    
+    with patch("pathlib.Path.home", return_value=temp_home):
+        with patch.object(sys, "argv", ["oem", "setup", "opencode"]):
+            main()
+            
+    # Verify backup exists
+    backups = list(opencode_dir.glob("opencode.jsonc.backup-*"))
+    assert len(backups) == 1
+    assert backups[0].read_text(encoding="utf-8") == "{\n  \"instructions\": []\n}"
+
+
+def test_setup_opencode_invalid_json_abort(temp_home, tmp_proj):
+    """Verify that setup aborts with exit code 1 and does not wipe the config if it contains invalid JSON."""
+    opencode_dir = temp_home / ".config" / "opencode"
+    opencode_dir.mkdir(parents=True, exist_ok=True)
+    jsonc_file = opencode_dir / "opencode.jsonc"
+    
+    invalid_content = "{\n  \"mcp\": {\n    \"github\": \n  // missing brace/commas\n}"
+    jsonc_file.write_text(invalid_content, encoding="utf-8")
+    
+    with patch("pathlib.Path.home", return_value=temp_home):
+        with patch.object(sys, "argv", ["oem", "setup", "opencode"]):
+            with pytest.raises(SystemExit) as exc:
+                main()
+            assert exc.value.code == 1
+            
+    # File content should remain unchanged, NOT wiped or set to default {}
+    assert jsonc_file.read_text(encoding="utf-8") == invalid_content
+
+
+def test_setup_opencode_comment_preservation(temp_home, tmp_proj):
+    """Verify that comments and array elements are preserved correctly."""
+    opencode_dir = temp_home / ".config" / "opencode"
+    opencode_dir.mkdir(parents=True, exist_ok=True)
+    jsonc_file = opencode_dir / "opencode.jsonc"
+    
+    initial_content = (
+        "{\n"
+        "  // Active array of instructions\n"
+        "  \"instructions\": [\n"
+        "    // prior comment\n"
+        "    \"existing.md\"\n"
+        "  ]\n"
+        "}"
+    )
+    jsonc_file.write_text(initial_content, encoding="utf-8")
+    
+    with patch("pathlib.Path.home", return_value=temp_home):
+        with patch.object(sys, "argv", ["oem", "setup", "opencode"]):
+            main()
+            
+    text = jsonc_file.read_text(encoding="utf-8")
+    assert "Active array of instructions" in text
+    assert "prior comment" in text
+    assert "existing.md" in text
+    assert "memory-start.md" in text
+
+
+def test_setup_opencode_url_slashes_preservation(temp_home, tmp_proj):
+    """Verify that schema URL slashes (https://) are not stripped by comment cleaners."""
+    opencode_dir = temp_home / ".config" / "opencode"
+    opencode_dir.mkdir(parents=True, exist_ok=True)
+    jsonc_file = opencode_dir / "opencode.jsonc"
+    
+    initial_content = (
+        "{\n"
+        "  \"$schema\": \"https://opencode.ai/config.json\"\n"
+        "}"
+    )
+    jsonc_file.write_text(initial_content, encoding="utf-8")
+    
+    with patch("pathlib.Path.home", return_value=temp_home):
+        with patch.object(sys, "argv", ["oem", "setup", "opencode"]):
+            main()
+            
+    text = jsonc_file.read_text(encoding="utf-8")
+    assert "https://opencode.ai/config.json" in text
+
+

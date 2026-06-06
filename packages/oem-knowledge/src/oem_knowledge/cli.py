@@ -36,6 +36,12 @@ from .runtime import (
 
 
 
+def _strip_jsonc_comments(text: str) -> str:
+    """Safely strip JSONC comments without destroying comments/slashes inside string literals (like URLs)."""
+    pattern = re.compile(r'("(?:\\.|[^"\\])*")|//[^\r\n]*|/\*[\s\S]*?\*/')
+    return pattern.sub(lambda m: m.group(1) if m.group(1) else "", text)
+
+
 def _resolve_project(args) -> str | None:
     """Normalise --project: ``""`` or ``"."`` → ``None`` (cwd)."""
     raw = getattr(args, "project", None)
@@ -281,27 +287,89 @@ def cmd_setup_opencode(repair: bool = False) -> None:
     except Exception as e:
         print(f"✗ Failed to install instructions/memory-start.md: {e}")
         
-    # 4. Validate opencode.jsonc
+    # 4. Validate and update opencode.jsonc non-destructively
     config_verified = False
     try:
-        config_data = {}
-        if jsonc_file.exists():
-            text = jsonc_file.read_text(encoding="utf-8")
-            cleaned = re.sub(r'//.*', '', text)
-            cleaned = re.sub(r'/\*.*?\*/', '', cleaned, flags=re.DOTALL)
-            try:
-                config_data = json.loads(cleaned)
-            except Exception:
-                config_data = {}
-                
-        # Update instructions in config
         inst_path_str = str(inst_dest.resolve())
-        inst_list = config_data.setdefault("instructions", [])
-        if inst_path_str not in inst_list:
-            inst_list.append(inst_path_str)
+        if jsonc_file.exists():
+            original_text = jsonc_file.read_text(encoding="utf-8")
             
-        jsonc_file.write_text(json.dumps(config_data, indent=2), encoding="utf-8")
-        config_verified = True
+            # Clean comments only for JSON parsing validation
+            cleaned = _strip_jsonc_comments(original_text)
+            
+            try:
+                config_data = json.loads(cleaned, strict=False)
+            except Exception as e:
+                print(f"✗ Failed to parse existing opencode.jsonc: {e}")
+                print("Aborting setup to prevent configuration loss. Please repair or validate your config file manually.")
+                sys.exit(1)
+            
+            # Check if inst_path_str is already in the list
+            inst_list = config_data.get("instructions", [])
+            if inst_path_str in inst_list:
+                # Idempotent case: path already present. No modification needed, preserving formatting completely.
+                config_verified = True
+            else:
+                # Backup the file before writing
+                import datetime
+                timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+                backup_file = jsonc_file.with_name(f"opencode.jsonc.backup-{timestamp}")
+                shutil.copy2(jsonc_file, backup_file)
+                
+                # Perform comment-preserving string insertion
+                new_text = original_text
+                
+                # Identify spans of all comments to avoid matching keys within comments
+                comment_spans = []
+                for m_comment in re.finditer(r'//[^\r\n]*|/\*[\s\S]*?\*/', original_text):
+                    comment_spans.append(m_comment.span())
+                
+                def in_comment(pos):
+                    return any(start <= pos < end for start, end in comment_spans)
+                
+                # Find "instructions" key in the original file, ignoring comments
+                match = None
+                for m_inst in re.finditer(r'"instructions"\s*:\s*\[', original_text):
+                    if not in_comment(m_inst.start()):
+                        match = m_inst
+                        break
+                
+                if match:
+                    pos = match.end()
+                    # Check if array is empty
+                    rest = original_text[pos:]
+                    next_char_match = re.search(r'\S', rest)
+                    if next_char_match and next_char_match.group(0) == ']':
+                        new_text = original_text[:pos] + f'\n    "{inst_path_str}"\n  ' + original_text[pos:]
+                    else:
+                        new_text = original_text[:pos] + f'\n    "{inst_path_str}",' + original_text[pos:]
+                else:
+                    # Append "instructions" to the end of the JSON object before the last closing brace
+                    r_pos = original_text.rfind('}')
+                    if r_pos != -1:
+                        before_brace = original_text[:r_pos]
+                        last_char_match = re.search(r'\S\s*$', before_brace)
+                        comma = ""
+                        if last_char_match:
+                            last_char = last_char_match.group(0).strip()
+                            if last_char not in ("{", ",", "["):
+                                comma = ","
+                        new_entry = f'{comma}\n  "instructions": [\n    "{inst_path_str}"\n  ]\n'
+                        new_text = original_text[:r_pos] + new_entry + original_text[r_pos:]
+                    else:
+                        # Fallback if closing brace not found
+                        config_data.setdefault("instructions", []).append(inst_path_str)
+                        new_text = json.dumps(config_data, indent=2)
+                
+                jsonc_file.write_text(new_text, encoding="utf-8")
+                config_verified = True
+        else:
+            # File doesn't exist, create a new simple config
+            config_data = {
+                "instructions": [inst_path_str]
+            }
+            jsonc_file.write_text(json.dumps(config_data, indent=2), encoding="utf-8")
+            config_verified = True
     except Exception as e:
         print(f"✗ Failed to validate or update opencode.jsonc: {e}")
         
@@ -1334,8 +1402,7 @@ def main():
             else:
                 try:
                     text = jsonc_file.read_text(encoding="utf-8")
-                    cleaned = re.sub(r'//.*', '', text)
-                    cleaned = re.sub(r'/\*.*?\*/', '', cleaned, flags=re.DOTALL)
+                    cleaned = _strip_jsonc_comments(text)
                     config_data = json.loads(cleaned, strict=False)
                     inst_path_str = str(inst_dest.resolve())
                     inst_list = config_data.get("instructions", [])
