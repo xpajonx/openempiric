@@ -393,6 +393,10 @@ project: {project or "default"}
                 if e.get("source") in ("chat", "chat-fallback")
             ],
             "top_sources": top_sources,
+            "session_markers_detected": any(
+                marker in conversation_text.lower()
+                for marker in ["session start", "session end"]
+            ),
         }
 
         # Emit reflection metrics

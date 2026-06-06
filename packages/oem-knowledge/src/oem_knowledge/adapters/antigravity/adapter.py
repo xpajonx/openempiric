@@ -89,6 +89,13 @@ class AntigravityAdapter(BaseAdapter):
             "Session lifecycle is automatic. Do not manually initialize OEM, activate memory, or call "
             "knowledge_session_start / knowledge_session_commit. Use OEM tools only when knowledge search or "
             "health checks are needed.\n",
+            "Session boundary markers may appear naturally:",
+            "- Session start",
+            "- Session end",
+            "Treat these as conversational context signals.",
+            "Do not instruct users to run lifecycle commands.",
+            "Do not request OEM initialization.",
+            "Do not request session activation.\n",
             "# Previous Session Context\n"
         ]
         

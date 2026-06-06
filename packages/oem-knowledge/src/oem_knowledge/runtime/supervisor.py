@@ -88,7 +88,13 @@ def print_project_memory_summary(context: dict, agent_display: str, duration: fl
     print(f"│  Concepts: {concepts_count:<10} │  Decisions: {decisions_count:<10} │")
     print(f"│  Failures: {failures_count:<10} │  Questions: {questions_count:<10} │")
     print("└─────────────────────────────────────────────┘")
-    print(f"Startup duration: {duration:.2f}s")
+    print(f"Startup duration: {duration:.2f}s\n")
+    print("Tip:")
+    print("For better project memory quality:")
+    print("  • Start with \"Session start\"")
+    print("  • Finish with \"Session end\"")
+    print("OEM works without these markers,")
+    print("but they improve reflection accuracy.\n")
     print(f"Launching {agent_display}...\n")
 
 

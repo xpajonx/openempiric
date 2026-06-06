@@ -85,7 +85,19 @@ Advanced
 
 ## Best Practices
 
-OpenEmpiric learns best when decisions, experiments, and outcomes are made explicit during conversations.
+OEM works automatically.
+
+For better knowledge capture:
+
+"Session start" and
+- State your goal
+
+"Session end" and
+- State what was completed
+
+These markers are optional but help OEM generate higher-quality reflections and project memory.
+
+OpenEmpiric also learns best when decisions, experiments, and outcomes are made explicit during conversations:
 
 * **Explicit Rationale**: Instead of *"use typescript"*, write: *"we chose typescript because python startup latency caused timeouts."*
 * **Detailed Failures**: Instead of *"it failed"*, write: *"the indexing pipeline failed because ChromaDB rejected np.float32 embeddings."*
