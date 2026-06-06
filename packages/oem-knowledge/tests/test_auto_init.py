@@ -240,7 +240,7 @@ class TestCorruptedDatabaseRecovery:
         garbage_file.write_bytes(b"\x00\xff\xee\xddgarbage_data" * 100)
         
         # Access vector_store, which should self-heal and return a healthy store
-        store = eng.search_service.vector_store
+        store = eng.search.vector_store
         assert store is not None
         
         # The store should be accessible and count should be 0
@@ -266,10 +266,10 @@ class TestCorruptedDatabaseRecovery:
         )
         
         # Index it initially
-        eng.index_all()
+        eng.search.index_all()
         
         # 2. Verify search works
-        results_before = eng.search("database deletion recovery", k=1)
+        results_before = eng.search.search("database deletion recovery", k=1)
         assert len(results_before) == 1
         assert results_before[0]["metadata"]["title"] == "Database Recovery Concept"
         
@@ -278,9 +278,9 @@ class TestCorruptedDatabaseRecovery:
         shutil.rmtree(db_dir)
         
         # Reset the cached collections on eng
-        eng.search_service._vector_store = None
+        eng.search._vector_store = None
         
         # 4 & 5. Search same concepts (should trigger auto-indexing and return the same result)
-        results_after = eng.search("database deletion recovery", k=1)
+        results_after = eng.search.search("database deletion recovery", k=1)
         assert len(results_after) == 1
         assert results_after[0]["metadata"]["title"] == "Database Recovery Concept"

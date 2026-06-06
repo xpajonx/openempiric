@@ -32,12 +32,12 @@ aliases: []
 Hello world learning text.""", encoding="utf-8")
 
     # Initial index build (force=True)
-    res_init = engine.index_all(force=True)
+    res_init = engine.search.index_all(force=True)
     assert res_init["new"] > 0
     assert res_init["unchanged"] == 0
 
     # Second build without force (no-op)
-    res_noop = engine.index_all(force=False)
+    res_noop = engine.search.index_all(force=False)
     assert res_noop["new"] == 0
     assert res_noop["updated"] == 0
     assert res_noop["unchanged"] > 0
@@ -56,13 +56,13 @@ def test_incremental_index_updates_changed_docs_only(temp_project):
     c2.write_text("---\nconcept_id: concept_002\ncanonical_name: second-concept\nstatus: validated\nconfidence: 3\nevidence_count: 1\nsession_count: 1\naliases: []\n---\n# Second\nWorld.", encoding="utf-8")
 
     # Build initial index
-    engine.index_all(force=True)
+    engine.search.index_all(force=True)
 
     # Modify ONLY concept_002
     c2.write_text("---\nconcept_id: concept_002\ncanonical_name: second-concept\nstatus: validated\nconfidence: 3\nevidence_count: 1\nsession_count: 1\naliases: []\n---\n# Second\nWorld Modified Content.", encoding="utf-8")
 
     # Incremental update
-    res = engine.index_all(force=False)
+    res = engine.search.index_all(force=False)
     
     # Verify only concept_002 was updated, and concept_001 was unchanged
     assert res["new"] == 0
@@ -90,18 +90,18 @@ aliases: []
 This document has unique keywords like antigravityengine.""", encoding="utf-8")
 
     # Initial index
-    engine.index_all(force=True)
+    engine.search.index_all(force=True)
     
     # Query before update
-    results_before = engine.search("antigravityengine", k=1)
+    results_before = engine.search.search("antigravityengine", k=1)
     assert len(results_before) == 1
     doc_before = results_before[0]["document"]
 
     # Trigger no-op incremental index
-    engine.index_all(force=False)
+    engine.search.index_all(force=False)
 
     # Query after update
-    results_after = engine.search("antigravityengine", k=1)
+    results_after = engine.search.search("antigravityengine", k=1)
     assert len(results_after) == 1
     doc_after = results_after[0]["document"]
 
@@ -130,20 +130,20 @@ aliases: []
 This has keywords like deletableitem.""", encoding="utf-8")
 
     # Index
-    engine.index_all(force=True)
+    engine.search.index_all(force=True)
     
     # Verify it exists in search
-    results_before = engine.search("deletableitem", k=1)
+    results_before = engine.search.search("deletableitem", k=1)
     assert len(results_before) == 1
 
     # Delete the file
     cfile.unlink()
 
     # Incremental update should prune it
-    engine.index_all(force=False)
+    engine.search.index_all(force=False)
 
     # Verify search no longer finds it
-    results_after = engine.search("deletableitem", k=1)
+    results_after = engine.search.search("deletableitem", k=1)
     # The collection search might fall back or return empty
     assert len(results_after) == 0 or "deletableitem" not in results_after[0]["document"]
 

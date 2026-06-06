@@ -376,7 +376,7 @@ class SearchService:
     def _search_registry_fallback(self, query: str, k: int = 3) -> list[dict]:
         """Fallback keyword search using the concept registry and wiki markdown files directly."""
         try:
-            registry = self.engine._load_registry()
+            registry = self.engine.state._load_registry()
         except Exception:
             return []
 

@@ -76,7 +76,7 @@ class GlobalVault:
         from oem_knowledge.engine import KnowledgeEngine, find_all_projects
 
         engine = KnowledgeEngine(project)
-        local_reg = engine._load_registry()
+        local_reg = engine.state._load_registry()
         global_reg = self._load_registry()
 
         # Find all projects
@@ -85,7 +85,7 @@ class GlobalVault:
         for proj in all_projects:
             try:
                 p_engine = KnowledgeEngine(proj)
-                project_registries.append(p_engine._load_registry())
+                project_registries.append(p_engine.state._load_registry())
             except Exception:
                 pass
 
@@ -127,7 +127,7 @@ class GlobalVault:
         """Promote a local concept to the global vault and update status."""
         from oem_knowledge.engine import KnowledgeEngine
         engine = KnowledgeEngine(project)
-        local_reg = engine._load_registry()
+        local_reg = engine.state._load_registry()
         if concept_id not in local_reg:
             raise KeyError(f"Concept {concept_id} not found in local registry")
 
@@ -147,12 +147,12 @@ class GlobalVault:
             content = re.sub(r"status:\s*[^\n\r]+", "status: global", content)
             if "global:" not in content:
                 content = content.replace("---", "---\nglobal: true", 1)
-            engine._safe_write_concept_file(wiki_file, content)
+            engine.materialization._safe_write_concept_file(wiki_file, content)
             wiki_content = content
 
         # Save local registry update
-        engine._save_registry(local_reg)
-        engine._log_action(f"Vault | Promoted concept {concept_id} to global vault")
+        engine.state._save_registry(local_reg)
+        engine.materialization._log_action(f"Vault | Promoted concept {concept_id} to global vault")
 
         # Syndicate to global vault
         self.syndicate_concept(concept_id, data, wiki_content)
@@ -172,12 +172,12 @@ class GlobalVault:
         # Update local registry if present
         from oem_knowledge.engine import KnowledgeEngine
         engine = KnowledgeEngine(project)
-        local_reg = engine._load_registry()
+        local_reg = engine.state._load_registry()
         if concept_id in local_reg:
             data = local_reg[concept_id]
             data["status"] = "canonical"
             data["global"] = False
-            engine._save_registry(local_reg)
+            engine.state._save_registry(local_reg)
 
             # Update markdown file frontmatter
             wiki_file = engine._concepts_dir() / f"{concept_id}.md"
@@ -186,6 +186,6 @@ class GlobalVault:
                 content = wiki_file.read_text(encoding="utf-8")
                 content = re.sub(r"status:\s*[^\n\r]+", "status: canonical", content)
                 content = re.sub(r"global:\s*[^\n\r]+\n", "", content)
-                engine._safe_write_concept_file(wiki_file, content)
+                engine.materialization._safe_write_concept_file(wiki_file, content)
 
-            engine._log_action(f"Vault | Demoted concept {concept_id} from global vault")
+            engine.materialization._log_action(f"Vault | Demoted concept {concept_id} from global vault")

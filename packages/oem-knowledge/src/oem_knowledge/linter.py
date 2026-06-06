@@ -73,7 +73,7 @@ async def run_lint(
     all_concept_ids = {f.stem for f in concept_files}
 
     # Load registry for alias matching
-    registry = engine._load_registry()
+    registry = engine.state._load_registry()
     norm_map = {}
     for cid, data in registry.items():
         # Map concept ID

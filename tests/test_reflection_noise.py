@@ -28,7 +28,7 @@ This is some initial content."""
     # Run a session reflection. The file exists but has mtime before the session started.
     session_start = time.time() + 10  # Future start to guarantee file is older
     
-    res = engine.reflect_session(
+    res = engine.reflection.reflect_session(
         project=str(tmp_path),
         conversation_text="Hypothesis: This is a test chat conversation.",
         session_id="session_test_noise",
@@ -46,7 +46,7 @@ This is some initial content."""
 def test_reflection_explainability_reports_sources(temp_project):
     engine, tmp_path = temp_project
 
-    res = engine.reflect_session(
+    res = engine.reflection.reflect_session(
         project=str(tmp_path),
         conversation_text="Fixed doctor global install detection.\nRefactored reflection pipeline.",
         session_id="session_test_explainability",

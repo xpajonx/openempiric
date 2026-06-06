@@ -10,7 +10,7 @@ def engine(tmp_path):
 
 
 def test_fallback_extracts_from_natural_language(engine, tmp_path):
-    res = engine.reflect_session(
+    res = engine.reflection.reflect_session(
         project=str(tmp_path),
         conversation_text="Fixed oem doctor global install detection.\nAdded executable availability checks.",
         session_id="test_nl_1",
@@ -31,7 +31,7 @@ def test_fallback_extracts_from_natural_language(engine, tmp_path):
 
 
 def test_structured_prefixes_preserved(engine, tmp_path):
-    res = engine.reflect_session(
+    res = engine.reflection.reflect_session(
         project=str(tmp_path),
         conversation_text="decision: Use runtime-native TypeScript retrieval.",
         session_id="test_prefix_1",
@@ -49,7 +49,7 @@ def test_structured_prefixes_preserved(engine, tmp_path):
 
 
 def test_empty_chat_no_crash(engine, tmp_path):
-    res = engine.reflect_session(
+    res = engine.reflection.reflect_session(
         project=str(tmp_path),
         conversation_text="Done.",
         session_id="test_empty_1",
@@ -71,7 +71,7 @@ def test_all_sd_heuristics(engine, tmp_path):
         "Validated embedding model warmup works.",
         "Failed to reproduce the edge case.",
     ])
-    res = engine.reflect_session(
+    res = engine.reflection.reflect_session(
         project=str(tmp_path),
         conversation_text=chat,
         session_id="test_all_1",
@@ -93,7 +93,7 @@ def test_all_sd_heuristics(engine, tmp_path):
 
 
 def test_report_prioritization(engine, tmp_path):
-    res = engine.reflect_session(
+    res = engine.reflection.reflect_session(
         project=str(tmp_path),
         conversation_text="Fixed doctor module import error.\nRefactored CLI entry point.",
         session_id="test_priority_1",
@@ -109,7 +109,7 @@ def test_report_prioritization(engine, tmp_path):
 
 
 def test_mixed_prefix_and_fallback(engine, tmp_path):
-    res = engine.reflect_session(
+    res = engine.reflection.reflect_session(
         project=str(tmp_path),
         conversation_text=(
             "decision: Adopt uv as the package manager.\n"
@@ -133,7 +133,7 @@ def test_mixed_prefix_and_fallback(engine, tmp_path):
 
 
 def test_no_double_dedup(engine, tmp_path):
-    res = engine.reflect_session(
+    res = engine.reflection.reflect_session(
         project=str(tmp_path),
         conversation_text="Fixed doctor detection.\nFixed doctor detection.\nFixed doctor detection.",
         session_id="test_dedup_1",
@@ -154,7 +154,7 @@ def test_list_tolerant_fallback_extraction(engine, tmp_path):
         "1. Implemented list support.\n"
         "- [x] Refactored fallback parser.\n"
     )
-    res = engine.reflect_session(
+    res = engine.reflection.reflect_session(
         project=str(tmp_path),
         conversation_text=chat,
         session_id="test_list_tolerant_1",

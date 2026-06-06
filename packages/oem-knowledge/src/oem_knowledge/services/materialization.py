@@ -161,7 +161,7 @@ class MaterializationService:
                 "materialized": [],
             }
 
-        registry = self.engine._load_registry(project)
+        registry = self.engine.state._load_registry(project)
         fitness_data = self.engine.calculate_fitness(project)
         materialized_log = []
 
@@ -198,12 +198,12 @@ class MaterializationService:
                 e_type = event.get("type", "observation").lower()
                 evidence = event.get("evidence", "")
 
-                cid, cdata = self.engine._resolve_concept(concept, registry)
+                cid, cdata = self.engine.state._resolve_concept(concept, registry)
 
                 if evidence:
                     cdata["evidence_count"] = cdata.get("evidence_count", 0) + 1
 
-                cdata = self.engine.evaluate_concept_status(cdata, e_type, session_id=session_id, fitness_data=fitness_data)
+                cdata = self.engine.state.evaluate_concept_status(cdata, e_type, session_id=session_id, fitness_data=fitness_data)
                 new_status = cdata["status"]
                 registry[cid] = cdata
 
@@ -267,7 +267,7 @@ aliases: {json.dumps(cdata.get("aliases", []))}
                     )
 
         if registry_updated:
-            self.engine._save_registry(registry, project)
+            self.engine.state._save_registry(registry, project)
 
         # Emit materializations metric
         try:
@@ -300,7 +300,7 @@ aliases: {json.dumps(cdata.get("aliases", []))}
                 "links_updated": 0,
             }
 
-        registry = self.engine._load_registry(project)
+        registry = self.engine.state._load_registry(project)
 
         for cid in registry:
             registry[cid]["relationships"] = []
@@ -403,7 +403,7 @@ aliases: {json.dumps(cdata.get("aliases", []))}
                 self._safe_write_concept_file(fp, new_text, project)
                 links_added += 1
 
-        self.engine._save_registry(registry, project)
+        self.engine.state._save_registry(registry, project)
         return {
             "status": "success",
             "links_updated": links_added,

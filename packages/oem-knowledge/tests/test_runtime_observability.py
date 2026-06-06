@@ -194,7 +194,7 @@ class TestRuntimeMetricsEmission:
         metrics_file = harness / "state" / "metrics.json"
         update_metrics_file(metrics_file, {})
 
-        res = engine.reflect_session(
+        res = engine.reflection.reflect_session(
             project=str(tmp_path),
             conversation_text="Fixed the doctor module.",
             session_id="test_emit_refl",
@@ -206,14 +206,14 @@ class TestRuntimeMetricsEmission:
 
     def test_materialization_emits_materializations_metric(self, engine, tmp_path):
         harness = engine._resolve_harness(str(tmp_path))
-        res = engine.reflect_session(
+        res = engine.reflection.reflect_session(
             project=str(tmp_path),
             conversation_text="Fixed the doctor module.\nAdded fallback extraction.",
             session_id="test_emit_mat",
         )
         assert res["status"] == "success"
 
-        mat_res = engine.materialize_concepts(project=str(tmp_path))
+        mat_res = engine.materialization.materialize_concepts(project=str(tmp_path))
         assert mat_res["status"] == "success"
 
         metrics_file = harness / "state" / "metrics.json"

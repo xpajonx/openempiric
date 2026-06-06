@@ -20,7 +20,7 @@ def test_semantic_identity_resolution(tmp_proj):
     eng = KnowledgeEngine(tmp_proj)
     eng.init_project(tmp_proj)
 
-    registry = eng._load_registry(tmp_proj)
+    registry = eng.state._load_registry(tmp_proj)
     # Create two duplicate-like concepts
     registry["concept_001"] = {
         "concept_id": "concept_001",
@@ -47,7 +47,7 @@ def test_semantic_identity_resolution(tmp_proj):
         "confidence": 3,
         "evidence_count": 3
     }
-    eng._save_registry(registry, tmp_proj)
+    eng.state._save_registry(registry, tmp_proj)
 
     resolver = SemanticIdentityResolver(eng)
     duplicates = resolver.scan_duplicates(tmp_proj, threshold=0.70)
@@ -71,7 +71,7 @@ def test_semantic_identity_resolver_empty_registry(tmp_proj):
 def test_semantic_identity_resolver_extreme_thresholds(tmp_proj):
     eng = KnowledgeEngine(tmp_proj)
     eng.init_project(tmp_proj)
-    registry = eng._load_registry(tmp_proj)
+    registry = eng.state._load_registry(tmp_proj)
     registry["concept_001"] = {
         "concept_id": "concept_001",
         "canonical_name": "database-migration-tool",
@@ -88,7 +88,7 @@ def test_semantic_identity_resolver_extreme_thresholds(tmp_proj):
         "confidence": 3,
         "evidence_count": 3
     }
-    eng._save_registry(registry, tmp_proj)
+    eng.state._save_registry(registry, tmp_proj)
     resolver = SemanticIdentityResolver(eng)
 
     # Extreme threshold 1.0 (should not match unless identical embedding, unlikely for slightly different texts)
@@ -103,7 +103,7 @@ def test_semantic_identity_resolver_extreme_thresholds(tmp_proj):
 def test_semantic_identity_resolver_missing_fields(tmp_proj):
     eng = KnowledgeEngine(tmp_proj)
     eng.init_project(tmp_proj)
-    registry = eng._load_registry(tmp_proj)
+    registry = eng.state._load_registry(tmp_proj)
     # Missing canonical_name and aliases fields completely
     registry["concept_001"] = {
         "concept_id": "concept_001",
@@ -113,7 +113,7 @@ def test_semantic_identity_resolver_missing_fields(tmp_proj):
         "concept_id": "concept_002",
         "status": "validated"
     }
-    eng._save_registry(registry, tmp_proj)
+    eng.state._save_registry(registry, tmp_proj)
     resolver = SemanticIdentityResolver(eng)
 
     # Should not crash and return gracefully

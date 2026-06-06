@@ -14,14 +14,14 @@ def test_session_markers_detected_when_present(temp_project):
     engine, tmp_path = temp_project
     
     # Check both "session start" and "session end"
-    res_start = engine.reflect_session(
+    res_start = engine.reflection.reflect_session(
         project=str(tmp_path),
         conversation_text="Session start: Let's refactor the search module.",
         session_id="test_start",
     )
     assert res_start["explainability"]["session_markers_detected"] is True
 
-    res_end = engine.reflect_session(
+    res_end = engine.reflection.reflect_session(
         project=str(tmp_path),
         conversation_text="We completed everything. Session end.",
         session_id="test_end",
@@ -31,7 +31,7 @@ def test_session_markers_detected_when_present(temp_project):
 def test_session_markers_not_detected_when_absent(temp_project):
     engine, tmp_path = temp_project
     
-    res = engine.reflect_session(
+    res = engine.reflection.reflect_session(
         project=str(tmp_path),
         conversation_text="This is a general chat without any special session markers.",
         session_id="test_absent",

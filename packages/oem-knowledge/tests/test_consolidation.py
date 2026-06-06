@@ -10,7 +10,7 @@ def test_positive_and_negative_consolidation(tmp_path):
     engine.init_project("test_consolidate_proj")
 
     # Access registry and concepts directory
-    registry = engine._load_registry()
+    registry = engine.state._load_registry()
     concepts_dir = engine._concepts_dir()
 
     # 2. Add two duplicate concepts with lexical overlap (should merge)
@@ -76,20 +76,20 @@ def test_positive_and_negative_consolidation(tmp_path):
     (concepts_dir / "concept_005.md").write_text("# Machine Learning Ethical Regulations\nML ethics.\n", encoding="utf-8")
 
     # Save registry to simulate actual state
-    engine._save_registry(registry)
+    engine.state._save_registry(registry)
 
     # Index all to sync vector db
-    engine.index_all(force=True)
+    engine.search.index_all(force=True)
 
     # 5. Run consolidation
-    res = engine.consolidate()
+    res = engine.state.consolidate()
     assert res["status"] == "success"
 
     # Verify duplicates merged (concept_002 merged into concept_001)
     assert "Merged concept_002 -> concept_001" in res["merged"] or "Merged concept_001 -> concept_002" in res["merged"]
     
     # Reload registry
-    registry_after = engine._load_registry()
+    registry_after = engine.state._load_registry()
     assert "concept_002" not in registry_after
     assert "concept_001" in registry_after
     

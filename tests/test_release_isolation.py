@@ -40,31 +40,31 @@ def test_release_multi_project_isolation(tmp_workspace):
     eng_c = KnowledgeEngine(str(project_c))
     
     # Seed PROJECT_A_SECRET in project-a registry
-    reg_a = eng_a._load_registry()
+    reg_a = eng_a.state._load_registry()
     reg_a["concept_secret_a"] = {
         "concept_id": "concept_secret_a",
         "canonical_name": "PROJECT_A_SECRET",
         "status": "canonical"
     }
-    eng_a._save_registry(reg_a)
+    eng_a.state._save_registry(reg_a)
     
     # Seed PROJECT_B_SECRET in project-b registry
-    reg_b = eng_b._load_registry()
+    reg_b = eng_b.state._load_registry()
     reg_b["concept_secret_b"] = {
         "concept_id": "concept_secret_b",
         "canonical_name": "PROJECT_B_SECRET",
         "status": "canonical"
     }
-    eng_b._save_registry(reg_b)
+    eng_b.state._save_registry(reg_b)
     
     # Seed PROJECT_C_SECRET in project-c registry
-    reg_c = eng_c._load_registry()
+    reg_c = eng_c.state._load_registry()
     reg_c["concept_secret_c"] = {
         "concept_id": "concept_secret_c",
         "canonical_name": "PROJECT_C_SECRET",
         "status": "canonical"
     }
-    eng_c._save_registry(reg_c)
+    eng_c.state._save_registry(reg_c)
     
     # Compile context for all three projects
     context_a = _compile_oem_context(eng_a)

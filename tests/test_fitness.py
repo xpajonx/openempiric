@@ -37,13 +37,13 @@ def test_calculate_fitness_basic(tmp_proj):
             "status": "validated"
         }
     }
-    eng._save_registry(registry, tmp_proj)
+    eng.state._save_registry(registry, tmp_proj)
 
     # Record some session outcomes
     # Session 1: success, retrieved concept_001, referenced concept_001
-    eng.record_outcome("success", ["concept_001"], "reason 1", "session_1", tmp_proj)
+    eng.state.record_outcome("success", ["concept_001"], "reason 1", "session_1", tmp_proj)
     # Session 2: failure, retrieved concept_001, referenced concept_001
-    eng.record_outcome("failure", ["concept_001"], "reason 2", "session_2", tmp_proj)
+    eng.state.record_outcome("failure", ["concept_001"], "reason 2", "session_2", tmp_proj)
     # Session 3: success, retrieved concept_001 & concept_002, referenced only concept_001 (concept_002 ignored)
     # We simulate this by writing directly or writing session state
     state_dir = Path(tmp_proj) / OEM_DIR / "state"
@@ -52,9 +52,9 @@ def test_calculate_fitness_basic(tmp_proj):
         "session_id": "session_3",
         "last_injected_concepts": ["concept_001", "concept_002"]
     }), encoding="utf-8")
-    eng.record_outcome("success", ["concept_001"], "reason 3", "session_3", tmp_proj)
+    eng.state.record_outcome("success", ["concept_001"], "reason 3", "session_3", tmp_proj)
 
-    fitness = eng.calculate_fitness(tmp_proj)
+    fitness = eng.fitness.calculate_fitness(tmp_proj)
 
     # Check concept_001
     # Retrieved in session_1 (defaulted to referenced), session_2 (defaulted to referenced), session_3 (explicit injected)
@@ -89,12 +89,12 @@ def test_concept_resolution_and_unregistered(tmp_proj):
             "status": "canonical"
         }
     }
-    eng._save_registry(registry, tmp_proj)
+    eng.state._save_registry(registry, tmp_proj)
 
     # Record outcome referencing concept using alias and canonical name, and unregistered concept
-    eng.record_outcome("success", ["fitness-engine", "unregistered-concept"], None, "session_1", tmp_proj)
+    eng.state.record_outcome("success", ["fitness-engine", "unregistered-concept"], None, "session_1", tmp_proj)
 
-    fitness = eng.calculate_fitness(tmp_proj)
+    fitness = eng.fitness.calculate_fitness(tmp_proj)
 
     # fitness-engine should resolve to concept_001
     assert fitness["concept_001"].referenced == 1
@@ -120,7 +120,7 @@ def test_legacy_outcome_log_fallback(tmp_proj):
             "status": "canonical"
         }
     }
-    eng._save_registry(registry, tmp_proj)
+    eng.state._save_registry(registry, tmp_proj)
 
     # Write outcome record directly without retrieved_concepts
     outcomes_file = Path(tmp_proj) / OEM_DIR / "state" / "outcomes.jsonl"
@@ -133,7 +133,7 @@ def test_legacy_outcome_log_fallback(tmp_proj):
         "timestamp": "2026-06-04T00:00:00Z"
     }) + "\n", encoding="utf-8")
 
-    fitness = eng.calculate_fitness(tmp_proj)
+    fitness = eng.fitness.calculate_fitness(tmp_proj)
     assert fitness["concept_001"].retrieved == 1
     assert fitness["concept_001"].referenced == 1
     assert fitness["concept_001"].ignored == 0
@@ -163,17 +163,17 @@ def test_dashboard_composite_ranking(tmp_proj):
             "status": "candidate"
         },
     }
-    eng._save_registry(registry, tmp_proj)
+    eng.state._save_registry(registry, tmp_proj)
 
     # concept_a: 9/10 success rate but high evidence
     for i in range(9):
-        eng.record_outcome("success", ["concept_a"], None, f"session_a_{i}", tmp_proj)
-    eng.record_outcome("failure", ["concept_a"], None, "session_a_fail", tmp_proj)
+        eng.state.record_outcome("success", ["concept_a"], None, f"session_a_{i}", tmp_proj)
+    eng.state.record_outcome("failure", ["concept_a"], None, "session_a_fail", tmp_proj)
 
     # concept_b: 10/10 success rate but only 1 evidence
-    eng.record_outcome("success", ["concept_b"], None, "session_b_1", tmp_proj)
+    eng.state.record_outcome("success", ["concept_b"], None, "session_b_1", tmp_proj)
 
-    fitness = eng.calculate_fitness(tmp_proj)
+    fitness = eng.fitness.calculate_fitness(tmp_proj)
 
     fit_a = fitness["concept_a"]
     fit_b = fitness["concept_b"]
@@ -208,10 +208,10 @@ def test_dashboard_untested_concepts(tmp_proj):
             "status": "candidate"
         }
     }
-    eng._save_registry(registry, tmp_proj)
+    eng.state._save_registry(registry, tmp_proj)
 
     # No outcomes recorded
-    fitness = eng.calculate_fitness(tmp_proj)
+    fitness = eng.fitness.calculate_fitness(tmp_proj)
 
     fit = fitness["concept_new"]
     assert fit.referenced == 0
@@ -233,17 +233,17 @@ def test_fitness_promotion(tmp_proj):
             "evidence_count": 2,
         }
     }
-    eng._save_registry(registry, tmp_proj)
+    eng.state._save_registry(registry, tmp_proj)
 
     # 2 successes (High Fitness: 100%, succ_sessions=2, evidence=2)
-    eng.record_outcome("success", ["concept_candidate"], None, "session_1", tmp_proj)
-    eng.record_outcome("success", ["concept_candidate"], None, "session_2", tmp_proj)
+    eng.state.record_outcome("success", ["concept_candidate"], None, "session_1", tmp_proj)
+    eng.state.record_outcome("success", ["concept_candidate"], None, "session_2", tmp_proj)
 
-    fitness = eng.calculate_fitness(tmp_proj)
+    fitness = eng.fitness.calculate_fitness(tmp_proj)
 
     # Manually trigger evaluation
     cdata = registry["concept_candidate"]
-    cdata = eng.evaluate_concept_status(cdata, "observation", "session_3", fitness_data=fitness)
+    cdata = eng.state.evaluate_concept_status(cdata, "observation", "session_3", fitness_data=fitness)
 
     assert cdata["status"] == "validated"
     assert "Telemetry Correlation" in cdata["promotion_history"][-1]["reason"]
@@ -265,17 +265,17 @@ def test_fitness_demotion_needs_review(tmp_proj):
             "evidence_count": 4,
         }
     }
-    eng._save_registry(registry, tmp_proj)
+    eng.state._save_registry(registry, tmp_proj)
 
     # 3 failures (Repeated Failures: fitness < 60%, failed_sessions=3 >= min_failures=3)
     for i in range(3):
-        eng.record_outcome("failure", ["concept_validated"], None, f"session_fail_{i}", tmp_proj)
+        eng.state.record_outcome("failure", ["concept_validated"], None, f"session_fail_{i}", tmp_proj)
 
-    fitness = eng.calculate_fitness(tmp_proj)
+    fitness = eng.fitness.calculate_fitness(tmp_proj)
 
     # Trigger evaluation
     cdata = registry["concept_validated"]
-    cdata = eng.evaluate_concept_status(cdata, "observation", "session_evaluation", fitness_data=fitness)
+    cdata = eng.state.evaluate_concept_status(cdata, "observation", "session_evaluation", fitness_data=fitness)
 
     assert cdata["status"] == "needs_review"
     assert "Telemetry Correlation" in cdata["promotion_history"][-1]["reason"]
@@ -299,7 +299,7 @@ def test_needs_review_materialization(tmp_proj):
             "session_count": 5,
         }
     }
-    eng._save_registry(registry, tmp_proj)
+    eng.state._save_registry(registry, tmp_proj)
 
     # Create dummy session reports to trigger materialize_concepts
     sessions_dir = Path(tmp_proj) / OEM_DIR / "sessions"
@@ -321,7 +321,7 @@ def test_needs_review_materialization(tmp_proj):
 """, encoding="utf-8")
 
     # Run materialize_concepts
-    eng.materialize_concepts(tmp_proj)
+    eng.materialization.materialize_concepts(tmp_proj)
 
     concept_file = Path(tmp_proj) / OEM_DIR / "wiki" / "concept_flaky.md"
     assert concept_file.exists()

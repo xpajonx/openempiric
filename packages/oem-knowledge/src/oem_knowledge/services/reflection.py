@@ -106,7 +106,7 @@ class ReflectionService:
                     fm_match = re.match(r"^---\s*\n.*?\n---\s*\n(.*)$", current_text, re.DOTALL)
                     current_body = fm_match.group(1).strip() if fm_match else current_text.strip()
                     
-                    history = self.engine.get_concept_history(concept_id, project)
+                    history = self.engine.materialization.get_concept_history(concept_id, project)
                     if history:
                         last_entry = history[-1]
                         last_content = last_entry.get("content", "")
@@ -164,7 +164,7 @@ class ReflectionService:
                     modified_code_files.extend(res_commit.stdout.splitlines())
                     
                 # Filter and match against registry
-                registry = self.engine._load_registry(project)
+                registry = self.engine.state._load_registry(project)
                 seen_files = set()
                 for f in modified_code_files:
                     f = f.strip()
@@ -326,7 +326,7 @@ class ReflectionService:
                 "schema_version": 1,
             }
             canonical_events.append(canonical_event)
-            self.engine._append_event(canonical_event, project)
+            self.engine.state._append_event(canonical_event, project)
 
         # Prioritize events: chat-derived first, then orchestrator, then file observations
         canonical_events.sort(key=lambda e: _SOURCE_PRIORITY.get(e.get("source", ""), 99))

@@ -63,14 +63,14 @@ def test_search_fallback_registry_only(engine, tmp_path):
     mock_store = MagicMock()
     mock_store.count.side_effect = RuntimeError("SQLite connection refused")
     mock_store.all_chunks.side_effect = RuntimeError("SQLite connection refused")
-    engine.search_service._vector_store = mock_store
+    engine.search._vector_store = mock_store
 
     # 1. Verify search fallback returns matching results
-    results = engine.search("degradation", k=1)
+    results = engine.search.search("degradation", k=1)
     assert len(results) == 1
     assert "concept_001" in results[0]["id"]
     assert "gracefully handling errors" in results[0]["document"]
 
     # 2. Verify stats fallback returns 0 chunks and doesn't crash
-    stats = engine.search_service.stats()
+    stats = engine.search.stats()
     assert stats["total_chunks"] == 0

@@ -7,25 +7,23 @@ def test_engine_delegation(tmp_path):
     engine.init_project("test_delegation_proj")
 
     # Verify that the service instances are created
-    assert engine.search_service is not None
-    assert engine.materialization_service is not None
-    assert engine.reflection_service is not None
-    assert engine.state_service is not None
+    assert engine.search is not None
+    assert engine.materialization is not None
+    assert engine.reflection is not None
+    assert engine.state is not None
 
-    # Verify delegation works for SearchService
-    # Verify that engine.stats calls search_service.stats
-    stats = engine.stats()
+    # Verify direct service calls work
+    stats = engine.search.stats()
     assert "total_chunks" in stats
     assert "db_size_mb" in stats
 
-    # Verify delegation works for StateService
     # Verify evaluate_concept_status
     cdata = {"concept_id": "concept_001", "canonical_name": "test-concept"}
-    updated_cdata = engine.evaluate_concept_status(cdata, "observation", "session_1")
+    updated_cdata = engine.state.evaluate_concept_status(cdata, "observation", "session_1")
     assert updated_cdata["status"] == "candidate"
 
-    # Verify explain_concept delegation
-    explanation = engine.explain_concept(concept_id="concept_001")
+    # Verify explain_concept
+    explanation = engine.state.explain_concept(concept_id="concept_001")
     # Should say not found or return error status because we haven't registered it yet
     assert explanation["status"] == "error"
 
@@ -37,7 +35,7 @@ def test_embed_returns_python_floats(tmp_path):
     engine = KnowledgeEngine(project_path=tmp_path)
     engine.init_project("test_float_conversion")
 
-    svc = engine.search_service
+    svc = engine.search
 
     fake_embeddings = [
         numpy.array([numpy.float32(0.1), numpy.float32(-0.2), numpy.float32(0.3)]),
@@ -64,7 +62,7 @@ def test_fallback_concepts_materialize(tmp_path):
     engine = KnowledgeEngine(project_path=tmp_path)
     engine.init_project(str(tmp_path))
 
-    res = engine.reflect_session(
+    res = engine.reflection.reflect_session(
         project=str(tmp_path),
         conversation_text="Fixed doctor global install detection.\nRefactored reflection pipeline.",
         session_id="test_materialize_1",
@@ -72,10 +70,10 @@ def test_fallback_concepts_materialize(tmp_path):
     assert res["status"] == "success"
     assert res["explainability"]["fallback_extraction_used"] is True
 
-    mat_res = engine.materialize_concepts(str(tmp_path))
+    mat_res = engine.materialization.materialize_concepts(str(tmp_path))
     assert "materialized" in mat_res
 
-    registry = engine._load_registry(str(tmp_path))
+    registry = engine.state._load_registry(str(tmp_path))
     concept_names = [v["canonical_name"] for v in registry.values()]
     assert any("doctor" in c or "global" in c for c in concept_names), (
         f"Expected doctor/global concept in registry, got {concept_names}"
@@ -90,7 +88,7 @@ def test_report_includes_extracted_concepts(tmp_path):
     engine = KnowledgeEngine(project_path=tmp_path)
     engine.init_project(str(tmp_path))
 
-    res = engine.reflect_session(
+    res = engine.reflection.reflect_session(
         project=str(tmp_path),
         conversation_text="Added executable availability checks.",
         session_id="test_report_1",

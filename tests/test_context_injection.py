@@ -31,7 +31,7 @@ def test_oem_runtime_context_injection(tmp_proj, mock_home):
     eng.init_project(tmp_proj)
 
     # 1. Seed local registry
-    registry = eng._load_registry(tmp_proj)
+    registry = eng.state._load_registry(tmp_proj)
     registry["concept_001"] = {
         "concept_id": "concept_001",
         "canonical_name": "database-guidelines",
@@ -39,14 +39,14 @@ def test_oem_runtime_context_injection(tmp_proj, mock_home):
         "confidence": 4,
         "evidence_count": 5
     }
-    eng._save_registry(registry, tmp_proj)
+    eng.state._save_registry(registry, tmp_proj)
 
     concepts_dir = Path(tmp_proj) / OEM_DIR / "wiki"
     wiki_file = concepts_dir / "concept_001.md"
     wiki_file.write_text("---\nstatus: canonical\n---\n# Database Guidelines\nUse PostgreSQL for storage.", encoding="utf-8")
 
     # 2. Seed events
-    eng._append_event({
+    eng.state._append_event({
         "event_id": "dec-1",
         "timestamp": "2026-06-03T12:00:00Z",
         "project": tmp_proj,
@@ -60,7 +60,7 @@ def test_oem_runtime_context_injection(tmp_proj, mock_home):
         "schema_version": 1
     }, tmp_proj)
 
-    eng._append_event({
+    eng.state._append_event({
         "event_id": "fail-1",
         "timestamp": "2026-06-03T12:05:00Z",
         "project": tmp_proj,

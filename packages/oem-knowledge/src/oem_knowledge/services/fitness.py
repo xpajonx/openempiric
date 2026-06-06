@@ -34,7 +34,7 @@ class FitnessService:
     def calculate_fitness(self, project: str | None = None) -> dict[str, ConceptFitness]:
         harness = self.engine._resolve_harness(project)
         outcomes_file = harness / "state" / "outcomes.jsonl"
-        registry = self.engine._load_registry(project)
+        registry = self.engine.state._load_registry(project)
 
         # Initialize statistics for all registered concepts
         stats: dict[str, dict] = {}

@@ -212,12 +212,12 @@ class KnowledgeEngine:
         self._db_dir: Path | None = None
 
         # Instantiate services with self-injection
-        self.search_service = SearchService(self)
-        self.materialization_service = MaterializationService(self)
-        self.reflection_service = ReflectionService(self)
-        self.state_service = StateService(self)
+        self.search = SearchService(self)
+        self.materialization = MaterializationService(self)
+        self.reflection = ReflectionService(self)
+        self.state = StateService(self)
         self.event_migrator = EventMigrator(self)
-        self.fitness_service = FitnessService(self)
+        self.fitness = FitnessService(self)
 
     def _sfs(self, project: str | Path | None = None) -> SecureFileSystem:
         p = Path(project or self.project_path or ".").resolve()
@@ -373,90 +373,7 @@ class KnowledgeEngine:
         with FileLock(lock_path):
             sfs.append_text(p, event.model_dump_json() + "\n")
 
-    # --- Delegations to services to keep KnowledgeEngine API backwards compatible ---
 
-    # SearchService Delegations
-    def chunk_markdown(self, filepath: Path, rel_path: str) -> list[dict]:
-        return self.search_service.chunk_markdown(filepath, rel_path)
-
-    def derive_importance(self, rel_path: str) -> str:
-        return self.search_service.derive_importance(rel_path)
-
-    def index_all(self, force: bool = False) -> dict:
-        return self.search_service.index_all(force=force)
-
-    def search(self, query: str, k: int = 3, hybrid: bool = True) -> list[dict]:
-        return self.search_service.search(query, k=k, hybrid=hybrid)
-
-    def stats(self) -> dict:
-        return self.search_service.stats()
-
-    # MaterializationService Delegations
-    def _sync_index(self, canonical_name: str, concept_id: str, project: str | None = None):
-        self.materialization_service._sync_index(canonical_name, concept_id, project)
-
-    def _write_revision_log(self, file_path: Path, new_content: str, project: str | None = None):
-        self.materialization_service._write_revision_log(file_path, new_content, project)
-
-    def get_concept_history(self, concept_id: str, project: str | None = None) -> list[dict]:
-        return self.materialization_service.get_concept_history(concept_id, project)
-
-    def _safe_write_concept_file(self, file_path: Path, content: str, project: str | None = None) -> bool:
-        return self.materialization_service._safe_write_concept_file(file_path, content, project)
-
-    def _log_action(self, message: str, project: str | None = None):
-        self.materialization_service._log_action(message, project)
-
-    def materialize_concepts(self, project: str | None = None) -> dict:
-        return self.materialization_service.materialize_concepts(project)
-
-    def update_graph(self, project: str | None = None) -> dict:
-        return self.materialization_service.update_graph(project)
-
-    # ReflectionService Delegations
-    def reflect_session(
-        self,
-        project: str | None = None,
-        conversation_text: str = "",
-        session_id: str = "",
-        telemetry: dict | None = None,
-        session_started_at: float | None = None,
-    ) -> dict:
-        return self.reflection_service.reflect_session(project, conversation_text, session_id, telemetry, session_started_at)
-
-    # StateService Delegations
-    def _load_registry(self, project: str | None = None) -> dict:
-        return self.state_service._load_registry(project)
-
-    def _save_registry(self, registry: dict, project: str | None = None):
-        self.state_service._save_registry(registry, project)
-
-    def _load_events(self, project: str | None = None) -> list[dict]:
-        return self.state_service._load_events(project)
-
-    def _append_event(self, event: dict | KnowledgeEvent, project: str | None = None):
-        self.state_service._append_event(event, project)
-
-    def _resolve_concept(self, term: str, registry: dict) -> tuple[str, dict]:
-        return self.state_service._resolve_concept(term, registry)
-
-    def evaluate_concept_status(self, cdata: dict, e_type: str, session_id: str, fitness_data: dict | None = None) -> dict:
-        return self.state_service.evaluate_concept_status(cdata, e_type, session_id, fitness_data)
-
-    def consolidate(self, project: str | None = None) -> dict:
-        return self.state_service.consolidate(project)
-
-    def rebuild_registry(self, project: str | None = None) -> dict:
-        return self.state_service.rebuild_registry(project)
-
-    def explain_concept(self, project: str | None = None, concept_id: str = "") -> dict:
-        return self.state_service.explain_concept(project, concept_id)
-
-    def merge_concepts(self, project: str | None = None, primary_id: str = "", secondary_id: str = "") -> dict:
-        return self.state_service.merge_concepts(project, primary_id, secondary_id)
-
-    def migrate_events(self, project: str | None = None) -> dict:
-        return self.event_migrator.migrate_file(project)
 
     # --- Orchestrator Level Methods kept on engine ---
 
@@ -634,7 +551,7 @@ class KnowledgeEngine:
         rec_files = []
         if keywords:
             try:
-                results = self.search(keywords, k=4)
+                results = self.search.search(keywords, k=4)
                 rec_files = [r["metadata"]["rel_path"] for r in results]
             except Exception:
                 pass
@@ -664,7 +581,7 @@ class KnowledgeEngine:
         event_type: str = "",
         session_id: str = "",
     ) -> list[dict]:
-        events = self._load_events(project)
+        events = self.state._load_events(project)
         filtered = []
         for ev in events:
             if concept:
@@ -679,7 +596,7 @@ class KnowledgeEngine:
         return filtered
 
     def get_event(self, project: str | None = None, event_id: str = "") -> dict:
-        for ev in self._load_events(project):
+        for ev in self.state._load_events(project):
             if ev.get("event_id") == event_id:
                 return ev
         raise KeyError(f"Event {event_id} not found")
@@ -701,7 +618,7 @@ class KnowledgeEngine:
         progress.update_step("transcript", "success")
 
         progress.update_step("reflection", "running")
-        res = self.reflect_session(
+        res = self.reflection.reflect_session(
             project, conversation_text, session_id=session_id, telemetry=telemetry, session_started_at=session_started_at
         )
         if res["status"] == "error":
@@ -710,7 +627,7 @@ class KnowledgeEngine:
         progress.update_step("reflection", "success")
 
         progress.update_step("materialization", "running")
-        mat_res = self.materialize_concepts(project)
+        mat_res = self.materialization.materialize_concepts(project)
         mat_log = mat_res.get("materialized", [])
         progress.update_step("materialization", "success")
 
@@ -719,7 +636,7 @@ class KnowledgeEngine:
         try:
             def index_progress(current, total):
                 progress.update_step("index", "running", detail=f"{current} / {total} embeddings")
-            idx_res = self.search_service.index_all(progress_callback=index_progress)
+            idx_res = self.search.index_all(progress_callback=index_progress)
         except Exception:
             pass
         progress.update_step("index", "success")
@@ -730,7 +647,7 @@ class KnowledgeEngine:
             try:
                 from .vault import GlobalVault
                 vault = GlobalVault()
-                local_reg = self._load_registry(project)
+                local_reg = self.state._load_registry(project)
                 concepts_dir = self._concepts_dir(project)
                 vault.sync_from_registry(local_reg, concepts_dir)
             except Exception:
@@ -745,7 +662,7 @@ class KnowledgeEngine:
             "report_path": res["report_path"],
             "knowledge_events": res["knowledge_events"],
             "materialized_log": mat_log,
-            "links_updated": self.update_graph(project).get("links_updated", 0),
+            "links_updated": self.materialization.update_graph(project).get("links_updated", 0),
             "index_stats": idx_res,
             "explainability": explainability,
         }
@@ -759,15 +676,15 @@ class KnowledgeEngine:
         project: str | None = None,
         goal_satisfaction: float | None = None,
     ) -> dict:
-        return self.state_service.record_outcome(
+        return self.state.record_outcome(
             outcome, referenced_concepts, reason, session_id, project, goal_satisfaction
         )
 
     def calculate_fitness(self, project: str | None = None) -> dict[str, ConceptFitness]:
-        return self.fitness_service.calculate_fitness(project)
+        return self.fitness.calculate_fitness(project)
 
     def detect_stale_concepts(self, n_sessions: int = 5, project: str | None = None) -> list[dict]:
-        return self.state_service.detect_stale_concepts(n_sessions, project)
+        return self.state.detect_stale_concepts(n_sessions, project)
 
     def propose_merges(self, similarity_threshold: float = 0.85, project: str | None = None) -> list[dict]:
         from oem_knowledge.evolution import ConceptEvolutionEngine

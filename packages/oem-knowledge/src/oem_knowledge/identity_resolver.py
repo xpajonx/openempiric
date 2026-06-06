@@ -8,7 +8,7 @@ class SemanticIdentityResolver:
 
     def scan_duplicates(self, project: str | None = None, threshold: float = 0.82) -> list[dict]:
         """Scan registry concepts for semantic duplicates."""
-        registry = self.engine._load_registry(project)
+        registry = self.engine.state._load_registry(project)
         if not registry:
             return []
 
@@ -22,12 +22,12 @@ class SemanticIdentityResolver:
         if not texts:
             return []
 
-        embeddings = self.engine.search_service.embed(texts)
+        embeddings = self.engine.search.embed(texts)
         candidates = []
 
         for i in range(len(cids)):
             for j in range(i + 1, len(cids)):
-                sim = self.engine.search_service.cosine_similarity(embeddings[i], embeddings[j])
+                sim = self.engine.search.cosine_similarity(embeddings[i], embeddings[j])
                 if sim >= threshold:
                     candidates.append({
                         "concept_a": cids[i],

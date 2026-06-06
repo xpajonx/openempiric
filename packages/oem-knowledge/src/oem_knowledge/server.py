@@ -53,7 +53,7 @@ def mount_tools(mcp: object) -> None:
         eng = KnowledgeEngine(project or None)
         start = time.time()
         try:
-            s = eng.index_all(force=force)
+            s = eng.search.index_all(force=force)
         except Exception as e:
             return render_panel("Index Failure", [f"Error: {e}"], status="error")
 
@@ -83,7 +83,7 @@ def mount_tools(mcp: object) -> None:
         """
         eng = KnowledgeEngine(project or None)
         try:
-            res = eng.reflect_session(project or None, conversation_text, session_id)
+            res = eng.reflection.reflect_session(project or None, conversation_text, session_id)
         except Exception as e:
             return render_panel("Reflection Failure", [f"Error: {e}"], status="error")
 
@@ -108,7 +108,7 @@ def mount_tools(mcp: object) -> None:
         """
         eng = KnowledgeEngine(project or None)
         try:
-            res = eng.materialize_concepts(project or None)
+            res = eng.materialization.materialize_concepts(project or None)
         except Exception as e:
             return render_panel(
                 "Materialization Failure", [f"Error: {e}"], status="error"
@@ -131,7 +131,7 @@ def mount_tools(mcp: object) -> None:
         """
         eng = KnowledgeEngine(project or None)
         try:
-            res = eng.update_graph(project or None)
+            res = eng.materialization.update_graph(project or None)
         except Exception as e:
             return render_panel("Graph Update Failure", [f"Error: {e}"], status="error")
 
@@ -201,7 +201,7 @@ def mount_tools(mcp: object) -> None:
         """
         eng = KnowledgeEngine(project or None)
         try:
-            res = eng.consolidate(project or None)
+            res = eng.state.consolidate(project or None)
         except Exception as e:
             return render_panel(
                 "Consolidation Failure", [f"Error: {e}"], status="error"
@@ -290,7 +290,7 @@ def mount_tools(mcp: object) -> None:
         """
         eng = KnowledgeEngine(project or None)
         try:
-            res = eng.merge_concepts(project or None, primary_id, secondary_id)
+            res = eng.state.merge_concepts(project or None, primary_id, secondary_id)
         except Exception as e:
             return render_panel("Merge Failure", [f"Error: {e}"], status="error")
 

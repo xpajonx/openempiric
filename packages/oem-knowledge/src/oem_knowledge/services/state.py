@@ -254,7 +254,7 @@ class StateService:
                 merged.append(f"Merged {cid_secondary} -> {cid_primary}")
 
         if merged:
-            self.engine.index_all(force=True)
+            self.engine.search.index_all(force=True)
 
         return {
             "status": "success",
@@ -313,11 +313,11 @@ class StateService:
                     body = f"# {cdata['canonical_name'].replace('-', ' ').title()}\n\nThis concept is a validated organizational knowledge node.\n\n## Learnings\n"
 
                 concept_content = f"---\nconcept_id: {cid}\ncanonical_name: {cdata['canonical_name']}\nstatus: {cdata['status']}\nconfidence: {cdata['confidence']}\nevidence_count: {cdata['evidence_count']}\nsession_count: {cdata.get('session_count', 0)}\naliases: {json.dumps(cdata.get('aliases', []))}\n---\n{body}"
-                self.engine._safe_write_concept_file(concept_file, concept_content, project)
-                self.engine._sync_index(cdata["canonical_name"], cid, project)
+                self.engine.materialization._safe_write_concept_file(concept_file, concept_content, project)
+                self.engine.materialization._sync_index(cdata["canonical_name"], cid, project)
                 materialized_log.append(cid)
 
-        self.engine.index_all(force=True)
+        self.engine.search.index_all(force=True)
 
         return {
             "status": "success",
@@ -385,7 +385,7 @@ class StateService:
         if sf.exists():
             sf.unlink()
 
-        self.engine._log_action(
+        self.engine.materialization._log_action(
             f"Merge | Merged secondary concept {secondary_id} into primary {primary_id} ({pdata['canonical_name']})",
             project,
         )
@@ -466,7 +466,7 @@ class StateService:
         with open(outcomes_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(log_entry) + "\n")
 
-        self.engine._log_action(
+        self.engine.materialization._log_action(
             f"Outcome | Logged session outcome '{outcome}' for {resolved_session_id} (satisfaction: {resolved_satisfaction})",
             project,
         )
@@ -484,7 +484,7 @@ class StateService:
 
     def detect_stale_concepts(self, n_sessions: int = 5, project: str | None = None) -> list[dict]:
         """Identify concepts that have not been referenced in the last N sessions."""
-        registry = self.engine._load_registry(project)
+        registry = self._load_registry(project)
         harness = self.engine._resolve_harness(project)
         outcomes_file = harness / "state" / "outcomes.jsonl"
         

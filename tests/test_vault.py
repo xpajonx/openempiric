@@ -55,14 +55,14 @@ def test_local_registry_sync(tmp_proj, tmp_vault_dir):
     eng = KnowledgeEngine(tmp_proj)
     eng.init_project(tmp_proj)
     
-    registry = eng._load_registry(tmp_proj)
+    registry = eng.state._load_registry(tmp_proj)
     registry["global_concept"] = {
         "concept_id": "global_concept",
         "canonical_name": "global-concept",
         "aliases": ["shared"],
         "global": True
     }
-    eng._save_registry(registry, tmp_proj)
+    eng.state._save_registry(registry, tmp_proj)
     
     concepts_dir = Path(tmp_proj) / OEM_DIR / "wiki"
     wiki_file = concepts_dir / "global_concept.md"
@@ -90,7 +90,7 @@ def test_gated_vault_promotion(tmp_proj, tmp_vault_dir, monkeypatch):
     from oem_knowledge import engine
     monkeypatch.setattr(engine, "find_all_projects", lambda: [Path(tmp_proj), Path(tmp_proj)])
 
-    registry = eng._load_registry(tmp_proj)
+    registry = eng.state._load_registry(tmp_proj)
     registry["concept_001"] = {
         "concept_id": "concept_001",
         "canonical_name": "gated-concept",
@@ -98,7 +98,7 @@ def test_gated_vault_promotion(tmp_proj, tmp_vault_dir, monkeypatch):
         "evidence_count": 5,
         "confidence": 4
     }
-    eng._save_registry(registry, tmp_proj)
+    eng.state._save_registry(registry, tmp_proj)
 
     concepts_dir = Path(tmp_proj) / OEM_DIR / "wiki"
     wiki_file = concepts_dir / "concept_001.md"
@@ -115,7 +115,7 @@ def test_gated_vault_promotion(tmp_proj, tmp_vault_dir, monkeypatch):
     vault.promote_to_global("concept_001", tmp_proj)
 
     # Verify status in local registry and markdown updated to global
-    updated_local_reg = eng._load_registry(tmp_proj)
+    updated_local_reg = eng.state._load_registry(tmp_proj)
     assert updated_local_reg["concept_001"]["status"] == "global"
     assert updated_local_reg["concept_001"]["global"] is True
     assert "status: global" in wiki_file.read_text(encoding="utf-8")
@@ -130,7 +130,7 @@ def test_gated_vault_promotion(tmp_proj, tmp_vault_dir, monkeypatch):
     vault.demote_from_global("concept_001", tmp_proj)
 
     # Verify status reverted back to canonical
-    demoted_local_reg = eng._load_registry(tmp_proj)
+    demoted_local_reg = eng.state._load_registry(tmp_proj)
     assert demoted_local_reg["concept_001"]["status"] == "canonical"
     assert demoted_local_reg["concept_001"]["global"] is False
     assert "status: canonical" in wiki_file.read_text(encoding="utf-8")

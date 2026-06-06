@@ -62,7 +62,7 @@ def test_multi_hop_migration(tmp_path):
             assert disk_event.get("schema_version", 1) == 1
 
         # Run offline migration
-        res = engine.migrate_events()
+        res = engine.event_migrator.migrate_file()
         assert res["status"] == "success"
         assert res["migrated_count"] == 1
 

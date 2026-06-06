@@ -157,22 +157,22 @@ def test_project_memory_isolation(tmp_path):
     eng_b = KnowledgeEngine(str(project_b))
     
     # Seed SECRET_A in project-a registry
-    reg_a = eng_a._load_registry()
+    reg_a = eng_a.state._load_registry()
     reg_a["concept_secret_a"] = {
         "concept_id": "concept_secret_a",
         "canonical_name": "SECRET_A",
         "status": "canonical"
     }
-    eng_a._save_registry(reg_a)
+    eng_a.state._save_registry(reg_a)
     
     # Seed SECRET_B in project-b registry
-    reg_b = eng_b._load_registry()
+    reg_b = eng_b.state._load_registry()
     reg_b["concept_secret_b"] = {
         "concept_id": "concept_secret_b",
         "canonical_name": "SECRET_B",
         "status": "canonical"
     }
-    eng_b._save_registry(reg_b)
+    eng_b.state._save_registry(reg_b)
     
     # Compile context for both
     context_a = _compile_oem_context(eng_a)

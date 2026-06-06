@@ -52,7 +52,7 @@ class ConceptEvolutionEngine:
             new_body = body
 
         new_content = header + new_body
-        self.engine._safe_write_concept_file(concept_file, new_content, project)
+        self.engine.materialization._safe_write_concept_file(concept_file, new_content, project)
 
         return {
             "status": "success",
@@ -62,7 +62,7 @@ class ConceptEvolutionEngine:
 
     def propose_merges(self, similarity_threshold: float = 0.85, project: str | None = None) -> list[dict]:
         """Propose merging concepts with highly similar canonical names or aliases."""
-        registry = self.engine._load_registry(project)
+        registry = self.engine.state._load_registry(project)
         cids = list(registry.keys())
         proposals = []
         
@@ -121,7 +121,7 @@ class ConceptEvolutionEngine:
 class ContradictionDetector:
     def __init__(self, engine):
         self.engine = engine
-        self.dense_search = self.engine.search_service
+        self.dense_search = self.engine.search
 
         # Hardcoded architectural contradiction rule pairs (lowercased)
         self.conflict_rules = [
@@ -134,7 +134,7 @@ class ContradictionDetector:
 
     def detect_contradictions(self, project: str | None = None) -> list[dict]:
         """Scan all concepts and identify architectural or semantic contradictions."""
-        registry = self.engine._load_registry(project)
+        registry = self.engine.state._load_registry(project)
         concepts_dir = self.engine._concepts_dir(project)
         cids = list(registry.keys())
 

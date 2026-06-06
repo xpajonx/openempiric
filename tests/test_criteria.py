@@ -23,7 +23,7 @@ def knowledge_search(query: str, k: int = 3, project: str = "") -> str:
     from oem_knowledge.engine import KnowledgeEngine
     from oem_knowledge.ui import render_panel
     eng = KnowledgeEngine(project or None)
-    results = eng.search(query, k=k)
+    results = eng.search.search(query, k=k)
     if not results:
         return render_panel("Search: 0 results", [f"No matches for: '{query}'"], status="search")
     lines = [f'Query: "{query}"', f"Results: {len(results)}", ""]
@@ -220,7 +220,7 @@ class TestCriteria:
 
         with patch.object(sys, "argv", ["oem", "stats"]):
             with patch("oem_knowledge.cli.KnowledgeEngine") as mock_engine:
-                mock_engine.return_value.stats.return_value = {
+                mock_engine.return_value.search.stats.return_value = {
                     "total_chunks": 0,
                     "db_size_mb": 0.0,
                     "harness_path": "/tmp",
@@ -336,11 +336,11 @@ class TestCriteria:
         file_path = concepts_dir / "concept_001.md"
 
         long_content = "Some initial content. " * 50
-        eng._safe_write_concept_file(file_path, long_content, tmp_proj)
+        eng.materialization._safe_write_concept_file(file_path, long_content, tmp_proj)
 
         short_content = "Too short."
         with pytest.raises(ValueError, match="Truncation risk detected"):
-            eng._safe_write_concept_file(file_path, short_content, tmp_proj)
+            eng.materialization._safe_write_concept_file(file_path, short_content, tmp_proj)
 
     def test_path_traversal_protection(self, tmp_proj):
         """Verify that path traversal raises PermissionError."""
@@ -348,14 +348,14 @@ class TestCriteria:
         eng = KnowledgeEngine(tmp_proj)
         traversal_file = Path(tmp_proj) / "outside.md"
         with pytest.raises(PermissionError, match="Path traversal attempted"):
-            eng._safe_write_concept_file(traversal_file, "Some content", tmp_proj)
+            eng.materialization._safe_write_concept_file(traversal_file, "Some content", tmp_proj)
 
     def test_typed_links_and_reciprocal(self, tmp_proj):
         """Verify that typed links and reciprocal links are correctly parsed and saved."""
         _call("knowledge_init", {"project": tmp_proj})
         eng = KnowledgeEngine(tmp_proj)
 
-        registry = eng._load_registry(tmp_proj)
+        registry = eng.state._load_registry(tmp_proj)
         registry["concept_001"] = {
             "concept_id": "concept_001",
             "canonical_name": "concept-one",
@@ -376,7 +376,7 @@ class TestCriteria:
             "session_count": 2,
             "sessions": ["session_two"],
         }
-        eng._save_registry(registry, tmp_proj)
+        eng.state._save_registry(registry, tmp_proj)
 
         concepts_dir = Path(tmp_proj) / OEM_DIR / "wiki"
         concepts_dir.mkdir(parents=True, exist_ok=True)
@@ -406,9 +406,9 @@ aliases: ["two"]
 # Concept Two"""
         (concepts_dir / "concept_002.md").write_text(c2_content)
 
-        eng.update_graph(tmp_proj)
+        eng.materialization.update_graph(tmp_proj)
 
-        updated_reg = eng._load_registry(tmp_proj)
+        updated_reg = eng.state._load_registry(tmp_proj)
         assert any(
             r["type"] == "depends_on" and r["target"] == "concept_002"
             for r in updated_reg["concept_001"]["relationships"]
@@ -454,7 +454,7 @@ Broken: [[concept_999]]."""
         _call("knowledge_init", {"project": tmp_proj})
         eng = KnowledgeEngine(tmp_proj)
 
-        registry = eng._load_registry(tmp_proj)
+        registry = eng.state._load_registry(tmp_proj)
         registry["concept_002"] = {
             "concept_id": "concept_002",
             "canonical_name": "concept-two",
@@ -465,7 +465,7 @@ Broken: [[concept_999]]."""
             "session_count": 2,
             "sessions": ["session_two"],
         }
-        eng._save_registry(registry, tmp_proj)
+        eng.state._save_registry(registry, tmp_proj)
 
         concepts_dir = Path(tmp_proj) / OEM_DIR / "wiki"
         concepts_dir.mkdir(parents=True, exist_ok=True)

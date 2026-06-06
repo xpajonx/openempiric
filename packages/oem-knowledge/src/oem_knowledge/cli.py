@@ -447,7 +447,7 @@ def main():
 
     try:
         if args.command in ("status", "stats"):
-            s = eng.stats()
+            s = eng.search.stats()
             lines = [
                 f"Chunks: {s['total_chunks']}",
                 f"DB size: {s['db_size_mb']:.2f} MB",
@@ -465,7 +465,7 @@ def main():
             print(render_panel("Init Complete", lines, status="bootstrap"))
 
         elif args.command == "search":
-            results = eng.search(args.query, k=args.k)
+            results = eng.search.search(args.query, k=args.k)
             lines = [f'Query: "{args.query}"', f"Results: {len(results)}", ""]
             for idx, r in enumerate(results):
                 lines.append(
@@ -577,7 +577,7 @@ def main():
                 print(render_panel("Reflection Result", lines, status="ok"))
 
         elif args.command == "rebuild":
-            res = eng.rebuild_registry(project)
+            res = eng.state.rebuild_registry(project)
             print(
                 render_panel(
                     "Registry Rebuilt",
@@ -622,7 +622,7 @@ def main():
         elif args.command == "explain":
             if args.type == "concept":
                 if args.history:
-                    history = eng.get_concept_history(args.id, project)
+                    history = eng.materialization.get_concept_history(args.id, project)
                     lines = [f"Revision History for Concept: {args.id}", ""]
                     for entry in history:
                         lines.append(f"\U0001f4c5 [{entry.get('timestamp')}] - File: {entry.get('file_name')}")
@@ -635,7 +635,7 @@ def main():
                         lines.append("No revision history found.")
                     print(render_panel("Concept History", lines, status="ok"))
                 else:
-                    res = eng.explain_concept(project, args.id)
+                    res = eng.state.explain_concept(project, args.id)
                     if res.get("status") == "error":
                         print(render_panel("Concept Not Found", [res.get("message", "")], status="error"))
                     else:
@@ -708,7 +708,7 @@ def main():
             vault = GlobalVault()
             if args.action == "sync":
                 try:
-                    local_reg = eng._load_registry(project)
+                    local_reg = eng.state._load_registry(project)
                     concepts_dir = eng._concepts_dir(project)
                     vault.sync_from_registry(local_reg, concepts_dir)
                     print(render_panel("Vault Sync", ["Global vault synchronized successfully."], status="ok"))
@@ -755,7 +755,7 @@ def main():
                 if not args.concept_a or not args.concept_b:
                     print(render_panel("Error", ["Two concept IDs required for review."], status="error"))
                 else:
-                    registry = eng._load_registry(project)
+                    registry = eng.state._load_registry(project)
                     if args.concept_a not in registry or args.concept_b not in registry:
                         print(render_panel("Error", ["One or both concepts not found in registry."], status="error"))
                     else:
@@ -779,7 +779,7 @@ def main():
                     else:
                         print(render_panel("Concept Evolved", [res.get("message", "")], status="ok"))
             elif args.action == "health":
-                registry = eng._load_registry(project)
+                registry = eng.state._load_registry(project)
                 from oem_knowledge.health import calculate_concept_health
                 if args.concept_id:
                     if args.concept_id not in registry:
@@ -839,7 +839,7 @@ def main():
 
                 if args.concept_id:
                     if args.concept_id not in report:
-                        resolved_id = eng.fitness_service._find_concept_id(args.concept_id, eng._load_registry(project))
+                        resolved_id = eng.fitness._find_concept_id(args.concept_id, eng.state._load_registry(project))
                         if resolved_id in report:
                             report = {resolved_id: report[resolved_id]}
                         else:
@@ -865,7 +865,7 @@ def main():
                         key=lambda x: (x[1]["referenced"], x[1]["retrieved"]),
                         reverse=True
                     )
-                    registry = eng._load_registry(project)
+                    registry = eng.state._load_registry(project)
                     for cid, m in sorted_concepts:
                         name = registry.get(cid, {}).get("canonical_name", cid)
                         label = f"{name} ({cid})"
@@ -889,7 +889,7 @@ def main():
             print(render_panel("Contradiction Scan", lines, status="error" if contradictions else "ok"))
 
         elif args.command == "health":
-            stale = eng.detect_stale_concepts(args.stale_sessions, project)
+            stale = eng.state.detect_stale_concepts(args.stale_sessions, project)
             merges = eng.propose_merges(args.similarity_threshold, project)
             conflicts = eng.detect_contradictions(project)
             
@@ -926,7 +926,7 @@ def main():
             print(render_panel("Knowledge Health Scan", lines, status="stats"))
 
         elif args.command == "merge":
-            res = eng.merge_concepts(project, args.primary_id, args.secondary_id)
+            res = eng.state.merge_concepts(project, args.primary_id, args.secondary_id)
             if res.get("status") == "error":
                 print(render_panel("Merge Failure", [res.get("message", "")], status="error"))
             else:
@@ -1106,10 +1106,10 @@ def main():
         elif args.command == "config":
             if args.config_target == "retrieval":
                 if args.mode:
-                    eng.search_service.set_retrieval_mode(args.mode)
+                    eng.search.set_retrieval_mode(args.mode)
                     print(render_panel("Config Updated", [f"Retrieval mode set to: '{args.mode}'"], status="ok"))
                 else:
-                    current_mode = eng.search_service.get_retrieval_mode()
+                    current_mode = eng.search.get_retrieval_mode()
                     print(render_panel("Retrieval Config", [f"Current retrieval mode: '{current_mode}'"], status="info"))
 
         elif args.command == "metrics":
@@ -1539,8 +1539,8 @@ def main():
 
             # 11. Search Pipeline Available check
             try:
-                _ = eng.search_service.stats()
-                eng.search_service.search("test", k=1)
+                _ = eng.search.stats()
+                eng.search.search("test", k=1)
                 lines.append("✓ Search Pipeline Available")
             except Exception as e:
                 lines.append(f"✗ Search Pipeline not available: {e}")
@@ -1559,7 +1559,7 @@ def main():
 
             # 13. Reflection Pipeline Ready
             try:
-                rs = eng.reflection_service
+                rs = eng.reflection
                 res = rs.reflect_session(project, conversation_text="")
                 if res.get("status") == "success":
                     runtime_lines.append("✓ Reflection Pipeline Ready")
@@ -1570,7 +1570,7 @@ def main():
 
             # 14. Materialization Pipeline Ready
             try:
-                mat_res = eng.materialization_service.materialize_concepts(project)
+                mat_res = eng.materialization.materialize_concepts(project)
                 if mat_res.get("status") == "success":
                     runtime_lines.append("✓ Materialization Pipeline Ready")
                 else:
@@ -1599,7 +1599,7 @@ def main():
             # --- Knowledge Health Dashboard ---
             try:
                 fitness_data = eng.calculate_fitness(project)
-                registry = eng._load_registry(project)
+                registry = eng.state._load_registry(project)
 
                 tested = []
                 untested = []

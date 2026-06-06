@@ -32,9 +32,9 @@ confidence: 1
 # Concept Test
 This is the initial version of the concept.
 """
-    eng._safe_write_concept_file(file_path, initial_content, tmp_proj)
+    eng.materialization._safe_write_concept_file(file_path, initial_content, tmp_proj)
     
-    history = eng.get_concept_history("concept_test", tmp_proj)
+    history = eng.materialization.get_concept_history("concept_test", tmp_proj)
     assert len(history) == 1
     assert history[0]["concept_id"] == "concept_test"
     assert history[0]["diff"] == ""
@@ -48,9 +48,9 @@ confidence: 2
 # Concept Test
 This is the updated version of the concept with changes.
 """
-    eng._safe_write_concept_file(file_path, modified_content, tmp_proj)
+    eng.materialization._safe_write_concept_file(file_path, modified_content, tmp_proj)
     
-    history2 = eng.get_concept_history("concept_test", tmp_proj)
+    history2 = eng.materialization.get_concept_history("concept_test", tmp_proj)
     assert len(history2) == 2
     assert history2[1]["concept_id"] == "concept_test"
     assert "updated version" in history2[1]["diff"]
@@ -122,10 +122,10 @@ We should use gRPC for communication.
 """, encoding="utf-8")
 
     # Save to registry
-    reg = eng._load_registry(tmp_proj)
+    reg = eng.state._load_registry(tmp_proj)
     reg["concept_001"] = {"concept_id": "concept_001", "canonical_name": "protocol-rest"}
     reg["concept_002"] = {"concept_id": "concept_002", "canonical_name": "protocol-grpc"}
-    eng._save_registry(reg, tmp_proj)
+    eng.state._save_registry(reg, tmp_proj)
 
     detector = ContradictionDetector(eng)
     contradictions = detector.detect_contradictions(tmp_proj)
