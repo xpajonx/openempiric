@@ -44,8 +44,5 @@ def test_runtime_notice_contains_guidelines(temp_project):
     ctx = _compile_oem_context(engine)
     notice = ctx.get("memory_context", "")
     
-    assert "Session boundary markers may appear naturally" in notice
-    assert "- Session start" in notice
-    assert "- Session end" in notice
-    assert "Treat these as conversational context signals" in notice
-    assert "Do not instruct users to run lifecycle commands" in notice
+    assert "Project memory is already active" in notice
+    assert "Use OEM search" in notice

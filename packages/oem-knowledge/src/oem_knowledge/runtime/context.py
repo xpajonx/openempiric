@@ -113,20 +113,8 @@ def _compile_oem_context(eng: KnowledgeEngine) -> dict:
         "last_topic": last_topic,
         "memory_context": (
             "# OEM Runtime Notice\n"
-            "Session lifecycle is automatic. Do not manually initialize OEM, activate memory, or call "
-            "knowledge_session_start / knowledge_session_commit. Use OEM tools only when knowledge search or "
-            "health checks are needed.\n\n"
-            "Session boundary markers may appear naturally:\n"
-            "- Session start\n"
-            "- Session end\n"
-            "Treat these as conversational context signals.\n"
-            "Do not instruct users to run lifecycle commands.\n"
-            "Do not request OEM initialization.\n"
-            "Do not request session activation.\n\n"
-            "OpenEmpiric is already active for this session; do not initialize it manually. "
-            "Relevant project memory has been restored automatically into your context as long-term memory. "
-            "Use this information when relevant. "
-            "Use knowledge_search when you need additional historical context. "
+            "Project memory is already active. Relevant project memory has been restored automatically. "
+            "Use OEM search when additional project context is needed. "
             "Do not assume work should proceed unless the user requests it."
         ),
     }

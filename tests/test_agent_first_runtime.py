@@ -25,11 +25,7 @@ def test_runtime_already_active(tmp_proj):
     
     # Verify Runtime Notice is present at the very beginning of the memory context
     assert memory_ctx.startswith("# OEM Runtime Notice")
-    assert "Session lifecycle is automatic. Do not manually initialize OEM, activate memory, or call" in memory_ctx
-    assert "knowledge_session_start / knowledge_session_commit." in memory_ctx
-    
-    # Verify other active session indicators are present
-    assert "OpenEmpiric is already active for this session" in memory_ctx
+    assert "Project memory is already active. Relevant project memory has been restored automatically." in memory_ctx
 
 def test_memory_is_context_not_instruction(tmp_proj):
     # Test 2: Validate that memory context behaves as historical context,
@@ -48,9 +44,9 @@ def test_memory_is_context_not_instruction(tmp_proj):
     assert context["last_topic"] == "realistic-image-gen"
     assert "Validate claims #6-9" in context["open_questions"]
     
-    # Verify that the generated memory context contains "historical context"
+    # Verify that the generated memory context contains "project context"
     memory_ctx = context["memory_context"]
-    assert "historical context" in memory_ctx.lower()
+    assert "project context" in memory_ctx.lower()
     
     # Verify that the generated memory context does not use task steering vocabulary
     # like "Next Actions", "Continue Work", "Resume Phase", or "Queued Tasks".
@@ -81,8 +77,7 @@ def test_search_is_optional(tmp_proj):
     context = _compile_oem_context(eng)
     memory_ctx = context["memory_context"]
     
-    # Expected: "Use knowledge_search when you need additional historical context."
-    # which is optional, and not "Call knowledge_search immediately" or "Run knowledge_search"
-    assert "use knowledge_search" in memory_ctx.lower()
-    assert "when you need additional historical context" in memory_ctx.lower()
+    # Expected: "Use OEM search when additional project context is needed."
+    assert "use oem search" in memory_ctx.lower()
+    assert "additional project context is needed" in memory_ctx.lower()
     assert "immediately" not in memory_ctx.lower()

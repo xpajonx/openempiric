@@ -219,8 +219,7 @@ class TestMemoryContext:
         from oem_knowledge.runtime.context import _compile_oem_context
         ctx = _compile_oem_context(engine)
         assert "memory_context" in ctx
-        assert "long-term memory" in ctx["memory_context"].lower()
-        assert "use this information when relevant" in ctx["memory_context"].lower()
+        assert "project memory is already active" in ctx["memory_context"].lower()
 
     def test_context_mentions_retrieval_when_relevant(self, engine, tmp_path):
         from oem_knowledge.runtime.context import _compile_oem_context

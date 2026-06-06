@@ -265,15 +265,7 @@ class ContextAssembler {
         const oemContext = JSON.parse(fs.readFileSync(contextPath, "utf-8"));
         
         let instContent = `# OEM Runtime Notice
-Session lifecycle is automatic. Do not manually initialize OEM, activate memory, or call knowledge_session_start / knowledge_session_commit. Use OEM tools only when knowledge search or health checks are needed.
-
-Session boundary markers may appear naturally:
-- Session start
-- Session end
-Treat these as conversational context signals.
-Do not instruct users to run lifecycle commands.
-Do not request OEM initialization.
-Do not request session activation.
+Project memory is already active. Relevant project memory has been restored automatically. Use OEM search when additional project context is needed.
 
 # Previous Session Context
 
@@ -473,15 +465,7 @@ Do not request session activation.
 
     // 3. Format dynamic markdown instructions under budget constraints
     let instContent = `# OEM Runtime Notice
-Session lifecycle is automatic. Do not manually initialize OEM, activate memory, or call knowledge_session_start / knowledge_session_commit. Use OEM tools only when knowledge search or health checks are needed.
-
-Session boundary markers may appear naturally:
-- Session start
-- Session end
-Treat these as conversational context signals.
-Do not instruct users to run lifecycle commands.
-Do not request OEM initialization.
-Do not request session activation.
+Project memory is already active. Relevant project memory has been restored automatically. Use OEM search when additional project context is needed.
 
 # Previous Session Context
 

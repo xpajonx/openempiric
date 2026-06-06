@@ -254,19 +254,8 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None)
             "open_questions": [],
             "memory_context": (
                 "# OEM Runtime Notice\n"
-                "Session lifecycle is automatic. Do not manually initialize OEM, activate memory, or call "
-                "knowledge_session_start / knowledge_session_commit. Use OEM tools only when knowledge search or "
-                "health checks are needed.\n\n"
-                "Session boundary markers may appear naturally:\n"
-                "- Session start\n"
-                "- Session end\n"
-                "Treat these as conversational context signals.\n"
-                "Do not instruct users to run lifecycle commands.\n"
-                "Do not request OEM initialization.\n"
-                "Do not request session activation.\n\n"
-                "OpenEmpiric is already active for this session; do not initialize it manually. "
-                "Use the knowledge_search tool to retrieve details. "
-                "You do not need to search before every response — only when you need information you do not already have."
+                "Project memory is already active. Relevant project memory has been restored automatically. "
+                "Use OEM search when additional project context is needed."
             )
         }
 
