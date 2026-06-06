@@ -143,7 +143,7 @@ def report_usage(
         f.write(json.dumps(log_entry) + "\n")
 
     # Format output panel
-    from oem_tui.panels import render_panel
+    from oem_knowledge.ui import render_panel
 
     lines = [
         f"Report Timestamp: {log_entry['timestamp']}",

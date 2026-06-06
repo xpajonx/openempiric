@@ -228,7 +228,6 @@ class KnowledgeEngine:
     def _resolve_harness(self, project_path: str | Path | None = None) -> Path:
         p = Path(project_path or self.project_path or ".").resolve()
         root = find_harness_root(p) or p
-        migrate_harness_to_oem(root)
         harness = root / OEM_DIR
         if not harness.exists():
             harness.mkdir(parents=True, exist_ok=True)
@@ -286,28 +285,13 @@ class KnowledgeEngine:
         return self._model
 
     def _validate_vector_db(self, db_path: Path) -> bool:
-        """Runs a validation check in a subprocess to ensure ChromaDB is not corrupted."""
-        import subprocess
-        import sys
-        script = f"""
-import chromadb
-try:
-    client = chromadb.PersistentClient(path={repr(str(db_path))})
-    col = client.get_or_create_collection(name="oem_knowledge", metadata={{"hnsw:space": "cosine"}})
-    col.count()
-    print("OK")
-except Exception:
-    import sys
-    sys.exit(1)
-"""
+        """Inline check to ensure ChromaDB is not corrupted."""
+        import chromadb
         try:
-            res = subprocess.run(
-                [sys.executable, "-c", script],
-                capture_output=True,
-                text=True,
-                timeout=3.0,
-            )
-            return res.returncode == 0 and "OK" in res.stdout
+            client = chromadb.PersistentClient(path=str(db_path))
+            col = client.get_or_create_collection(name="oem_knowledge", metadata={"hnsw:space": "cosine"})
+            col.count()
+            return True
         except Exception:
             return False
 
@@ -521,7 +505,6 @@ except Exception:
             base = Path.cwd() if not self.project_path else self.project_path
             project_dir = base / name if not (base / name).exists() else base
 
-        migrate_harness_to_oem(project_dir)
         harness = project_dir / OEM_DIR
 
         created_dirs = []
@@ -552,52 +535,6 @@ except Exception:
                     "- Setup initial directory structure.\n\n"
                     "## Open Questions\n"
                     "- What goals/concepts should be mapped next?\n"
-                ),
-            ),
-            (
-                "state/workflow_state.json",
-                json.dumps(
-                    {
-                        "current_phase": "PHASE_FIVE",
-                        "completed_steps": ["PHASE_ONE", "PHASE_TWO", "PHASE_THREE", "PHASE_FOUR", "PHASE_FIVE"],
-                        "history": [],
-                    },
-                    indent=2,
-                ),
-            ),
-            (
-                "state/feature_list.json",
-                json.dumps(
-                    {
-                        "phases": [
-                            {
-                                "id": "PHASE_ONE",
-                                "name": "Knowledge Event Foundation",
-                                "completed": True,
-                            },
-                            {
-                                "id": "PHASE_TWO",
-                                "name": "Concept Registry & Promotion Engine",
-                                "completed": True,
-                            },
-                            {
-                                "id": "PHASE_THREE",
-                                "name": "WSL OpenCode Plugin & Declarative YAML Orchestrator",
-                                "completed": True,
-                            },
-                            {
-                                "id": "PHASE_FOUR",
-                                "name": "Concept Identity, Evolution & Explainability",
-                                "completed": True,
-                            },
-                            {
-                                "id": "PHASE_FIVE",
-                                "name": "Typed Graphs, Wiki Linter & Safety Guards",
-                                "completed": True,
-                            },
-                        ]
-                    },
-                    indent=2,
                 ),
             ),
         ]:
@@ -825,14 +762,16 @@ except Exception:
         progress.update_step("index", "success")
 
         progress.update_step("vault", "running")
-        try:
-            from .vault import GlobalVault
-            vault = GlobalVault()
-            local_reg = self._load_registry(project)
-            concepts_dir = self._concepts_dir(project)
-            vault.sync_from_registry(local_reg, concepts_dir)
-        except Exception:
-            pass
+        import os
+        if os.environ.get("OEM_VAULT_SYNC") == "1":
+            try:
+                from .vault import GlobalVault
+                vault = GlobalVault()
+                local_reg = self._load_registry(project)
+                concepts_dir = self._concepts_dir(project)
+                vault.sync_from_registry(local_reg, concepts_dir)
+            except Exception:
+                pass
         progress.update_step("vault", "success")
 
         explainability = res.get("explainability", {})

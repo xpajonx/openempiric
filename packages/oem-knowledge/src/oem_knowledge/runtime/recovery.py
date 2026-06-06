@@ -4,7 +4,7 @@ import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from oem_tui.panels import render_panel
+from oem_knowledge.ui import render_panel
 from .config import _OEM_RUNTIME_CONTEXT_PATH, _OEM_TEMP_INSTRUCTIONS
 from .session import SessionState
 from oem_knowledge.tools.metrics import update_metrics_file

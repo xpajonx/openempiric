@@ -21,7 +21,7 @@ todos.register(mcp)
 @mcp.tool()
 def knowledge_search(query: str, k: int = 3, project: str = "") -> str:
     from oem_knowledge.engine import KnowledgeEngine
-    from oem_tui.panels import render_panel
+    from oem_knowledge.ui import render_panel
     eng = KnowledgeEngine(project or None)
     results = eng.search(query, k=k)
     if not results:
@@ -37,7 +37,7 @@ def knowledge_search(query: str, k: int = 3, project: str = "") -> str:
 @mcp.tool()
 def knowledge_session_start(project: str = "") -> str:
     from oem_knowledge.engine import KnowledgeEngine
-    from oem_tui.panels import render_panel
+    from oem_knowledge.ui import render_panel
     eng = KnowledgeEngine(project or None)
     res = eng.restore_session_state(project or None)
     lines = ["Active Goals:"]

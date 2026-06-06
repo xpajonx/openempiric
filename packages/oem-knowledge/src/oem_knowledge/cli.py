@@ -14,7 +14,7 @@ import uuid
 from pathlib import Path
 
 
-from oem_tui.panels import render_panel
+from .ui import render_panel
 from .engine import KnowledgeEngine, migrate_harness_to_oem
 from .linter import run_lint
 
@@ -197,12 +197,15 @@ def _setup_parser() -> argparse.ArgumentParser:
     setup_opencode = setup_sub.add_parser("opencode", help="Integrate OpenCode workspace settings and plugins")
     setup_opencode.add_argument("--repair", action="store_true", help="Forcefully overwrite and recreate all integration files")
 
+    migrate_p = sub.add_parser("migrate", help="Migrate legacy .harness directory to .oem format")
+    migrate_p.add_argument("--project", type=str, default="")
+
     sub._choices_actions = [a for a in sub._choices_actions if a.help is not argparse.SUPPRESS]
     return parser
 
 
 def cmd_setup_opencode(repair: bool = False) -> None:
-    from oem_tui.panels import render_panel
+    from oem_knowledge.ui import render_panel
     import importlib.resources as pkg_resources
     
     print("OEM OpenCode Setup\n")
@@ -1088,6 +1091,11 @@ def main():
                 f"  Materializations:   {materializations}",
             ]
             print(render_panel("Runtime Summary", lines, status="stats"))
+
+        elif args.command == "migrate":
+            p = Path(project or ".").resolve()
+            migrate_harness_to_oem(p)
+            print(render_panel("Migration Complete", [f"Legacy .harness checked and migrated for: {p}"], status="ok"))
 
         elif args.command == "metrics":
             if getattr(args, "report", False):

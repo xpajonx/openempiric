@@ -6,8 +6,6 @@ requires-python = ">=3.12"
 dependencies = [
     "chromadb",
     "fastembed",
-    "watchdog",
-    "oem-tui",
     "fastmcp>=3.2",
 ]
 
@@ -19,9 +17,6 @@ package = true
 
 [dependency-groups]
 dev = ["pytest>=8"]
-
-[tool.uv.sources]
-oem-tui = { workspace = true }
 
 [build-system]
 requires = ["setuptools>=61.0.0", "wheel"]

@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from oem_tui.panels import render_panel
+from .ui import render_panel
 
 from .engine import KnowledgeEngine
 

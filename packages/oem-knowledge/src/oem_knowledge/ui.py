@@ -1,6 +1,16 @@
 from __future__ import annotations
 
-from .styles import GREEN, YELLOW, BLUE, CYAN, MAGENTA, RED, RESET
+# Styles/Colors
+RESET = "\033[0m"
+BOLD = "\033[1m"
+DIM = "\033[2m"
+RED = "\033[91m"
+GREEN = "\033[92m"
+YELLOW = "\033[93m"
+BLUE = "\033[94m"
+MAGENTA = "\033[95m"
+CYAN = "\033[96m"
+WHITE = "\033[97m"
 
 
 def status_tag(status: str) -> str:
@@ -48,26 +58,3 @@ def render_panel(title: str, lines: list, status: str = "OK", width: int = 72) -
 
     panel_lines.append(border_bottom)
     return "\n".join(panel_lines)
-
-
-def render_table(headers: list, rows: list, widths: list | None = None) -> list:
-    if not rows:
-        return ["No data available"]
-
-    if not widths:
-        widths = [
-            max(len(str(row[i])) for row in rows + [headers])
-            for i in range(len(headers))
-        ]
-
-    header_line = " | ".join(
-        str(headers[i]).ljust(widths[i]) for i in range(len(headers))
-    )
-    separator = "-+-".join("-" * widths[i] for i in range(len(widths)))
-
-    output = [header_line, separator]
-    for row in rows:
-        row_line = " | ".join(str(row[i]).ljust(widths[i]) for i in range(len(row)))
-        output.append(row_line)
-
-    return output

@@ -198,7 +198,7 @@ def render_commit_complete_panel(
     file_observations: int = 0,
     width: int = 60
 ) -> str:
-    from oem_tui.panels import render_panel
+    from oem_knowledge.ui import render_panel
     lines = [
         f"Report: {report_name}",
         f"Concepts Materialized: {concepts_count}",

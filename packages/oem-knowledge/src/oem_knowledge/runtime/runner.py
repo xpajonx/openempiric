@@ -339,7 +339,7 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None)
 
     # Print warnings if any were collected
     if warnings:
-        from oem_tui.panels import render_panel
+        from oem_knowledge.ui import render_panel
         panel_lines = ["OEM started with degraded functionality:"]
         for w in warnings:
             panel_lines.append(f"- {w}")
