@@ -1,26 +1,13 @@
 from __future__ import annotations
 
-import difflib
-import hashlib
 import json
 import math
 import os
 import re
 import sys
 import time
-import uuid
 from collections import Counter
 from pathlib import Path
-
-from oem_knowledge.models import ConceptData, KnowledgeEvent, ConceptFitness
-
-# Import service classes
-from oem_knowledge.services.search import SearchService
-from oem_knowledge.services.materialization import MaterializationService
-from oem_knowledge.services.reflection import ReflectionService
-from oem_knowledge.services.state import StateService
-from oem_knowledge.services.event_migration import EventMigrator
-from oem_knowledge.services.fitness import FitnessService
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -211,13 +198,21 @@ class KnowledgeEngine:
         self.project_path = Path(project_path).resolve() if project_path else None
         self._db_dir: Path | None = None
 
-        # Instantiate services with self-injection
+        # Instantiate services dynamically with self-injection
+        from oem_knowledge.services.search import SearchService
+        from oem_knowledge.services.materialization import MaterializationService
+        from oem_knowledge.services.reflection import ReflectionService
+        from oem_knowledge.services.state import StateService
+        from oem_knowledge.services.event_migration import EventMigrator
+        from oem_knowledge.services.fitness import FitnessService
+
         self.search = SearchService(self)
         self.materialization = MaterializationService(self)
         self.reflection = ReflectionService(self)
         self.state = StateService(self)
         self.event_migrator = EventMigrator(self)
         self.fitness = FitnessService(self)
+
 
     def _sfs(self, project: str | Path | None = None) -> SecureFileSystem:
         p = Path(project or self.project_path or ".").resolve()
@@ -317,6 +312,7 @@ class KnowledgeEngine:
         }
 
     def calculate_sha256(self, filepath: Path) -> str:
+        import hashlib
         sha = hashlib.sha256()
         with open(filepath, "rb") as f:
             for block in iter(lambda: f.read(4096), b""):
@@ -365,6 +361,7 @@ class KnowledgeEngine:
             return events
 
     def _append_event_before_extraction(self, event: dict | KnowledgeEvent, project: str | None = None):
+        from oem_knowledge.models import KnowledgeEvent
         if isinstance(event, dict):
             event = KnowledgeEvent(**event)
         p = self._events_path(project)

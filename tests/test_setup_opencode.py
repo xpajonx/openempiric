@@ -140,7 +140,7 @@ def test_doctor_integration_diagnostics(temp_home, tmp_proj):
     # Mock success for skills and other requirements that might fail due to fresh temp project
     with patch("pathlib.Path.home", return_value=temp_home):
         with patch("oem_knowledge.cli.shutil.which", return_value="/mock/bin"):
-            with patch("oem_knowledge.engine.EventMigrator.get_schema_status", return_value={"status": "up_to_date", "message": "OK"}):
+            with patch("oem_knowledge.services.event_migration.EventMigrator.get_schema_status", return_value={"status": "up_to_date", "message": "OK"}):
                 with patch("oem_knowledge.cli.check_mcp_server", return_value=(True, True, 19, "")):
                     with patch("oem_knowledge.adapters.get_adapter") as mock_adapter:
                         mock_adapter.return_value.verify_mcp.return_value = True
