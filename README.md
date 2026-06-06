@@ -85,6 +85,18 @@ Launch your agent (e.g., `opencode`, `claude-code`, `cursor`) and begin working:
 oem run opencode
 ```
 
+### 6. Verify OEM Integration
+
+You can verify that OEM is available by asking the agent:
+
+> "Use OpenEmpiric to review project memory."
+
+or:
+
+> "Search project memory for recent decisions."
+
+The agent should be able to access OEM knowledge and retrieval capabilities. If not, run `oem doctor` to diagnose the installation.
+
 ---
 
 ## Common Commands

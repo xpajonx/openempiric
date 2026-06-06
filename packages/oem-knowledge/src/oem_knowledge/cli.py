@@ -277,7 +277,7 @@ def cmd_setup_opencode(repair: bool = False) -> None:
             "## OpenEmpiric Session Status\n\n"
             "OpenEmpiric is already active for this session.\n\n"
             "Relevant project memory has been restored automatically.\n\n"
-            "Use OEM search and health capabilities when additional project context is needed.\n"
+            "Use OEM search when additional project context is needed (such as reviewing project history, understanding prior decisions, or investigating known failures). Diagnostics (doctor/health) are automatically managed by the runtime supervisor and should only be run manually when troubleshooting the integration itself.\n"
         )
         if should_write_inst:
             inst_dest.write_text(inst_content, encoding="utf-8")

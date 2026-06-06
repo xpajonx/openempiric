@@ -37,8 +37,8 @@ best_practices:
   - Relevant project memory has been restored automatically into your context.
   - Refer to active concepts and past failures during planning to align with existing decisions.
   - Report referenced memory concepts at session end using the knowledge_usage_report tool.
-  - Use knowledge_search when you need additional historical context.
-  - Use knowledge_health_check to identify stale, duplicate, or contradictory knowledge.
+  - Use knowledge_search when additional project context is needed (such as reviewing project history, understanding prior decisions, or investigating known failures).
+  - Use knowledge_health_check rarely and only if diagnostics/runtime issues are suspected (routine health checks are handled automatically by the runtime supervisor).
   - Explicitly state decisions and rationale.
   - Record failures and root causes.
   - Summarize experiments and outcomes.

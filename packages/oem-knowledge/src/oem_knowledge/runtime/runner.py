@@ -257,7 +257,8 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None)
                 "Project memory is already active. Relevant project memory has been restored automatically. "
                 "OEM memory serves as a persistent knowledge layer to inform your planning and guide your execution of project workflows (e.g. AGENTS.md) without replacing them. "
                 "Cross-reference the active concepts and past failures below to ensure your work aligns with existing decisions and avoids repeat mistakes. "
-                "Use OEM search when additional project context is needed. Do not assume work should proceed unless the user requests it. "
+                "Use OEM search when additional project context is needed (such as reviewing project history, understanding prior decisions, or investigating known failures). "
+                "Diagnostics (doctor/health) are not required for normal work and are automatically managed by the runtime supervisor. Do not assume work should proceed unless the user requests it. "
                 "Your utilization of memory is measured and logged at the end of the session via the knowledge_usage_report tool."
             )
         }
