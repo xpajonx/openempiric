@@ -1,7 +1,58 @@
 from __future__ import annotations
 
-from oem_knowledge.cli_legacy import main as legacy_main
+import sys
 
 
 def main():
-    legacy_main()
+    # 1. Parse arguments using the fast stdlib-only parser
+    from .parser import _setup_parser
+    parser = _setup_parser()
+    args = parser.parse_args()
+
+    # 2. Route commands dynamically to target modules.
+    # Because these imports are inside the conditional branches, the fast path
+    # (commands like `--help` or `--version` which exit inside parse_args)
+    # will never import anything beyond the basic parser.
+    if args.command in (
+        "doctor",
+        "warmup",
+        "setup",
+        "migrate",
+        "config",
+        "mcp",
+        "metrics",
+        "todo",
+        "outcome",
+        "runtime-summary",
+    ):
+        from .commands.system import run_system_command
+        run_system_command(args)
+    elif args.command in (
+        "run",
+        "session-start",
+        "session-end",
+        "session-status",
+        "recover",
+        "reflect",
+    ):
+        from .commands.session import run_session_command
+        run_session_command(args)
+    elif args.command in (
+        "search",
+        "concept",
+        "merge",
+        "status",
+        "stats",
+        "init",
+        "rebuild",
+        "events",
+        "event",
+        "explain",
+        "vault",
+        "identity",
+        "contradictions",
+        "lint",
+        "health",
+    ):
+        from .commands.knowledge import run_knowledge_command
+        run_knowledge_command(args)
