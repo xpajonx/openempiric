@@ -9,6 +9,8 @@ from collections import Counter
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from oem_knowledge.vector_store import VectorStore
+
 if TYPE_CHECKING:
     from oem_knowledge.engine import KnowledgeEngine
 
@@ -16,20 +18,85 @@ if TYPE_CHECKING:
 class SearchService:
     def __init__(self, engine: KnowledgeEngine):
         self.engine = engine
+        self._vector_store = None
 
     @property
     def model(self):
         return self.engine.model
 
     @property
-    def chroma_client(self):
-        return self.engine.chroma_client
+    def vector_store(self) -> VectorStore:
+        if self._vector_store is None:
+            db_dir = self.engine._resolve_harness() / ".local_vector_db"
+            db_dir.mkdir(parents=True, exist_ok=True)
+            self._migrate_chroma_db_if_needed(db_dir)
+            db_file = db_dir / "vectors.db"
+            try:
+                store = VectorStore(db_file)
+                # Test query to ensure the DB is not corrupted
+                store.conn.execute("SELECT COUNT(*) FROM chunks")
+                self._vector_store = store
+            except Exception:
+                import logging
+                logging.warning(
+                    "[OEM] Local SQLite database is corrupted or incompatible. Recreating clean database..."
+                )
+                try:
+                    if db_file.exists():
+                        db_file.unlink()
+                except Exception:
+                    pass
+                self._vector_store = VectorStore(db_file)
+        return self._vector_store
 
-    @property
-    def collection(self):
-        return self.engine.collection
+    def _migrate_chroma_db_if_needed(self, db_dir: Path):
+        db_file = db_dir / "vectors.db"
+        if db_file.exists():
+            return
+
+        # If there are files in db_dir but no vectors.db, it indicates existing ChromaDB data
+        if db_dir.exists() and any(db_dir.iterdir()):
+            backup_dir = db_dir / "chroma_backup"
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            for item in db_dir.iterdir():
+                if item == backup_dir or item == db_file:
+                    continue
+                try:
+                    import shutil
+                    shutil.move(str(item), str(backup_dir / item.name))
+                except Exception:
+                    pass
+
+    def get_retrieval_mode(self) -> str:
+        config_file = self.engine._resolve_harness() / "config.json"
+        if config_file.exists():
+            try:
+                data = json.loads(config_file.read_text(encoding="utf-8"))
+                return data.get("retrieval_mode", "bm25")
+            except Exception:
+                pass
+        return "bm25"
+
+    def set_retrieval_mode(self, mode: str):
+        if mode not in ("bm25", "hybrid"):
+            raise ValueError("Invalid retrieval mode. Use 'bm25' or 'hybrid'.")
+        harness = self.engine._resolve_harness()
+        config_file = harness / "config.json"
+        data = {}
+        if config_file.exists():
+            try:
+                data = json.loads(config_file.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        data["retrieval_mode"] = mode
+        config_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
     def embed(self, texts: list[str]) -> list[list[float]]:
+        if self.model is None:
+            raise ImportError(
+                "Embedding model is not loaded. Ensure oem[semantic] is installed and "
+                "retrieval mode is configured properly."
+            )
         return [[float(x) for x in e] for e in self.model.embed(texts)]
 
     def cosine_similarity(self, a: list[float], b: list[float]) -> float:
@@ -147,14 +214,25 @@ class SearchService:
 
         if to_index:
             try:
-                col = self.collection
+                store = self.vector_store
             except Exception as e:
                 import logging
-                logging.warning("ChromaDB is unavailable for indexing: %s", e)
+                logging.warning("SQLite DB is unavailable for indexing: %s", e)
                 stats["failed"] += len(to_index)
-                col = None
+                store = None
 
-            if col is not None:
+            if store is not None:
+                retrieval_mode = self.get_retrieval_mode()
+                # Verify fastembed is installed for hybrid mode
+                if retrieval_mode == "hybrid":
+                    try:
+                        from fastembed import TextEmbedding
+                    except ImportError:
+                        raise ImportError(
+                            "Hybrid search requires fastembed. Please install it with 'uv tool install oem[semantic]' "
+                            "or switch to BM25 search using 'oem config retrieval bm25'."
+                        )
+
                 for idx, (fp, path_str, old_hash, cur_hash) in enumerate(to_index):
                     if progress_callback is not None:
                         try:
@@ -163,9 +241,7 @@ class SearchService:
                             pass
                     if old_hash is not None:
                         try:
-                            existing = col.get(where={"source": path_str})
-                            if existing and existing["ids"]:
-                                col.delete(ids=existing["ids"])
+                            store.delete_by_source(path_str)
                         except Exception:
                             pass
 
@@ -181,10 +257,10 @@ class SearchService:
                     mtime = os.path.getmtime(fp)
                     imp = self.derive_importance(rel_path)
 
-                    ids = [c["chunk_id"] for c in chunks]
-                    texts = [c["text"] for c in chunks]
-                    metadatas = [
-                        {
+                    for c in chunks:
+                        c_id = c["chunk_id"]
+                        text = c["text"]
+                        meta = {
                             "source": path_str,
                             "rel_path": rel_path,
                             "title": c["title"],
@@ -194,31 +270,21 @@ class SearchService:
                             "updated_at": str(mtime),
                             "importance": imp,
                         }
-                        for c in chunks
-                    ]
-
-                    try:
-                        embeddings = self.embed(texts)
-                        assert embeddings, "embeddings must not be empty"
-                        assert all(
-                            isinstance(v, float) for emb in embeddings for v in emb
-                        ), f"expected list[list[float]], got element type {type(embeddings[0][0])}"
-                        col.add(
-                            ids=ids, embeddings=embeddings, documents=texts, metadatas=metadatas
-                        )
-                    except Exception as e:
-                        print(f"Index error: {e}", file=sys.stderr)
-                        stats["failed"] += 1
+                        
+                        try:
+                            embedding = self.embed([text])[0] if retrieval_mode == "hybrid" else None
+                            store.upsert(c_id, text, meta, embedding)
+                        except Exception as e:
+                            print(f"Index error for {c_id}: {e}", file=sys.stderr)
+                            stats["failed"] += 1
 
         deleted_paths = set(registry.keys()) - active_paths
         if deleted_paths:
             try:
-                col = self.collection
-                if col is not None:
+                store = self.vector_store
+                if store is not None:
                     for path in deleted_paths:
-                        existing = col.get(where={"source": path})
-                        if existing and existing["ids"]:
-                            col.delete(ids=existing["ids"])
+                        store.delete_by_source(path)
             except Exception:
                 pass
 
@@ -228,63 +294,80 @@ class SearchService:
 
     def search(self, query: str, k: int = 3, hybrid: bool = True) -> list[dict]:
         try:
-            col = self.collection
-            if col.count() == 0:
+            store = self.vector_store
+            if store.count() == 0:
                 harness = self.engine._resolve_harness()
                 wiki_dir = harness / "wiki"
                 has_md_files = (wiki_dir.exists() and any(wiki_dir.glob("*.md"))) or any(harness.glob("*.md"))
                 if has_md_files:
                     import logging
                     logging.info("[OEM] Vector database is empty. Auto-indexing existing wiki concepts...")
-                    self.index_all()
+                    self.index_all(force=True)
                 else:
                     return []
 
-            candidate_count = min(col.count(), max(20, k * 4))
-            query_vec = self.embed([query])[0]
+            retrieval_mode = self.get_retrieval_mode()
+            if retrieval_mode == "hybrid":
+                # Ensure fastembed is installed
+                try:
+                    from fastembed import TextEmbedding
+                except ImportError:
+                    raise ImportError(
+                        "Hybrid search requires fastembed. Please install it with 'uv tool install oem[semantic]' "
+                        "or switch to BM25 search using 'oem config retrieval bm25'."
+                    )
 
-            results = col.query(query_embeddings=[query_vec], n_results=candidate_count)
-
-            if not results or not results["ids"] or not results["ids"][0]:
+            chunks = store.all_chunks()
+            if not chunks:
                 return []
 
-            doc_texts = results["documents"][0]
-            bm25_scores = (
-                self._compute_bm25(query, doc_texts) if hybrid else [0.0] * len(doc_texts)
-            )
+            doc_texts = [c["document"] for c in chunks]
+            bm25_scores = self._compute_bm25(query, doc_texts)
 
-            formatted = []
-            seen_ids = set()
-            for i in range(len(results["ids"][0])):
-                doc_id = results["ids"][0][i]
-                if doc_id in seen_ids:
-                    continue
-                seen_ids.add(doc_id)
-                meta = results["metadatas"][0][i]
-
-                dense = 1 - results["distances"][0][i]
-                sparse = bm25_scores[i]
-                recency = self._recency_score(meta.get("created_at", str(time.time())))
-                importance = self._importance_score(meta.get("importance", "medium"))
-
-                final = (
-                    (0.45 * dense)
-                    + (0.30 * sparse)
-                    + (0.15 * recency)
-                    + (0.10 * importance)
-                )
-
-                formatted.append(
-                    {
-                        "id": doc_id,
-                        "document": results["documents"][0][i],
+            if retrieval_mode == "hybrid":
+                query_vec = self.embed([query])[0]
+                candidates = []
+                for idx, chunk in enumerate(chunks):
+                    dense = self.cosine_similarity(query_vec, chunk["embedding"]) if chunk["embedding"] else 0.0
+                    sparse = bm25_scores[idx]
+                    meta = chunk["metadata"]
+                    recency = self._recency_score(meta.get("created_at", str(time.time())))
+                    importance = self._importance_score(meta.get("importance", "medium"))
+                    
+                    final = (
+                        (0.45 * dense)
+                        + (0.30 * sparse)
+                        + (0.15 * recency)
+                        + (0.10 * importance)
+                    )
+                    candidates.append({
+                        "id": chunk["id"],
+                        "document": chunk["document"],
                         "metadata": meta,
-                        "score": final,
-                    }
-                )
+                        "score": final
+                    })
+            else:
+                candidates = []
+                for idx, chunk in enumerate(chunks):
+                    sparse = bm25_scores[idx]
+                    meta = chunk["metadata"]
+                    recency = self._recency_score(meta.get("created_at", str(time.time())))
+                    importance = self._importance_score(meta.get("importance", "medium"))
+                    
+                    final = (
+                        (0.75 * sparse)
+                        + (0.15 * recency)
+                        + (0.10 * importance)
+                    )
+                    candidates.append({
+                        "id": chunk["id"],
+                        "document": chunk["document"],
+                        "metadata": meta,
+                        "score": final
+                    })
 
-            formatted.sort(key=lambda x: x["score"], reverse=True)
-            return formatted[:k]
+            candidates.sort(key=lambda x: x["score"], reverse=True)
+            return candidates[:k]
         except Exception as e:
             import logging
             logging.warning("Vector database search failed, falling back to registry-only: %s", e)
@@ -432,8 +515,8 @@ class SearchService:
 
     def stats(self) -> dict:
         try:
-            col = self.collection
-            total_chunks = col.count() if col is not None else 0
+            store = self.vector_store
+            total_chunks = store.count()
         except Exception:
             total_chunks = 0
         db_size = 0

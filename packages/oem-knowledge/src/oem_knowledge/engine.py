@@ -208,8 +208,6 @@ def find_all_projects(base_dir: str | Path | None = None) -> list[Path]:
 class KnowledgeEngine:
     def __init__(self, project_path: str | Path | None = None):
         self._model = None
-        self._chroma_client = None
-        self._collection = None
         self.project_path = Path(project_path).resolve() if project_path else None
         self._db_dir: Path | None = None
 
@@ -274,7 +272,16 @@ class KnowledgeEngine:
     def model(self):
         if self._model is None:
             import sys
-            from fastembed import TextEmbedding
+            try:
+                from fastembed import TextEmbedding
+            except ImportError as e:
+                import logging
+                logging.warning(
+                    "[OEM] fastembed is not installed. Hybrid search is disabled. "
+                    "Install it with 'uv tool install oem[semantic]'."
+                )
+                return None
+
             cache_path = str(Path.home() / ".cache" / "fastembed")
             try:
                 self._model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5", cache_dir=cache_path, local_files_only=True)
@@ -283,50 +290,6 @@ class KnowledgeEngine:
                 print("[OEM] Downloading model (~67 MB)...", file=sys.stderr)
                 self._model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5", cache_dir=cache_path, local_files_only=False)
         return self._model
-
-    def _validate_vector_db(self, db_path: Path) -> bool:
-        """Inline check to ensure ChromaDB is not corrupted."""
-        import chromadb
-        try:
-            client = chromadb.PersistentClient(path=str(db_path))
-            col = client.get_or_create_collection(name="oem_knowledge", metadata={"hnsw:space": "cosine"})
-            col.count()
-            return True
-        except Exception:
-            return False
-
-    @property
-    def chroma_client(self):
-        if self._chroma_client is None:
-            import chromadb
-            import shutil
-            import logging
-            db_dir = self._resolve_harness() / ".local_vector_db"
-            db_path = str(db_dir)
-            os.makedirs(db_path, exist_ok=True)
-            
-            if any(db_dir.iterdir()):
-                if not self._validate_vector_db(db_dir):
-                    logging.warning(
-                        "[OEM] Local vector database is corrupted or incompatible. Recreating clean database..."
-                    )
-                    try:
-                        shutil.rmtree(db_path)
-                    except Exception:
-                        pass
-                    os.makedirs(db_path, exist_ok=True)
-            
-            self._chroma_client = chromadb.PersistentClient(path=db_path)
-        return self._chroma_client
-
-    @property
-    def collection(self):
-        if self._collection is None:
-            self._collection = self.chroma_client.get_or_create_collection(
-                name="oem_knowledge",
-                metadata={"hnsw:space": "cosine"},
-            )
-        return self._collection
 
     def _registry_path(self, project: str | None = None) -> Path:
         h = self._resolve_harness(project)

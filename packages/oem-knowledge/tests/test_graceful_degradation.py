@@ -59,11 +59,11 @@ def test_search_fallback_registry_only(engine, tmp_path):
     wiki_doc = wiki_dir / "concept_001.md"
     wiki_doc.write_text("# Resilient Fallback Design\n\nThis is a fallback description for gracefully handling errors.\n", encoding="utf-8")
 
-    # Mock collection to raise when queries are run
-    mock_col = MagicMock()
-    mock_col.count.side_effect = RuntimeError("ChromaDB connection refused")
-    mock_col.query.side_effect = RuntimeError("ChromaDB connection refused")
-    engine._collection = mock_col
+    # Mock vector_store to raise when queries are run
+    mock_store = MagicMock()
+    mock_store.count.side_effect = RuntimeError("SQLite connection refused")
+    mock_store.all_chunks.side_effect = RuntimeError("SQLite connection refused")
+    engine.search_service._vector_store = mock_store
 
     # 1. Verify search fallback returns matching results
     results = engine.search("degradation", k=1)

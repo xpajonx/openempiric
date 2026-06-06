@@ -4,9 +4,12 @@ version = "0.9.5"
 description = "Local-first hybrid RAG knowledge layer — concept registry, knowledge events, vector search, and OEM bootstrapper"
 requires-python = ">=3.12"
 dependencies = [
-    "chromadb",
-    "fastembed",
     "fastmcp>=3.2",
+]
+
+[project.optional-dependencies]
+semantic = [
+    "fastembed",
 ]
 
 [project.scripts]

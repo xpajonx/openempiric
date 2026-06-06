@@ -200,6 +200,12 @@ def _setup_parser() -> argparse.ArgumentParser:
     migrate_p = sub.add_parser("migrate", help="Migrate legacy .harness directory to .oem format")
     migrate_p.add_argument("--project", type=str, default="")
 
+    config_p = sub.add_parser("config", help="[User] View or set configuration parameters")
+    config_sub = config_p.add_subparsers(dest="config_target", required=True)
+    config_retrieval = config_sub.add_parser("retrieval", help="View or set the retrieval mode")
+    config_retrieval.add_argument("mode", nargs="?", choices=["bm25", "hybrid"], help="Retrieval mode to set")
+    config_retrieval.add_argument("--project", type=str, default="")
+
     sub._choices_actions = [a for a in sub._choices_actions if a.help is not argparse.SUPPRESS]
     return parser
 
@@ -1096,6 +1102,15 @@ def main():
             p = Path(project or ".").resolve()
             migrate_harness_to_oem(p)
             print(render_panel("Migration Complete", [f"Legacy .harness checked and migrated for: {p}"], status="ok"))
+
+        elif args.command == "config":
+            if args.config_target == "retrieval":
+                if args.mode:
+                    eng.search_service.set_retrieval_mode(args.mode)
+                    print(render_panel("Config Updated", [f"Retrieval mode set to: '{args.mode}'"], status="ok"))
+                else:
+                    current_mode = eng.search_service.get_retrieval_mode()
+                    print(render_panel("Retrieval Config", [f"Current retrieval mode: '{current_mode}'"], status="info"))
 
         elif args.command == "metrics":
             if getattr(args, "report", False):

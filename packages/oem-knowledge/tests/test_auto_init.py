@@ -236,19 +236,15 @@ class TestCorruptedDatabaseRecovery:
         db_dir.mkdir(parents=True, exist_ok=True)
         
         # Write binary garbage to simulate a corrupted database
-        garbage_file = db_dir / "chroma.sqlite3"
+        garbage_file = db_dir / "vectors.db"
         garbage_file.write_bytes(b"\x00\xff\xee\xddgarbage_data" * 100)
         
-        # Validate that the validator detects this as corrupted
-        assert not eng._validate_vector_db(db_dir)
+        # Access vector_store, which should self-heal and return a healthy store
+        store = eng.search_service.vector_store
+        assert store is not None
         
-        # Access chroma_client, which should self-heal and return a healthy client
-        client = eng.chroma_client
-        assert client is not None
-        
-        # The collection should be accessible and count should be 0
-        col = eng.collection
-        assert col.count() == 0
+        # The store should be accessible and count should be 0
+        assert store.count() == 0
 
     def test_database_deletion_recovery_scenario(self, tmp_path):
         import shutil
@@ -282,8 +278,7 @@ class TestCorruptedDatabaseRecovery:
         shutil.rmtree(db_dir)
         
         # Reset the cached collections on eng
-        eng._chroma_client = None
-        eng._collection = None
+        eng.search_service._vector_store = None
         
         # 4 & 5. Search same concepts (should trigger auto-indexing and return the same result)
         results_after = eng.search("database deletion recovery", k=1)
