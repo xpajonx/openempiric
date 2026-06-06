@@ -35,6 +35,8 @@ tools:
 best_practices:
   - OpenEmpiric is already active for this session; do not initialize it manually.
   - Relevant project memory has been restored automatically into your context.
+  - Refer to active concepts and past failures during planning to align with existing decisions.
+  - Report referenced memory concepts at session end using the knowledge_usage_report tool.
   - Use knowledge_search when you need additional historical context.
   - Use knowledge_health_check to identify stale, duplicate, or contradictory knowledge.
   - Explicitly state decisions and rationale.
