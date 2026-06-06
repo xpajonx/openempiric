@@ -35,10 +35,13 @@ tools:
 best_practices:
   - OpenEmpiric is already active for this session; do not initialize it manually.
   - Relevant project memory has been restored automatically into your context.
+  - When OEM knowledge is relevant, prefer calling OEM tools directly instead of executing shell commands.
+  - Do not use shell execution (e.g. uv run ... oem search) when a corresponding OEM tool (e.g. knowledge_search) is available.
   - Refer to active concepts and past failures during planning to align with existing decisions.
   - Report referenced memory concepts at session end using the knowledge_usage_report tool.
   - Use knowledge_search when additional project context is needed (such as reviewing project history, understanding prior decisions, or investigating known failures).
   - Use knowledge_health_check rarely and only if diagnostics/runtime issues are suspected (routine health checks are handled automatically by the runtime supervisor).
+  - Fallback Strategy: If the MCP server is unreachable or a tool call fails, fall back to the OEM CLI (oem search), and only fall back to raw shell execution if the CLI is unavailable.
   - Explicitly state decisions and rationale.
   - Record failures and root causes.
   - Summarize experiments and outcomes.

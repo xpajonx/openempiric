@@ -114,20 +114,31 @@ def test_doctor_cmd(tmp_proj):
     venv = Path(tmp_proj) / ".venv"
     venv.mkdir()
 
-    # Call main with doctor
-    with patch.object(sys, "argv", ["oem", "doctor", "--project", tmp_proj]):
-        try:
-            main()
-        except SystemExit as e:
-            assert e.code == 0 or e.code is None
+    temp_home = tempfile.mkdtemp()
+    try:
+        with patch("pathlib.Path.home", return_value=Path(temp_home)):
+            with patch("oem_knowledge.cli.check_mcp_server", return_value=(True, True, 5, "")):
+                # Run setup first to ensure configuration is present
+                with patch.object(sys, "argv", ["oem", "setup", "opencode"]):
+                    main()
 
-    # Now create nested venv and assert it exits with error (code 1)
-    packages_dir = Path(tmp_proj) / "packages"
-    sub_package = packages_dir / "oem-knowledge"
-    sub_venv = sub_package / ".venv"
-    sub_venv.mkdir(parents=True)
+                # Call main with doctor
+                with patch.object(sys, "argv", ["oem", "doctor", "--project", tmp_proj]):
+                    try:
+                        main()
+                    except SystemExit as e:
+                        assert e.code == 0 or e.code is None
 
-    with patch.object(sys, "argv", ["oem", "doctor", "--project", tmp_proj]):
-        with pytest.raises(SystemExit) as exc:
-            main()
-        assert exc.value.code == 1
+                # Now create nested venv and assert it exits with error (code 1)
+                packages_dir = Path(tmp_proj) / "packages"
+                sub_package = packages_dir / "oem-knowledge"
+                sub_venv = sub_package / ".venv"
+                sub_venv.mkdir(parents=True)
+
+                with patch.object(sys, "argv", ["oem", "doctor", "--project", tmp_proj]):
+                    with pytest.raises(SystemExit) as exc:
+                        main()
+                    assert exc.value.code == 1
+    finally:
+        shutil.rmtree(temp_home)
+

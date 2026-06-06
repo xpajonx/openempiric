@@ -49,10 +49,12 @@ def test_setup_opencode_basic(temp_home, tmp_proj):
     assert "OpenEmpiric is already active for this session" in inst_content
     assert "knowledge_session_start" not in inst_content
 
-    # Check opencode.jsonc registers instructions path
+    # Check opencode.jsonc registers instructions path and MCP server
     assert jsonc_file.exists()
     config_data = json.loads(jsonc_file.read_text(encoding="utf-8"))
     assert str(inst_file.resolve()) in config_data["instructions"]
+    assert "openempiric" in config_data.get("mcp", {})
+    assert config_data["mcp"]["openempiric"]["command"] in ("oem", "uv")
 
 
 def test_setup_opencode_idempotency(temp_home, tmp_proj):
@@ -133,26 +135,27 @@ def test_doctor_integration_diagnostics(temp_home, tmp_proj):
     with patch("pathlib.Path.home", return_value=temp_home):
         with patch("oem_knowledge.cli.shutil.which", return_value="/mock/bin"):
             with patch("oem_knowledge.engine.EventMigrator.get_schema_status", return_value={"status": "up_to_date", "message": "OK"}):
-                with patch("oem_knowledge.adapters.get_adapter") as mock_adapter:
-                    mock_adapter.return_value.verify_mcp.return_value = True
-                    
-                    # 1. Initially integration files are missing, doctor should still exit 0/None because workstation checks are warnings
-                    with patch.object(sys, "argv", ["oem", "doctor", "--project", tmp_proj]):
-                        try:
-                            main()
-                        except SystemExit as exc:
-                            assert exc.code == 0 or exc.code is None
+                with patch("oem_knowledge.cli.check_mcp_server", return_value=(True, True, 19, "")):
+                    with patch("oem_knowledge.adapters.get_adapter") as mock_adapter:
+                        mock_adapter.return_value.verify_mcp.return_value = True
+                        
+                        # 1. Initially integration files are missing, doctor should still exit 0/None because workstation checks are warnings
+                        with patch.object(sys, "argv", ["oem", "doctor", "--project", tmp_proj]):
+                            try:
+                                main()
+                            except SystemExit as exc:
+                                assert exc.code == 0 or exc.code is None
 
-                    # 2. Perform setup
-                    with patch.object(sys, "argv", ["oem", "setup", "opencode"]):
-                        main()
-
-                    # 3. Running doctor after setup should also succeed
-                    with patch.object(sys, "argv", ["oem", "doctor", "--project", tmp_proj]):
-                        try:
+                        # 2. Perform setup
+                        with patch.object(sys, "argv", ["oem", "setup", "opencode"]):
                             main()
-                        except SystemExit as exc:
-                            assert exc.code == 0 or exc.code is None
+
+                        # 3. Running doctor after setup should also succeed
+                        with patch.object(sys, "argv", ["oem", "doctor", "--project", tmp_proj]):
+                            try:
+                                main()
+                            except SystemExit as exc:
+                                assert exc.code == 0 or exc.code is None
 
 
 def test_setup_opencode_config_merge(temp_home, tmp_proj):
@@ -189,6 +192,8 @@ def test_setup_opencode_config_merge(temp_home, tmp_proj):
     cleaned = re.sub(r'("(?:\\.|[^"\\])*")|//[^\r\n]*|/\*[\s\S]*?\*/', lambda m: m.group(1) if m.group(1) else "", text)
     data = json.loads(cleaned)
     assert data["mcp"]["github"]["key"] == "val"
+    assert "openempiric" in data.get("mcp", {})
+    assert data["mcp"]["openempiric"]["command"] in ("oem", "uv")
     assert data["model"] == "gpt-4"
     assert len(data["instructions"]) == 1
 
@@ -276,5 +281,24 @@ def test_setup_opencode_url_slashes_preservation(temp_home, tmp_proj):
             
     text = jsonc_file.read_text(encoding="utf-8")
     assert "https://opencode.ai/config.json" in text
+
+
+def test_setup_opencode_tool_enumeration():
+    import asyncio
+    from fastmcp import FastMCP
+    from oem_knowledge.server import mount_tools
+    mcp = FastMCP("openempiric")
+    mount_tools(mcp)
+    
+    tools = asyncio.run(mcp.list_tools())
+    tool_names = [t.name for t in tools]
+    assert "knowledge_search" in tool_names
+    assert "knowledge_explain_concept" in tool_names
+    assert "knowledge_graph_query" in tool_names
+    assert "knowledge_health_check" in tool_names
+    assert "knowledge_stats" in tool_names
+    assert "oem_todo_read" in tool_names
+    assert "knowledge_usage_report" in tool_names
+
 
 

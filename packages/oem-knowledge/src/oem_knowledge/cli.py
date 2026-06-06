@@ -42,6 +42,188 @@ def _strip_jsonc_comments(text: str) -> str:
     return pattern.sub(lambda m: m.group(1) if m.group(1) else "", text)
 
 
+def _update_jsonc_mcp(original_text: str, mcp_config: dict) -> str:
+    cleaned = _strip_jsonc_comments(original_text)
+    config_data = json.loads(cleaned, strict=False)
+    
+    # Identify spans of all comments
+    comment_spans = []
+    for m_comment in re.finditer(r'//[^\r\n]*|/\*[\s\S]*?\*/', original_text):
+        comment_spans.append(m_comment.span())
+    
+    def in_comment(pos):
+        return any(start <= pos < end for start, end in comment_spans)
+        
+    # Check if config already has correct MCP config
+    existing_mcp = config_data.get("mcp", {}).get("openempiric")
+    if existing_mcp == mcp_config:
+        return original_text
+        
+    new_text = original_text
+    
+    # 1. Find "mcp" key
+    match_mcp = None
+    for m in re.finditer(r'"mcp"\s*:\s*\{', original_text):
+        if not in_comment(m.start()):
+            match_mcp = m
+            break
+            
+    if match_mcp:
+        # "mcp" key exists, look for "openempiric"
+        has_oe = "openempiric" in config_data.get("mcp", {})
+        if has_oe:
+            # Replace existing "openempiric" config
+            match_oe = None
+            for m in re.finditer(r'"openempiric"\s*:\s*\{', original_text):
+                if not in_comment(m.start()):
+                    match_oe = m
+                    break
+            if match_oe:
+                start_pos = match_oe.start()
+                brace_start = original_text.find('{', match_oe.end())
+                if brace_start != -1:
+                    depth = 1
+                    brace_end = -1
+                    for idx in range(brace_start + 1, len(original_text)):
+                        if original_text[idx] == '{':
+                            depth += 1
+                        elif original_text[idx] == '}':
+                            depth -= 1
+                            if depth == 0:
+                                brace_end = idx
+                                break
+                    if brace_end != -1:
+                        serialized_oe = f'"openempiric": {json.dumps(mcp_config, indent=4).replace("\n", "\n    ")}'
+                        new_text = original_text[:start_pos] + serialized_oe + original_text[brace_end + 1:]
+        else:
+            # Insert "openempiric" at the start of the "mcp" object
+            pos = match_mcp.end()
+            serialized_oe = f'\n    "openempiric": {json.dumps(mcp_config, indent=4).replace("\n", "\n    ")},'
+            new_text = original_text[:pos] + serialized_oe + original_text[pos:]
+    else:
+        # "mcp" key does not exist. Append it before the last closing brace
+        r_pos = original_text.rfind('}')
+        if r_pos != -1:
+            before_brace = original_text[:r_pos]
+            last_char_match = re.search(r'\S\s*$', before_brace)
+            comma = ""
+            if last_char_match:
+                last_char = last_char_match.group(0).strip()
+                if last_char not in ("{", ",", "["):
+                    comma = ","
+            mcp_serialized = json.dumps({"openempiric": mcp_config}, indent=4).replace("\n", "\n  ")
+            new_entry = f'{comma}\n  "mcp": {mcp_serialized}\n'
+            new_text = original_text[:r_pos] + new_entry + original_text[r_pos:]
+            
+    return new_text
+
+
+def check_mcp_server(command: list[str]) -> tuple[bool, bool, int, str]:
+    """Test standard I/O MCP server reachability and functionality.
+
+    Returns:
+        (reachable, functional, num_tools, error_message)
+    """
+    import select
+    
+    try:
+        proc = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1
+        )
+        
+        # 1. Reachability check: Send initialize
+        init_req = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "oem-doctor", "version": "1.0"}
+            }
+        }
+        proc.stdin.write(json.dumps(init_req) + "\n")
+        proc.stdin.flush()
+        
+        ready = select.select([proc.stdout], [], [], 3.0)
+        if not ready[0]:
+            proc.kill()
+            return False, False, 0, "Timeout waiting for initialize response"
+            
+        init_resp_line = proc.stdout.readline()
+        if not init_resp_line:
+            proc.kill()
+            return False, False, 0, "Empty response on initialize"
+            
+        # 2. Tool count check: Send tools/list
+        tools_req = {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/list"
+        }
+        proc.stdin.write(json.dumps(tools_req) + "\n")
+        proc.stdin.flush()
+        
+        ready = select.select([proc.stdout], [], [], 3.0)
+        if not ready[0]:
+            proc.kill()
+            return True, False, 0, "Timeout waiting for tools/list response"
+            
+        tools_resp_line = proc.stdout.readline()
+        if not tools_resp_line:
+            proc.kill()
+            return True, False, 0, "Empty response on tools/list"
+            
+        tools_resp = json.loads(tools_resp_line)
+        if "error" in tools_resp:
+            proc.kill()
+            return True, False, 0, f"Error from tools/list: {tools_resp['error']}"
+            
+        tools_list = tools_resp.get("result", {}).get("tools", [])
+        num_tools = len(tools_list)
+        
+        # 3. Functional check: Send call tool knowledge_stats
+        call_req = {
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {
+                "name": "knowledge_stats",
+                "arguments": {}
+            }
+        }
+        proc.stdin.write(json.dumps(call_req) + "\n")
+        proc.stdin.flush()
+        
+        ready = select.select([proc.stdout], [], [], 3.0)
+        if not ready[0]:
+            proc.kill()
+            return True, False, num_tools, "Timeout waiting for tool call response"
+            
+        call_resp_line = proc.stdout.readline()
+        proc.kill()
+        
+        if not call_resp_line:
+            return True, False, num_tools, "Empty response on tool call"
+            
+        call_resp = json.loads(call_resp_line)
+        if "error" in call_resp:
+            return True, False, num_tools, f"Error calling knowledge_stats: {call_resp['error']}"
+            
+        content = call_resp.get("result", {}).get("content", [])
+        if not content:
+            return True, False, num_tools, "No content returned from knowledge_stats call"
+            
+        return True, True, num_tools, ""
+    except Exception as e:
+        return False, False, 0, str(e)
+
+
 def _resolve_project(args) -> str | None:
     """Normalise --project: ``""`` or ``"."`` → ``None`` (cwd)."""
     raw = getattr(args, "project", None)
@@ -206,6 +388,8 @@ def _setup_parser() -> argparse.ArgumentParser:
     config_retrieval.add_argument("mode", nargs="?", choices=["bm25", "hybrid"], help="Retrieval mode to set")
     config_retrieval.add_argument("--project", type=str, default="")
 
+    sub.add_parser("mcp", help="Start the MCP tool server")
+
     sub._choices_actions = [a for a in sub._choices_actions if a.help is not argparse.SUPPRESS]
     return parser
 
@@ -286,7 +470,13 @@ def cmd_setup_opencode(repair: bool = False) -> None:
             "## OpenEmpiric Session Status\n\n"
             "OpenEmpiric is already active for this session.\n\n"
             "Relevant project memory has been restored automatically.\n\n"
-            "Use OEM search when additional project context is needed (such as reviewing project history, understanding prior decisions, or investigating known failures). Diagnostics (doctor/health) are automatically managed by the runtime supervisor and should only be run manually when troubleshooting the integration itself.\n"
+            "### Tool Usage Guidelines:\n"
+            "- **Prefer calling OEM MCP tools directly** (e.g. `knowledge_search`) instead of executing shell commands (e.g. running `oem search` or `uv run ... oem search` in bash).\n"
+            "- **Do not use shell execution** when a corresponding OEM tool is available.\n"
+            "- Refer to active concepts and past failures during planning to align with existing decisions.\n"
+            "- Report referenced memory concepts at session end using the `knowledge_usage_report` tool.\n"
+            "- Use `knowledge_search` when additional project context is needed (such as reviewing project history, understanding prior decisions, or investigating known failures).\n"
+            "- **Fallback Strategy**: If the MCP server is unreachable or a tool call fails, fall back to the OEM CLI (`oem search`), and only fall back to raw shell execution if the CLI is unavailable.\n"
         )
         if should_write_inst:
             inst_dest.write_text(inst_content, encoding="utf-8")
@@ -300,10 +490,48 @@ def cmd_setup_opencode(repair: bool = False) -> None:
     config_verified = False
     try:
         inst_path_str = str(inst_dest.resolve())
+        
+        # Determine if dev workspace
+        is_dev_workspace = False
+        workspace_root = Path.cwd()
+        while workspace_root.parent != workspace_root:
+            pyproject_path = workspace_root / "pyproject.toml"
+            if pyproject_path.exists():
+                try:
+                    content = pyproject_path.read_text(encoding="utf-8")
+                    if 'name = "oem-mcp"' in content:
+                        is_dev_workspace = True
+                        break
+                except Exception:
+                    pass
+            workspace_root = workspace_root.parent
+
+        if is_dev_workspace:
+            mcp_config = {
+                "type": "local",
+                "command": "uv",
+                "args": [
+                    "run",
+                    "--directory",
+                    str(workspace_root.resolve()),
+                    "python",
+                    "-m",
+                    "oem_knowledge.server"
+                ],
+                "enabled": True,
+                "timeout": 60000
+            }
+        else:
+            mcp_config = {
+                "type": "local",
+                "command": "oem",
+                "args": ["mcp"],
+                "enabled": True,
+                "timeout": 60000
+            }
+
         if jsonc_file.exists():
             original_text = jsonc_file.read_text(encoding="utf-8")
-            
-            # Clean comments only for JSON parsing validation
             cleaned = _strip_jsonc_comments(original_text)
             
             try:
@@ -313,10 +541,13 @@ def cmd_setup_opencode(repair: bool = False) -> None:
                 print("Aborting setup to prevent configuration loss. Please repair or validate your config file manually.")
                 sys.exit(1)
             
-            # Check if inst_path_str is already in the list
             inst_list = config_data.get("instructions", [])
-            if inst_path_str in inst_list:
-                # Idempotent case: path already present. No modification needed, preserving formatting completely.
+            existing_mcp = config_data.get("mcp", {}).get("openempiric")
+            
+            need_inst_change = inst_path_str not in inst_list
+            need_mcp_change = existing_mcp != mcp_config
+            
+            if not need_inst_change and not need_mcp_change:
                 config_verified = True
             else:
                 # Backup the file before writing
@@ -325,57 +556,57 @@ def cmd_setup_opencode(repair: bool = False) -> None:
                 backup_file = jsonc_file.with_name(f"opencode.jsonc.backup-{timestamp}")
                 shutil.copy2(jsonc_file, backup_file)
                 
-                # Perform comment-preserving string insertion
                 new_text = original_text
                 
-                # Identify spans of all comments to avoid matching keys within comments
-                comment_spans = []
-                for m_comment in re.finditer(r'//[^\r\n]*|/\*[\s\S]*?\*/', original_text):
-                    comment_spans.append(m_comment.span())
-                
-                def in_comment(pos):
-                    return any(start <= pos < end for start, end in comment_spans)
-                
-                # Find "instructions" key in the original file, ignoring comments
-                match = None
-                for m_inst in re.finditer(r'"instructions"\s*:\s*\[', original_text):
-                    if not in_comment(m_inst.start()):
-                        match = m_inst
-                        break
-                
-                if match:
-                    pos = match.end()
-                    # Check if array is empty
-                    rest = original_text[pos:]
-                    next_char_match = re.search(r'\S', rest)
-                    if next_char_match and next_char_match.group(0) == ']':
-                        new_text = original_text[:pos] + f'\n    "{inst_path_str}"\n  ' + original_text[pos:]
+                # 1. Update instructions path if needed
+                if need_inst_change:
+                    comment_spans = []
+                    for m_comment in re.finditer(r'//[^\r\n]*|/\*[\s\S]*?\*/', new_text):
+                        comment_spans.append(m_comment.span())
+                    
+                    def in_comment(pos):
+                        return any(start <= pos < end for start, end in comment_spans)
+                    
+                    match = None
+                    for m_inst in re.finditer(r'"instructions"\s*:\s*\[', new_text):
+                        if not in_comment(m_inst.start()):
+                            match = m_inst
+                            break
+                    
+                    if match:
+                        pos = match.end()
+                        rest = new_text[pos:]
+                        next_char_match = re.search(r'\S', rest)
+                        if next_char_match and next_char_match.group(0) == ']':
+                            new_text = new_text[:pos] + f'\n    "{inst_path_str}"\n  ' + new_text[pos:]
+                        else:
+                            new_text = new_text[:pos] + f'\n    "{inst_path_str}",' + new_text[pos:]
                     else:
-                        new_text = original_text[:pos] + f'\n    "{inst_path_str}",' + original_text[pos:]
-                else:
-                    # Append "instructions" to the end of the JSON object before the last closing brace
-                    r_pos = original_text.rfind('}')
-                    if r_pos != -1:
-                        before_brace = original_text[:r_pos]
-                        last_char_match = re.search(r'\S\s*$', before_brace)
-                        comma = ""
-                        if last_char_match:
-                            last_char = last_char_match.group(0).strip()
-                            if last_char not in ("{", ",", "["):
-                                comma = ","
-                        new_entry = f'{comma}\n  "instructions": [\n    "{inst_path_str}"\n  ]\n'
-                        new_text = original_text[:r_pos] + new_entry + original_text[r_pos:]
-                    else:
-                        # Fallback if closing brace not found
-                        config_data.setdefault("instructions", []).append(inst_path_str)
-                        new_text = json.dumps(config_data, indent=2)
+                        r_pos = new_text.rfind('}')
+                        if r_pos != -1:
+                            before_brace = new_text[:r_pos]
+                            last_char_match = re.search(r'\S\s*$', before_brace)
+                            comma = ""
+                            if last_char_match:
+                                last_char = last_char_match.group(0).strip()
+                                if last_char not in ("{", ",", "["):
+                                    comma = ","
+                            new_entry = f'{comma}\n  "instructions": [\n    "{inst_path_str}"\n  ]\n'
+                            new_text = new_text[:r_pos] + new_entry + new_text[r_pos:]
+                
+                # 2. Update mcp server registration if needed
+                if need_mcp_change:
+                    new_text = _update_jsonc_mcp(new_text, mcp_config)
                 
                 jsonc_file.write_text(new_text, encoding="utf-8")
                 config_verified = True
         else:
-            # File doesn't exist, create a new simple config
+            # File doesn't exist, create a new config with both fields
             config_data = {
-                "instructions": [inst_path_str]
+                "instructions": [inst_path_str],
+                "mcp": {
+                    "openempiric": mcp_config
+                }
             }
             jsonc_file.write_text(json.dumps(config_data, indent=2), encoding="utf-8")
             config_verified = True
@@ -989,6 +1220,10 @@ def main():
             if args.setup_target == "opencode":
                 cmd_setup_opencode(repair=args.repair)
 
+        elif args.command == "mcp":
+            from oem_knowledge.server import main as run_server
+            run_server()
+
 
         elif args.command == "todo":
             from oem_knowledge.tools.todos import oem_todo_read, oem_todo_write, oem_todo_advance
@@ -1420,6 +1655,8 @@ def main():
                     lines.append(f"⚠ Failed to read memory-start.md instructions: {e}")
 
             # Check config
+            mcp_registered = False
+            mcp_cmd = []
             if not jsonc_file.exists():
                 lines.append("⚠ OpenCode Config missing (missing opencode.jsonc) — run 'oem setup opencode'")
             else:
@@ -1433,8 +1670,38 @@ def main():
                         lines.append("⚠ OpenCode Config does not register memory-start.md instruction — run 'oem setup opencode'")
                     else:
                         lines.append("✓ OpenCode Config verified")
+
+                    mcp_config = config_data.get("mcp", {}).get("openempiric")
+                    if mcp_config:
+                        mcp_registered = True
+                        cmd = mcp_config.get("command")
+                        args = mcp_config.get("args", [])
+                        if isinstance(cmd, str):
+                            mcp_cmd = [cmd] + args
+                        elif isinstance(cmd, list):
+                            mcp_cmd = cmd + args
+                        lines.append("✓ OEM MCP Server registered in OpenCode config")
+                    else:
+                        lines.append("✗ OEM MCP Server not registered in OpenCode config — run 'oem setup opencode'")
+                        status = "error"
                 except Exception as e:
                     lines.append(f"⚠ OpenCode Config validation failed: {e} — run 'oem setup opencode'")
+                    status = "error"
+
+            # Check MCP Server Reachability and Functionality
+            if mcp_registered and mcp_cmd:
+                reachable, functional, num_tools, err = check_mcp_server(mcp_cmd)
+                if reachable:
+                    lines.append("✓ OEM MCP Server reachable")
+                    if functional:
+                        lines.append("✓ OEM MCP Server functional (stats call succeeded)")
+                    else:
+                        lines.append(f"✗ OEM MCP Server functional check failed: {err}")
+                        status = "error"
+                    lines.append(f"✓ {num_tools} tools available")
+                else:
+                    lines.append(f"✗ OEM MCP Server unreachable: {err}")
+                    status = "error"
 
             # 5. Events log schema version check
             try:

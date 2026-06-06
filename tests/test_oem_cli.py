@@ -95,8 +95,18 @@ def test_oem_run(tmp_proj):
 
 def test_oem_doctor_user_project(tmp_proj):
     """Verify that 'oem doctor' succeeds (exits 0) when run in a user project directory."""
-    with patch.object(sys, "argv", ["oem", "doctor", "--project", tmp_proj]):
-        try:
-            main()
-        except SystemExit as e:
-            assert e.code == 0 or e.code is None
+    temp_home = tempfile.mkdtemp()
+    try:
+        with patch("pathlib.Path.home", return_value=Path(temp_home)):
+            with patch("oem_knowledge.cli.check_mcp_server", return_value=(True, True, 19, "")):
+                # Run setup first
+                with patch.object(sys, "argv", ["oem", "setup", "opencode"]):
+                    main()
+                # Run doctor
+                with patch.object(sys, "argv", ["oem", "doctor", "--project", tmp_proj]):
+                    try:
+                        main()
+                    except SystemExit as e:
+                        assert e.code == 0 or e.code is None
+    finally:
+        shutil.rmtree(temp_home)

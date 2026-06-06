@@ -372,6 +372,224 @@ def mount_tools(mcp: object) -> None:
             status="error" if res.get("broken_links") else "ok",
         )
 
+    @mcp.tool()
+    def knowledge_search(query: str, k: int = 3, project: str = "") -> str:
+        """Fast lookup and term-based search across concepts.
+
+        Args:
+            query: Search query
+            k: Number of results to return. Defaults to 3.
+            project: Project directory path. Defaults to current directory.
+        """
+        eng = KnowledgeEngine(project or None)
+        try:
+            results = eng.search.search(query, k=k)
+        except Exception as e:
+            return render_panel("Search Failure", [f"Error: {e}"], status="error")
+
+        if not results:
+            return render_panel(f"Search: 0 results", [f"No matches for: '{query}'"], status="search")
+
+        lines = [f"Query: \"{query}\"", f"Results: {len(results)}", ""]
+        for idx, r in enumerate(results):
+            meta = r.get("metadata", {})
+            rel_path = meta.get("file_path", "")
+            if rel_path:
+                try:
+                    rel_path = str(Path(rel_path).relative_to(Path(project or ".")))
+                except ValueError:
+                    rel_path = Path(rel_path).name
+            else:
+                rel_path = r.get("id", "unknown")
+
+            doc_text = r.get("document", "")
+            snippet = doc_text.split("\n")[0][:150] if doc_text else "No content available."
+            score = r.get("score", 0.0)
+
+            lines.append(f"{idx + 1}. [{rel_path}] (score: {score:.4f})")
+            lines.append(f"   {snippet}...")
+            lines.append("")
+
+        return render_panel("Knowledge Search Results", lines, status="search")
+
+    @mcp.tool()
+    def knowledge_health_check(
+        stale_sessions: int = 5, similarity_threshold: float = 0.85, project: str = ""
+    ) -> str:
+        """Scan the knowledge base for stale concepts, duplicate concepts (merge proposals), and architectural contradictions.
+
+        Args:
+            stale_sessions: Number of sessions threshold to consider a concept stale. Defaults to 5.
+            similarity_threshold: Similarity threshold to propose merges. Defaults to 0.85.
+            project: Project directory path. Defaults to current directory.
+        """
+        eng = KnowledgeEngine(project or None)
+        try:
+            stale = eng.state.detect_stale_concepts(stale_sessions, project or None)
+            merges = eng.propose_merges(similarity_threshold, project or None)
+            conflicts = eng.detect_contradictions(project or None)
+        except Exception as e:
+            return render_panel("Health Check Failure", [f"Error: {e}"], status="error")
+
+        lines = []
+        
+        # Stale concepts section
+        lines.append("Stale Concepts:")
+        if stale:
+            for s in stale:
+                lines.append(f"  ○ {s['canonical_name']} ({s['concept_id']}) - untouched for {s['sessions_since_reference']} sessions")
+        else:
+            lines.append("  None")
+        lines.append("")
+        
+        # Merge proposals section
+        lines.append("Duplicate Merge Proposals:")
+        if merges:
+            for m in merges:
+                lines.append(f"  ✦ Suggest merging {m['secondary_name']} ({m['secondary_id']}) into {m['primary_name']} ({m['primary_id']})")
+                lines.append(f"    Reason: {m['reason']}")
+        else:
+            lines.append("  None")
+        lines.append("")
+        
+        # Contradictions section
+        lines.append("Contradictions Detected:")
+        if conflicts:
+            for c in conflicts:
+                lines.append(f"  ✗ Conflict between {c['name_a']} ({c['concept_a']}) and {c['name_b']} ({c['concept_b']})")
+                lines.append(f"    Description: {c['description']}")
+        else:
+            lines.append("  None")
+            
+        return render_panel("Knowledge Health Scan", lines, status="stats")
+
+    @mcp.tool()
+    def knowledge_stats(project: str = "") -> str:
+        """Show oem/ knowledge statistics.
+
+        Args:
+            project: Project directory path. Defaults to current directory.
+        """
+        eng = KnowledgeEngine(project or None)
+        try:
+            registry = eng.state._load_registry(project or None)
+            harness = eng._resolve_harness(project or None)
+            db_path = harness / ".local_vector_db"
+            db_size = 0
+            if db_path.exists():
+                def get_files_size(p: Path) -> int:
+                    if p.is_file():
+                        return p.stat().st_size
+                    elif p.is_dir():
+                        return sum(get_files_size(f) for f in p.iterdir())
+                    return 0
+                db_size = get_files_size(db_path)
+
+            lines = [
+                f"Total Concepts:       {len(registry)}",
+                f"Vector DB Size:       {(db_size / (1024 * 1024)):.2f} MB",
+                f"OEM Path:             {harness}"
+            ]
+            return render_panel("Knowledge Stats", lines, status="stats")
+        except Exception as e:
+            return render_panel("Stats Failure", [f"Error: {e}"], status="error")
+
+    @mcp.tool()
+    def knowledge_explain_concept(concept_id: str, project: str = "") -> str:
+        """Explain a concept and its details from the registry.
+
+        Args:
+            concept_id: Concept ID (e.g. concept_001)
+            project: Project directory path. Defaults to current directory.
+        """
+        eng = KnowledgeEngine(project or None)
+        try:
+            registry = eng.state._load_registry(project or None)
+            cdata = registry.get(concept_id)
+            if not cdata:
+                return render_panel("Concept Not Found", [f"Concept {concept_id} not in registry."], status="error")
+
+            harness = eng._resolve_harness(project or None)
+            wiki_file = harness / "wiki" / f"{concept_id}.md"
+            recent_evidence = []
+            if wiki_file.exists():
+                content = wiki_file.read_text(encoding="utf-8")
+                import re
+                ev_match = re.search(r"## Learnings.*?\n([\s\S]*)", content)
+                if ev_match and ev_match.group(1):
+                    recent_evidence = [
+                        line.strip().lstrip("-").strip()
+                        for line in ev_match.group(1).split("\n")
+                        if line.strip().startswith("-")
+                    ]
+
+            lines = [
+                f"Concept: {cdata.get('canonical_name', '').replace('-', ' ').upper()} ({concept_id})",
+                f"Status: {cdata.get('status', '').upper()}",
+                f"Confidence: {cdata.get('confidence', 1)}/5",
+                f"Aliases: {', '.join(cdata.get('aliases', []))}",
+                "",
+                "Recent Evidence:"
+            ]
+            if recent_evidence:
+                lines.extend(f"  - {e}" for e in recent_evidence)
+            else:
+                lines.append("  - None")
+
+            return render_panel("Concept Explanation", lines, status="ok")
+        except Exception as e:
+            return render_panel("Explanation Failure", [f"Error: {e}"], status="error")
+
+    @mcp.tool()
+    def knowledge_graph_query(concept_id: str, direction: str = "both", project: str = "") -> str:
+        """Query semantic relationships for a concept.
+
+        Args:
+            concept_id: Target concept ID
+            direction: incoming, outgoing, or both. Defaults to both.
+            project: Project directory path. Defaults to current directory.
+        """
+        eng = KnowledgeEngine(project or None)
+        try:
+            registry = eng.state._load_registry(project or None)
+            cdata = registry.get(concept_id)
+            if not cdata:
+                return render_panel("Query Error", [f"Concept {concept_id} not found."], status="error")
+
+            lines = [
+                f"Concept: {cdata.get('canonical_name', '').replace('-', ' ').upper()} ({concept_id})",
+                ""
+            ]
+
+            if direction in ("outgoing", "both"):
+                lines.append("Outgoing Relationships:")
+                relationships = cdata.get("relationships", [])
+                for r in relationships:
+                    target_id = r.get("target")
+                    target_name = registry.get(target_id, {}).get("canonical_name") or target_id
+                    lines.append(f"  - [{r.get('type')}] -> {target_name} ({target_id})")
+                if not relationships:
+                    lines.append("  - None")
+                lines.append("")
+
+            if direction in ("incoming", "both"):
+                lines.append("Incoming Relationships:")
+                incoming_count = 0
+                for cid, data in registry.items():
+                    if cid == concept_id:
+                        continue
+                    relationships = data.get("relationships", [])
+                    for r in relationships:
+                        if r.get("target") == concept_id:
+                            lines.append(f"  - {data.get('canonical_name')} ({cid}) -> [{r.get('type')}]")
+                            incoming_count += 1
+                if incoming_count == 0:
+                    lines.append("  - None")
+
+            return render_panel("Graph Query Results", lines, status="ok")
+        except Exception as e:
+            return render_panel("Query Failure", [f"Error: {e}"], status="error")
+
 
 def main() -> None:
     from fastmcp import FastMCP
