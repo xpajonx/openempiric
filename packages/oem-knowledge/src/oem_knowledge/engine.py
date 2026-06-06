@@ -276,12 +276,13 @@ class KnowledgeEngine:
         if self._model is None:
             import sys
             from fastembed import TextEmbedding
+            cache_path = str(Path.home() / ".cache" / "fastembed")
             try:
-                self._model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5", local_files_only=True)
+                self._model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5", cache_dir=cache_path, local_files_only=True)
             except Exception:
                 print("\n[OEM] Embedding model 'BAAI/bge-small-en-v1.5' not found in cache.", file=sys.stderr)
                 print("[OEM] Downloading model (~67 MB)...", file=sys.stderr)
-                self._model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5", local_files_only=False)
+                self._model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5", cache_dir=cache_path, local_files_only=False)
         return self._model
 
     def _validate_vector_db(self, db_path: Path) -> bool:
@@ -642,7 +643,8 @@ except Exception:
         """Warm up embedding model if not already cached/loaded."""
         try:
             from fastembed import TextEmbedding
-            TextEmbedding(model_name="BAAI/bge-small-en-v1.5", local_files_only=True)
+            cache_path = str(Path.home() / ".cache" / "fastembed")
+            TextEmbedding(model_name="BAAI/bge-small-en-v1.5", cache_dir=cache_path, local_files_only=True)
             return {"status": "success", "cached": True}
         except Exception:
             return self.warmup()

@@ -1466,7 +1466,8 @@ def main():
             # 8. Embedding Cache Ready check
             try:
                 from fastembed import TextEmbedding
-                TextEmbedding(model_name="BAAI/bge-small-en-v1.5", local_files_only=True)
+                cache_path = str(Path.home() / ".cache" / "fastembed")
+                TextEmbedding(model_name="BAAI/bge-small-en-v1.5", cache_dir=cache_path, local_files_only=True)
                 lines.append("✓ Embedding Cache Ready")
             except Exception:
                 lines.append("✗ Embedding Cache not ready")
