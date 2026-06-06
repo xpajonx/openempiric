@@ -452,7 +452,13 @@ class KnowledgeEngine:
     def warmup(self) -> dict:
         import sys
         print("[OEM] Warming up embedding model 'BAAI/bge-small-en-v1.5'...", file=sys.stderr)
-        _ = self.model
+        model = self.model
+        if model is None:
+            print("[OEM] Warmup failed: fastembed is not installed.", file=sys.stderr)
+            return {
+                "status": "error",
+                "message": "fastembed is not installed. Install it with 'uv tool install oem[semantic]'.",
+            }
         print("[OEM] Embedding model ready (cached globally, one-time per machine).", file=sys.stderr)
         return {"status": "success", "model": "BAAI/bge-small-en-v1.5"}
 

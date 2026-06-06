@@ -110,3 +110,27 @@ def test_oem_doctor_user_project(tmp_proj):
                         assert e.code == 0 or e.code is None
     finally:
         shutil.rmtree(temp_home)
+
+
+def test_oem_warmup_failure(tmp_proj):
+    """Verify that 'oem warmup' fails with exit code 1 when fastembed is not installed."""
+    from unittest.mock import PropertyMock
+    with patch("oem_knowledge.engine.KnowledgeEngine.model", new_callable=PropertyMock) as mock_model:
+        mock_model.return_value = None
+        with patch.object(sys, "argv", ["oem", "warmup", "--project", tmp_proj]):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+            assert exc_info.value.code == 1
+
+
+def test_oem_warmup_success(tmp_proj):
+    """Verify that 'oem warmup' succeeds (exits 0 or completes) when fastembed is installed."""
+    from unittest.mock import PropertyMock, MagicMock
+    with patch("oem_knowledge.engine.KnowledgeEngine.model", new_callable=PropertyMock) as mock_model:
+        mock_model.return_value = MagicMock()
+        with patch.object(sys, "argv", ["oem", "warmup", "--project", tmp_proj]):
+            try:
+                main()
+            except SystemExit as e:
+                assert e.code == 0 or e.code is None
+

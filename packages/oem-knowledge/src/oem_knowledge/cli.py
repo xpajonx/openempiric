@@ -1633,6 +1633,20 @@ def main():
                         print(render_panel("Metrics Error", [f"Failed to read metrics: {e}"], status="error"))
         elif args.command == "warmup":
             res = eng.warmup()
+            if res.get("status") == "error":
+                print(
+                    render_panel(
+                        "Model Warm-Up Failed",
+                        [
+                            f"Status: {res.get('status')}",
+                            f"Error: {res.get('message')}",
+                            "",
+                            "Please resolve the issue and try again.",
+                        ],
+                        status="error",
+                    )
+                )
+                sys.exit(1)
             print(render_panel("Model Warm-Up", [f"Status: {res['status']}", f"Model: {res['model']}", "", "Embedding model is now cached globally.", "Run `oem doctor` to verify."], status="ok"))
 
         elif args.command == "doctor":
