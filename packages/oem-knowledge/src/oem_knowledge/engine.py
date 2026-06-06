@@ -278,7 +278,7 @@ class KnowledgeEngine:
                 import logging
                 logging.warning(
                     "[OEM] fastembed is not installed. Hybrid search is disabled. "
-                    "Install it with 'uv tool install oem[semantic]'."
+                    "Install it with 'uv tool install \"git+https://github.com/xpajonx/openempiric.git#subdirectory=packages/oem-knowledge[semantic]\"'."
                 )
                 return None
 
@@ -457,7 +457,7 @@ class KnowledgeEngine:
             print("[OEM] Warmup failed: fastembed is not installed.", file=sys.stderr)
             return {
                 "status": "error",
-                "message": "fastembed is not installed. Install it with 'uv tool install oem[semantic]'.",
+                "message": "fastembed is not installed. Install it with 'uv tool install \"git+https://github.com/xpajonx/openempiric.git#subdirectory=packages/oem-knowledge[semantic]\"'.",
             }
         print("[OEM] Embedding model ready (cached globally, one-time per machine).", file=sys.stderr)
         return {"status": "success", "model": "BAAI/bge-small-en-v1.5"}

@@ -229,7 +229,7 @@ class SearchService:
                         from fastembed import TextEmbedding
                     except ImportError:
                         raise ImportError(
-                            "Hybrid search requires fastembed. Please install it with 'uv tool install oem[semantic]' "
+                            "Hybrid search requires fastembed. Please install it with 'uv tool install \"git+https://github.com/xpajonx/openempiric.git#subdirectory=packages/oem-knowledge[semantic]\"' "
                             "or switch to BM25 search using 'oem config retrieval bm25'."
                         )
 
@@ -313,7 +313,7 @@ class SearchService:
                     from fastembed import TextEmbedding
                 except ImportError:
                     raise ImportError(
-                        "Hybrid search requires fastembed. Please install it with 'uv tool install oem[semantic]' "
+                        "Hybrid search requires fastembed. Please install it with 'uv tool install \"git+https://github.com/xpajonx/openempiric.git#subdirectory=packages/oem-knowledge[semantic]\"' "
                         "or switch to BM25 search using 'oem config retrieval bm25'."
                     )
 
