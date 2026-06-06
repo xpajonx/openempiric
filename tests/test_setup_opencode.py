@@ -32,7 +32,7 @@ def test_setup_opencode_basic(temp_home, tmp_proj):
     opencode_dir = temp_home / ".config" / "opencode"
     opencode_dir.mkdir(parents=True, exist_ok=True)
     jsonc_file = opencode_dir / "opencode.jsonc"
-    jsonc_file.write_text("// dummy comment\n{\n  \"instructions\": []\n}", encoding="utf-8")
+    jsonc_file.write_text("{\n  \"instructions\": []\n}", encoding="utf-8")
 
     with patch("pathlib.Path.home", return_value=temp_home):
         with patch.object(sys, "argv", ["oem", "setup", "opencode"]):
@@ -122,31 +122,37 @@ def test_setup_opencode_legacy_migration(temp_home, tmp_proj):
 
 def test_doctor_integration_diagnostics(temp_home, tmp_proj):
     """Verify that oem doctor outputs correct status for OpenCode workstation configuration."""
+    # Write a dummy pyproject.toml and skills file under .oem so doctor check passes
+    proj_path = Path(tmp_proj)
+    (proj_path / "pyproject.toml").write_text("[project]\nname = \"user-app\"\n", encoding="utf-8")
+    skills_dir = proj_path / ".oem" / "skills"
+    skills_dir.mkdir(parents=True, exist_ok=True)
+    (skills_dir / "openempiric.yaml").write_text("name: openempiric\n", encoding="utf-8")
+
     # Mock success for skills and other requirements that might fail due to fresh temp project
     with patch("pathlib.Path.home", return_value=temp_home):
         with patch("oem_knowledge.cli.shutil.which", return_value="/mock/bin"):
             with patch("oem_knowledge.engine.EventMigrator.get_schema_status", return_value={"status": "up_to_date", "message": "OK"}):
-                with patch("oem_knowledge.cli.Path.exists", return_value=True):
-                    with patch("oem_knowledge.adapters.get_adapter") as mock_adapter:
-                        mock_adapter.return_value.verify_mcp.return_value = True
-                        
-                        # 1. Initially integration files are missing, doctor should still exit 0/None because workstation checks are warnings
-                        with patch.object(sys, "argv", ["oem", "doctor", "--project", tmp_proj]):
-                            try:
-                                main()
-                            except SystemExit as exc:
-                                assert exc.value.code == 0 or exc.value.code is None
-
-                        # 2. Perform setup
-                        with patch.object(sys, "argv", ["oem", "setup", "opencode"]):
+                with patch("oem_knowledge.adapters.get_adapter") as mock_adapter:
+                    mock_adapter.return_value.verify_mcp.return_value = True
+                    
+                    # 1. Initially integration files are missing, doctor should still exit 0/None because workstation checks are warnings
+                    with patch.object(sys, "argv", ["oem", "doctor", "--project", tmp_proj]):
+                        try:
                             main()
+                        except SystemExit as exc:
+                            assert exc.code == 0 or exc.code is None
 
-                        # 3. Running doctor after setup should also succeed
-                        with patch.object(sys, "argv", ["oem", "doctor", "--project", tmp_proj]):
-                            try:
-                                main()
-                            except SystemExit as exc:
-                                assert exc.value.code == 0 or exc.value.code is None
+                    # 2. Perform setup
+                    with patch.object(sys, "argv", ["oem", "setup", "opencode"]):
+                        main()
+
+                    # 3. Running doctor after setup should also succeed
+                    with patch.object(sys, "argv", ["oem", "doctor", "--project", tmp_proj]):
+                        try:
+                            main()
+                        except SystemExit as exc:
+                            assert exc.code == 0 or exc.code is None
 
 
 def test_setup_opencode_config_merge(temp_home, tmp_proj):

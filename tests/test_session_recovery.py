@@ -48,8 +48,8 @@ def test_session_recovery_flow(tmp_path):
             "index_stats": {}
         }
 
-    # 1. Start session by mocking `subprocess.run`
-    with patch("subprocess.run", mock_run):
+    # 1. Start session by mocking `subprocess.run` and `subprocess.Popen`
+    with patch("subprocess.run", mock_run), patch("subprocess.Popen") as mock_popen:
         with patch.object(KnowledgeEngine, "session_commit", side_effect=commit_side_effect):
             with patch.object(sys, "argv", ["oem", "run", "custom-agent", "--project", str(tmp_path)]):
                 try:

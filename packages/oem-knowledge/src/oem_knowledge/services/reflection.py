@@ -336,7 +336,7 @@ class ReflectionService:
         date_str = time.strftime("%Y-%m-%d")
         report_file = sessions_dir / f"{date_str}.md"
         counter = 1
-        while sfs.exists(report_file):
+        while sfs.exists(report_file) and counter < 1000:
             report_file = sessions_dir / f"{date_str}_{counter}.md"
             counter += 1
 
