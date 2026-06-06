@@ -186,8 +186,153 @@ def _setup_parser() -> argparse.ArgumentParser:
     warmup_p = sub.add_parser("warmup", help=argparse.SUPPRESS)
     warmup_p.add_argument("--project", type=str, default="")
 
+    setup_p = sub.add_parser("setup", help="[User] Configure and register OpenCode agent workstation-level integration")
+    setup_sub = setup_p.add_subparsers(dest="setup_target", required=True)
+    setup_opencode = setup_sub.add_parser("opencode", help="Integrate OpenCode workspace settings and plugins")
+    setup_opencode.add_argument("--repair", action="store_true", help="Forcefully overwrite and recreate all integration files")
+
     sub._choices_actions = [a for a in sub._choices_actions if a.help is not argparse.SUPPRESS]
     return parser
+
+
+def cmd_setup_opencode(repair: bool = False) -> None:
+    from oem_tui.panels import render_panel
+    import importlib.resources as pkg_resources
+    
+    print("OEM OpenCode Setup\n")
+    
+    opencode_dir = Path.home() / ".config" / "opencode"
+    plugins_dir = opencode_dir / "plugins"
+    instructions_dir = opencode_dir / "instructions"
+    skills_dir = opencode_dir / "skills"
+    
+    # 1. Create directories
+    try:
+        plugins_dir.mkdir(parents=True, exist_ok=True)
+        instructions_dir.mkdir(parents=True, exist_ok=True)
+        skills_dir.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        print(f"✗ Failed to create directories under ~/.config/opencode/: {e}")
+        sys.exit(1)
+        
+    plugin_dest = plugins_dir / "openempiric.ts"
+    inst_dest = instructions_dir / "memory-start.md"
+    jsonc_file = opencode_dir / "opencode.jsonc"
+    
+    migrated_plugin = False
+    migrated_inst = False
+    
+    # Check legacy plugin
+    if plugin_dest.exists() and not repair:
+        try:
+            content = plugin_dest.read_text(encoding="utf-8")
+            if "knowledge_session_start" in content or "verify plugin array" in content or "session lifecycle is automatic" in content:
+                migrated_plugin = True
+        except Exception:
+            pass
+
+    # Check legacy instructions
+    if inst_dest.exists() and not repair:
+        try:
+            content = inst_dest.read_text(encoding="utf-8")
+            if "knowledge_session_start" in content or "knowledge_session_commit" in content or "verify plugin array" in content:
+                migrated_inst = True
+        except Exception:
+            pass
+
+    # 2. Install/update plugin
+    plugin_installed = False
+    try:
+        plugin_src_path = pkg_resources.files("oem_knowledge").joinpath("plugins/openempiric.ts")
+        
+        should_write_plugin = repair or migrated_plugin or not plugin_dest.exists()
+        
+        if should_write_plugin:
+            if plugin_src_path.exists():
+                plugin_dest.write_text(plugin_src_path.read_text(encoding="utf-8"), encoding="utf-8")
+                plugin_installed = True
+            else:
+                local_src = Path(__file__).resolve().parent.parent / "plugins" / "openempiric.ts"
+                if local_src.exists():
+                    plugin_dest.write_text(local_src.read_text(encoding="utf-8"), encoding="utf-8")
+                    plugin_installed = True
+                else:
+                    print("✗ Failed to locate plugin source file 'plugins/openempiric.ts'.")
+        else:
+            plugin_installed = True  # Already present and valid
+    except Exception as e:
+        print(f"✗ Failed to install openempiric.ts plugin: {e}")
+        
+    # 3. Install instructions
+    inst_installed = False
+    try:
+        should_write_inst = repair or migrated_inst or not inst_dest.exists()
+        inst_content = (
+            "## OpenEmpiric Session Status\n\n"
+            "OpenEmpiric is already active for this session.\n\n"
+            "Relevant project memory has been restored automatically.\n\n"
+            "Use OEM search and health capabilities when additional project context is needed.\n"
+        )
+        if should_write_inst:
+            inst_dest.write_text(inst_content, encoding="utf-8")
+            inst_installed = True
+        else:
+            inst_installed = True  # Already present and valid
+    except Exception as e:
+        print(f"✗ Failed to install instructions/memory-start.md: {e}")
+        
+    # 4. Validate opencode.jsonc
+    config_verified = False
+    try:
+        config_data = {}
+        if jsonc_file.exists():
+            text = jsonc_file.read_text(encoding="utf-8")
+            cleaned = re.sub(r'//.*', '', text)
+            cleaned = re.sub(r'/\*.*?\*/', '', cleaned, flags=re.DOTALL)
+            try:
+                config_data = json.loads(cleaned)
+            except Exception:
+                config_data = {}
+                
+        # Update instructions in config
+        inst_path_str = str(inst_dest.resolve())
+        inst_list = config_data.setdefault("instructions", [])
+        if inst_path_str not in inst_list:
+            inst_list.append(inst_path_str)
+            
+        jsonc_file.write_text(json.dumps(config_data, indent=2), encoding="utf-8")
+        config_verified = True
+    except Exception as e:
+        print(f"✗ Failed to validate or update opencode.jsonc: {e}")
+        
+    # Clear any active cache files in ~/.config/opencode/
+    try:
+        temp_inst = opencode_dir / "plugins" / ".openempiric_temp_instructions.md"
+        if temp_inst.exists():
+            temp_inst.unlink()
+    except Exception:
+        pass
+        
+    # Report summary
+    lines = []
+    lines.append("✓ Plugin installed" if plugin_installed else "✗ Plugin installation failed")
+    lines.append("✓ Instructions installed" if inst_installed else "✗ Instructions installation failed")
+    lines.append("✓ Configuration verified" if config_verified else "✗ Configuration verification failed")
+    
+    if migrated_plugin:
+        lines.append("ℹ Migrated legacy plugin openempiric.ts")
+    if migrated_inst:
+        lines.append("ℹ Migrated legacy instructions memory-start.md")
+    if repair:
+        lines.append("ℹ Re-installed all components (--repair)")
+        
+    if plugin_installed and inst_installed and config_verified:
+        lines.append("")
+        lines.append("OpenCode integration ready.")
+        print(render_panel("OEM OpenCode Setup", lines, status="ok"))
+    else:
+        print(render_panel("OEM OpenCode Setup Failed", lines, status="error"))
+        sys.exit(1)
 
 
 def main():
@@ -763,6 +908,10 @@ def main():
         elif args.command == "recover":
             cmd_recover(eng, project, abort=args.abort, status=args.status)
 
+        elif args.command == "setup":
+            if args.setup_target == "opencode":
+                cmd_setup_opencode(repair=args.repair)
+
 
         elif args.command == "todo":
             from oem_knowledge.tools.todos import oem_todo_read, oem_todo_write, oem_todo_advance
@@ -1146,6 +1295,56 @@ def main():
                     lines.append("✗ Package not importable")
                     status = "error"
                 lines.append("⚠ Development workspace not detected")
+
+            # OpenCode Workstation Integration Checks
+            opencode_dir = Path.home() / ".config" / "opencode"
+            plugin_dest = opencode_dir / "plugins" / "openempiric.ts"
+            inst_dest = opencode_dir / "instructions" / "memory-start.md"
+            jsonc_file = opencode_dir / "opencode.jsonc"
+
+            # Check plugin
+            if not plugin_dest.exists():
+                lines.append("⚠ OpenCode Plugin not installed (missing plugins/openempiric.ts) — run 'oem setup opencode'")
+            else:
+                try:
+                    p_content = plugin_dest.read_text(encoding="utf-8")
+                    if "knowledge_session_start" in p_content or "verify plugin array" in p_content or "session lifecycle is automatic" in p_content:
+                        lines.append("⚠ OpenCode Plugin is legacy/outdated — run 'oem setup opencode --repair'")
+                    else:
+                        lines.append("✓ OpenCode Plugin installed")
+                except Exception as e:
+                    lines.append(f"⚠ Failed to read openempiric.ts plugin: {e}")
+
+            # Check instructions
+            if not inst_dest.exists():
+                lines.append("⚠ OpenCode Instructions not installed (missing instructions/memory-start.md) — run 'oem setup opencode'")
+            else:
+                try:
+                    i_content = inst_dest.read_text(encoding="utf-8")
+                    if "knowledge_session_start" in i_content or "knowledge_session_commit" in i_content or "verify plugin array" in i_content:
+                        lines.append("⚠ OpenCode Instructions are legacy/outdated — run 'oem setup opencode --repair'")
+                    else:
+                        lines.append("✓ OpenCode Instructions installed")
+                except Exception as e:
+                    lines.append(f"⚠ Failed to read memory-start.md instructions: {e}")
+
+            # Check config
+            if not jsonc_file.exists():
+                lines.append("⚠ OpenCode Config missing (missing opencode.jsonc) — run 'oem setup opencode'")
+            else:
+                try:
+                    text = jsonc_file.read_text(encoding="utf-8")
+                    cleaned = re.sub(r'//.*', '', text)
+                    cleaned = re.sub(r'/\*.*?\*/', '', cleaned, flags=re.DOTALL)
+                    config_data = json.loads(cleaned, strict=False)
+                    inst_path_str = str(inst_dest.resolve())
+                    inst_list = config_data.get("instructions", [])
+                    if inst_path_str not in inst_list:
+                        lines.append("⚠ OpenCode Config does not register memory-start.md instruction — run 'oem setup opencode'")
+                    else:
+                        lines.append("✓ OpenCode Config verified")
+                except Exception as e:
+                    lines.append(f"⚠ OpenCode Config validation failed: {e} — run 'oem setup opencode'")
 
             # 5. Events log schema version check
             try:

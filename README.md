@@ -51,9 +51,33 @@ Check if your workspace is healthy and ready:
 oem doctor
 ```
 
-This automatically checks for configuration, plugin links, and warms up the embedding cache model.
+This automatically checks for workspace configuration, workstation integration, and warms up the embedding cache model.
 
-### 3. Run Your Agent
+### 3. Configure Workstation Integration
+
+Set up the OpenCode agent workstation-level integration (copies plugins, registers instructions, validates configuration):
+
+```bash
+oem setup opencode
+```
+
+If you ever need to forcefully overwrite and recreate the integration configuration, you can use:
+
+```bash
+oem setup opencode --repair
+```
+
+### 4. Initialize Project Memory
+
+Initialize the project-level OpenEmpiric memory repository in the root of your project:
+
+```bash
+oem init
+```
+
+This creates the `.oem/` directory structure to store project-specific concept files, state, and event logs.
+
+### 5. Run Your Agent
 
 Launch your agent (e.g., `opencode`, `claude-code`, `cursor`) and begin working:
 
@@ -70,6 +94,11 @@ Daily Use
 - `oem run opencode`
 - `oem doctor`
 - `oem search`
+
+Setup & Admin
+
+- `oem setup opencode`
+- `oem init`
 
 Knowledge Health
 
