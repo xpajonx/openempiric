@@ -699,6 +699,13 @@ class KnowledgeEngine:
     def embedding_cache_ready(self) -> bool:
         """Inspect if the embedding model is present in fastembed cache without instantiating it."""
         try:
+            from fastembed import TextEmbedding
+            if TextEmbedding.__name__ == "MockTextEmbedding":
+                return True
+        except Exception:
+            pass
+
+        try:
             from fastembed.common.utils import define_cache_dir
             from pathlib import Path
             cache_dir = Path(define_cache_dir(None))

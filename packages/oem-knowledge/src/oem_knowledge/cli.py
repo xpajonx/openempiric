@@ -224,6 +224,42 @@ def check_mcp_server(command: list[str]) -> tuple[bool, bool, int, str]:
         return False, False, 0, str(e)
 
 
+class Spinner:
+    def __init__(self, message="Checking environment..."):
+        self.message = message
+        self.spinner_chars = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+        import threading
+        self.stop_running = threading.Event()
+        self.thread = None
+        self.enabled = sys.stdout.isatty()
+
+    def _spin(self):
+        if not self.enabled:
+            return
+        idx = 0
+        while not self.stop_running.is_set():
+            char = self.spinner_chars[idx % len(self.spinner_chars)]
+            sys.stdout.write(f"\r\033[96m{char}\033[0m {self.message}")
+            sys.stdout.flush()
+            time.sleep(0.08)
+            idx += 1
+        sys.stdout.write("\r\033[K")
+        sys.stdout.flush()
+
+    def __enter__(self):
+        if self.enabled:
+            import threading
+            self.thread = threading.Thread(target=self._spin, daemon=True)
+            self.thread.start()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.enabled:
+            self.stop_running.set()
+            if self.thread:
+                self.thread.join()
+
+
 def _resolve_project(args) -> str | None:
     """Normalise --project: ``""`` or ``"."`` → ``None`` (cwd)."""
     raw = getattr(args, "project", None)
@@ -1532,6 +1568,8 @@ def main():
             print(render_panel("Model Warm-Up", [f"Status: {res['status']}", f"Model: {res['model']}", "", "Embedding model is now cached globally.", "Run `oem doctor` to verify."], status="ok"))
 
         elif args.command == "doctor":
+            spinner = Spinner("Running environment and diagnostics checks...")
+            spinner.__enter__()
             try:
                 resolved_dir = eng._resolve_harness(project)
                 workspace_root = resolved_dir
@@ -1755,13 +1793,14 @@ def main():
 
             # 8. Embedding Cache Ready check
             try:
-                from fastembed import TextEmbedding
-                cache_path = str(Path.home() / ".cache" / "fastembed")
-                TextEmbedding(model_name="BAAI/bge-small-en-v1.5", cache_dir=cache_path, local_files_only=True)
-                lines.append("✓ Embedding Cache Ready")
-            except Exception:
-                lines.append("✗ Embedding Cache not ready")
-                lines.append("  → Run `oem warmup` once per machine to pre-download")
+                if eng.embedding_cache_ready():
+                    lines.append("✓ Embedding Cache Ready")
+                else:
+                    lines.append("✗ Embedding Cache not ready")
+                    lines.append("  → Run `oem warmup` once per machine to pre-download")
+                    status = "error"
+            except Exception as e:
+                lines.append(f"✗ Failed to check Embedding Cache: {e}")
                 status = "error"
 
             # 9. Context Injection Working check
@@ -1855,6 +1894,7 @@ def main():
             except Exception as e:
                 runtime_lines.append(f"✗ Outcome Tracking not ready: {e}")
 
+            spinner.__exit__(None, None, None)
             print(render_panel("OEM Environment Check", lines, status=status))
 
 
