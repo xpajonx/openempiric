@@ -50,6 +50,9 @@ def test_setup_opencode_basic(temp_home, tmp_proj):
 
     assert plugin_file.exists()
     assert inst_file.exists()
+
+    plugin_content = plugin_file.read_text(encoding="utf-8")
+    assert "oem session-start" not in plugin_content
     
     inst_content = inst_file.read_text(encoding="utf-8")
     assert "OpenEmpiric is already active for this session" in inst_content
@@ -305,6 +308,5 @@ def test_setup_opencode_tool_enumeration():
     assert "knowledge_stats" in tool_names
     assert "oem_todo_read" in tool_names
     assert "knowledge_usage_report" in tool_names
-
 
 

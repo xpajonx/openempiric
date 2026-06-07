@@ -19,7 +19,7 @@ class ContextAssembler {
     const contextPath = process.env.OEM_RUNTIME_CONTEXT_PATH || path.join(os.homedir(), ".config", "opencode", "plugins", ".oem_runtime_context.json");
     if (!fs.existsSync(contextPath)) {
       return `Warning: OEM runtime context unavailable.
-Please run: oem session-start`;
+Launch OpenCode through: oem run opencode`;
     }
 
     try {
@@ -119,7 +119,7 @@ Your utilization of memory is measured and logged at the end of the session via 
       return instContent;
     } catch (e) {
       return `Warning: OEM runtime context unavailable.
-Please run: oem session-start`;
+Launch OpenCode through: oem run opencode`;
     }
   }
 }

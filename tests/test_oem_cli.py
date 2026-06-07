@@ -93,6 +93,34 @@ def test_oem_run(tmp_proj):
     assert not _OEM_TEMP_INSTRUCTIONS.exists()
 
 
+def test_oem_run_opencode_safe_bootstrap(tmp_proj):
+    """Verify that `oem run opencode` bootstraps project-local state without editing global config."""
+    import oem_knowledge.runtime.runner as runner
+
+    temp_home = tempfile.mkdtemp()
+    try:
+        home_path = Path(temp_home)
+        plugins_dir = home_path / ".config" / "opencode" / "plugins"
+        context_path = plugins_dir / ".oem_runtime_context.json"
+        temp_instructions = plugins_dir / ".openempiric_temp_instructions.md"
+
+        with patch("pathlib.Path.home", return_value=home_path):
+            with patch.object(runner, "_OPENCODE_PLUGINS_DIR", plugins_dir):
+                with patch.object(runner, "_OEM_RUNTIME_CONTEXT_PATH", context_path):
+                    with patch.object(runner, "_OEM_TEMP_INSTRUCTIONS", temp_instructions):
+                        with patch("oem_knowledge.cli.subprocess.run") as mock_run:
+                            with patch.object(sys, "argv", ["oem", "run", "opencode", "--project", tmp_proj]):
+                                main()
+
+        mock_run.assert_called_once()
+        assert (Path(tmp_proj) / ".oem").is_dir()
+        assert (Path(tmp_proj) / ".oem" / "skills" / "openempiric.yaml").exists()
+        assert (plugins_dir / "openempiric.ts").exists()
+        assert not (home_path / ".config" / "opencode" / "opencode.jsonc").exists()
+    finally:
+        shutil.rmtree(temp_home)
+
+
 def test_oem_doctor_user_project(tmp_proj):
     """Verify that 'oem doctor' succeeds (exits 0) when run in a user project directory."""
     temp_home = tempfile.mkdtemp()
@@ -133,4 +161,3 @@ def test_oem_warmup_success(tmp_proj):
                 main()
             except SystemExit as e:
                 assert e.code == 0 or e.code is None
-

@@ -86,36 +86,32 @@ Install the unified `oem` CLI runtime globally using `uv`:
 uv tool install "git+https://github.com/xpajonx/openempiric.git#subdirectory=packages/oem-knowledge"
 ```
 
-### 2. Verify Installation
+### 2. Setup Agent Integration
 
-Run the doctor command to ensure your environment is healthy and the embedding model is warm:
-
-```bash
-oem doctor
-```
-
-### 3. Initialize a Project
-
-Run this in the root of your project directory to bootstrap the `.oem/` memory folder:
-
-```bash
-oem init
-```
-
-### 4. Setup Agent Integration
-
-Link and register workstation-level integrations for your favorite agent (e.g. OpenCode):
+Link and register the workstation-level OpenCode integration once on your machine:
 
 ```bash
 oem setup opencode
 ```
 
-### 5. Launch a Session
+### 3. Launch a Session
 
-Wrap your agent inside the `oem` supervisor to start learning:
+From any project directory, launch OpenCode through OEM:
 
 ```bash
+mkdir demo-project
+cd demo-project
 oem run opencode
+```
+
+`oem run opencode` bootstraps the project-local `.oem/` memory folder automatically and starts a managed session.
+
+### 4. Diagnose Problems
+
+Use `oem doctor` if the workstation integration or embedding cache needs attention:
+
+```bash
+oem doctor
 ```
 
 ---

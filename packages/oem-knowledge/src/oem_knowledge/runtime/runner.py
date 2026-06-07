@@ -13,6 +13,7 @@ from .config import _REPO_ROOT, _OPENCODE_PLUGINS_DIR, _OEM_RUNTIME_CONTEXT_PATH
 from oem_knowledge.tools.metrics import update_metrics_file
 from .context import _compile_oem_context
 from .session import SessionState
+from oem_knowledge.adapters.base import BaseAdapter
 
 if TYPE_CHECKING:
     from oem_knowledge.engine import KnowledgeEngine
@@ -67,7 +68,16 @@ def _ensure_workspace_ready(eng: KnowledgeEngine, project: str | None, adapter, 
         logging.info("First-run detected — bootstrapping project...")
         eng.init_project(project or ".")
 
-    harness = eng._resolve_harness(project)
+    eng._resolve_harness(project)
+
+    # Keep the project-local OEM skill in place even when workstation config
+    # does not need repair. This is part of the safe bootstrap path for `oem run`.
+    try:
+        if type(adapter).install_skill is not BaseAdapter.install_skill:
+            adapter.install_skill()
+    except Exception as e:
+        logging.warning("Project skill refresh failed: %s", e)
+        warnings.append("Project skill unavailable")
 
     # Optional - fail open
     try:
@@ -80,7 +90,6 @@ def _ensure_workspace_ready(eng: KnowledgeEngine, project: str | None, adapter, 
         if not adapter.verify_mcp():
             logging.info("Plugin not linked — installing...")
             _link_plugin()
-            adapter.install_skill()
     except Exception as e:
         logging.warning("Plugin linkage/repair failed: %s", e)
         warnings.append("Plugin integration disabled")
