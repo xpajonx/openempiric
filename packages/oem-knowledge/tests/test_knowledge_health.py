@@ -37,7 +37,7 @@ def test_detect_stale_concepts(engine, tmp_path):
             referenced.append("concept_a")
         if i in (4, 5):
             referenced.append("concept_b")
-        engine.record_outcome(
+        engine.state.record_outcome(
             outcome="success",
             referenced_concepts=referenced,
             session_id=f"session_{i}",
@@ -46,7 +46,7 @@ def test_detect_stale_concepts(engine, tmp_path):
 
     # 1. With n_sessions=3, the last 3 sessions are: session_3, session_4, session_5
     # concept_a is stale because it hasn't been referenced in session_3, 4, or 5
-    stale_3 = engine.detect_stale_concepts(n_sessions=3, project=str(tmp_path))
+    stale_3 = engine.state.detect_stale_concepts(n_sessions=3, project=str(tmp_path))
     assert len(stale_3) == 1
     assert stale_3[0]["concept_id"] == "concept_a"
     assert stale_3[0]["sessions_since_reference"] == 3  # last ref in session_2 (index 1), total 5: 5 - 2 = 3 sessions ago
@@ -54,7 +54,7 @@ def test_detect_stale_concepts(engine, tmp_path):
     # concept_b is not stale in the last 3 sessions (it was referenced in session_4 and 5)
     # 2. With n_sessions=1, the last session is session_5
     # concept_a is stale, concept_b is not stale
-    stale_1 = engine.detect_stale_concepts(n_sessions=1, project=str(tmp_path))
+    stale_1 = engine.state.detect_stale_concepts(n_sessions=1, project=str(tmp_path))
     assert any(x["concept_id"] == "concept_a" for x in stale_1)
     assert not any(x["concept_id"] == "concept_b" for x in stale_1)
 

@@ -228,7 +228,7 @@ def mount_tools(mcp: object) -> None:
         """
         eng = KnowledgeEngine(project or None)
         try:
-            events = eng.get_events(
+            events = eng.state.get_events(
                 project or None,
                 concept=concept,
                 event_type=event_type,
@@ -259,7 +259,7 @@ def mount_tools(mcp: object) -> None:
         """
         eng = KnowledgeEngine(project or None)
         try:
-            ev = eng.get_event(project or None, event_id)
+            ev = eng.state.get_event(project or None, event_id)
         except KeyError as e:
             return render_panel("Event Not Found", [str(e)], status="error")
         except Exception as e:

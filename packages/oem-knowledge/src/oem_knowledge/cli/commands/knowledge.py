@@ -66,7 +66,7 @@ def run_knowledge_command(args):
         )
 
     elif args.command == "events":
-        events = eng.get_events(
+        events = eng.state.get_events(
             project,
             concept=args.concept,
             event_type=args.type,
@@ -80,7 +80,7 @@ def run_knowledge_command(args):
 
     elif args.command == "event":
         try:
-            ev = eng.get_event(project, args.event_id)
+            ev = eng.state.get_event(project, args.event_id)
             print(
                 render_panel(
                     "Event",
@@ -130,7 +130,7 @@ def run_knowledge_command(args):
                     print(render_panel("Concept Explanation", lines, status="ok"))
         else:
             try:
-                ev = eng.get_event(project, args.id)
+                ev = eng.state.get_event(project, args.id)
                 lines = [
                     f"Event ID: {ev.get('event_id')}",
                     f"Type:     {ev.get('event_type')}",
@@ -303,7 +303,7 @@ def run_knowledge_command(args):
                             lines_yaml.append(f"{prefix}{k}: {v}")
                 return "\n".join(lines_yaml)
 
-            fitness_data = eng.calculate_fitness(project)
+            fitness_data = eng.fitness.calculate_fitness(project)
             report = {}
             for cid, fit in fitness_data.items():
                 report[cid] = {

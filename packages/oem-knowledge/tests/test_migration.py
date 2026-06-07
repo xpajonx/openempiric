@@ -49,7 +49,7 @@ def test_multi_hop_migration(tmp_path):
         assert status["current_versions"] == [1]
 
         # Verify dynamic upcasting on load
-        events = engine.get_events()
+        events = engine.state.get_events()
         assert len(events) == 1
         loaded_event = events[0]
         assert loaded_event["schema_version"] == 3

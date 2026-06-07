@@ -21,7 +21,7 @@ def test_record_outcome_explicit(tmp_proj):
     eng = KnowledgeEngine(tmp_proj)
     eng.init_project(tmp_proj)
 
-    res = eng.record_outcome(
+    res = eng.state.record_outcome(
         outcome="success",
         referenced_concepts=["concept_001", "concept_002"],
         reason="Fully completed implementation plan",
@@ -66,7 +66,7 @@ def test_record_outcome_state_fallback(tmp_proj):
     session_state_file.write_text(json.dumps(state_data), encoding="utf-8")
 
     # 2. Record outcome with auto-resolution
-    res = eng.record_outcome(
+    res = eng.state.record_outcome(
         outcome="failure",
         project=tmp_proj,
     )
@@ -83,7 +83,7 @@ def test_record_outcome_generated_session_id(tmp_proj):
     eng.init_project(tmp_proj)
 
     # No session_state.json or passed session_id
-    res = eng.record_outcome(
+    res = eng.state.record_outcome(
         outcome="abandoned",
         project=tmp_proj,
     )
@@ -100,9 +100,9 @@ def test_record_outcome_append_only_history(tmp_proj):
     eng.init_project(tmp_proj)
 
     # Record 3 outcomes sequentially
-    eng.record_outcome("success", ["concept_a"], "reason 1", "session_1", tmp_proj)
-    eng.record_outcome("failure", ["concept_b"], "reason 2", "session_2", tmp_proj)
-    eng.record_outcome("abandoned", ["concept_c"], "reason 3", "session_3", tmp_proj)
+    eng.state.record_outcome("success", ["concept_a"], "reason 1", "session_1", tmp_proj)
+    eng.state.record_outcome("failure", ["concept_b"], "reason 2", "session_2", tmp_proj)
+    eng.state.record_outcome("abandoned", ["concept_c"], "reason 3", "session_3", tmp_proj)
 
     outcomes_file = Path(tmp_proj) / OEM_DIR / "state" / "outcomes.jsonl"
     lines = outcomes_file.read_text(encoding="utf-8").splitlines()
@@ -127,7 +127,7 @@ def test_record_outcome_with_goal_satisfaction(tmp_proj):
     eng = KnowledgeEngine(tmp_proj)
     eng.init_project(tmp_proj)
 
-    res = eng.record_outcome(
+    res = eng.state.record_outcome(
         outcome="success",
         referenced_concepts=["concept_001"],
         reason="Completed with minor feedback",
@@ -158,11 +158,11 @@ def test_weighted_fitness_calculation(tmp_proj):
     (harness / "concept_registry.json").write_text(json.dumps(registry), encoding="utf-8")
 
     # Record outcomes with varying goal satisfactions
-    eng.record_outcome("success", ["concept_a"], "reason 1", "session_1", tmp_proj, goal_satisfaction=1.0)
-    eng.record_outcome("failure", ["concept_a"], "reason 2", "session_2", tmp_proj, goal_satisfaction=0.5)
-    eng.record_outcome("success", ["concept_b"], "reason 3", "session_3", tmp_proj, goal_satisfaction=0.8)
+    eng.state.record_outcome("success", ["concept_a"], "reason 1", "session_1", tmp_proj, goal_satisfaction=1.0)
+    eng.state.record_outcome("failure", ["concept_a"], "reason 2", "session_2", tmp_proj, goal_satisfaction=0.5)
+    eng.state.record_outcome("success", ["concept_b"], "reason 3", "session_3", tmp_proj, goal_satisfaction=0.8)
 
-    fitness = eng.calculate_fitness(tmp_proj)
+    fitness = eng.fitness.calculate_fitness(tmp_proj)
     assert fitness["concept_a"].fitness_score == 0.75
     assert fitness["concept_b"].fitness_score == 0.8
 

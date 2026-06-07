@@ -6,96 +6,16 @@ import os
 import re
 import sys
 import time
+import warnings
 from collections import Counter
 from pathlib import Path
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
+from oem_knowledge.fs import FileLock, SecureFileSystem
+from oem_knowledge.project_layout import ProjectLayout
 
-class FileLock:
-    def __init__(self, lock_path: Path, timeout: float = 10.0):
-        self.lock_path = lock_path
-        self.timeout = timeout
-        self.acquired = False
-
-    def __enter__(self):
-        start_time = time.time()
-        while time.time() - start_time < self.timeout:
-            try:
-                self.lock_path.parent.mkdir(parents=True, exist_ok=True)
-                self.lock_path.touch(exist_ok=False)
-                self.acquired = True
-                return self
-            except FileExistsError:
-                time.sleep(0.1)
-        raise TimeoutError(f"Could not acquire lock on {self.lock_path}")
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if self.acquired and self.lock_path.exists():
-            self.lock_path.unlink()
-
-
-class SecureFileSystem:
-    def __init__(self, project_path: Path):
-        self.project_path = project_path.resolve()
-
-    def _verify_path(self, path: Path) -> Path:
-        resolved = path.resolve()
-        try:
-            if not resolved.is_relative_to(self.project_path):
-                raise PermissionError(
-                    f"Security Abort: Path traversal attempted outside project boundary -> {path}"
-                )
-        except ValueError:
-            raise PermissionError(
-                f"Security Abort: Path traversal attempted outside project boundary -> {path}"
-            )
-        return resolved
-
-    def read_text(self, path: Path, encoding: str = "utf-8") -> str:
-        verified = self._verify_path(path)
-        if not verified.exists():
-            raise FileNotFoundError(f"File not found: {path}")
-        return verified.read_text(encoding=encoding)
-
-    def write_text(
-        self,
-        path: Path,
-        content: str,
-        encoding: str = "utf-8",
-        force_allow_truncation: bool = False,
-    ) -> bool:
-        verified = self._verify_path(path)
-        verified.parent.mkdir(parents=True, exist_ok=True)
-        if verified.exists() and not force_allow_truncation:
-            old_len = len(verified.read_text(encoding=encoding))
-            new_len = len(content)
-            if old_len > 10 and new_len < (old_len * 0.5):
-                raise ValueError(
-                    f"Safety Abort: New content is < 50% of old content. Truncation risk detected for {path}"
-                )
-        verified.write_text(content.strip() + "\n", encoding=encoding)
-        return True
-
-    def append_text(self, path: Path, content: str, encoding: str = "utf-8") -> bool:
-        verified = self._verify_path(path)
-        verified.parent.mkdir(parents=True, exist_ok=True)
-        with open(verified, "a", encoding=encoding) as f:
-            f.write(content)
-        return True
-
-    def exists(self, path: Path) -> bool:
-        try:
-            verified = self._verify_path(path)
-            return verified.exists()
-        except PermissionError:
-            return False
-
-    def unlink(self, path: Path):
-        verified = self._verify_path(path)
-        if verified.exists():
-            verified.unlink()
 
 
 OEM_DIR = ".oem"
@@ -286,90 +206,62 @@ class KnowledgeEngine:
                 self._model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5", cache_dir=cache_path, local_files_only=False)
         return self._model
 
+    def layout(self, project: str | None = None) -> ProjectLayout:
+        """Return a ProjectLayout for the resolved .oem directory.
+
+        KnowledgeEngine.layout() is the single resolver — ProjectLayout itself
+        is a pure value object and does no path resolution.
+        """
+        return ProjectLayout(root=self._resolve_harness(project))
+
     def _registry_path(self, project: str | None = None) -> Path:
-        h = self._resolve_harness(project)
-        return h / "concept_registry.json"
+        return self.layout(project).registry_path
 
     def _events_path(self, project: str | None = None) -> Path:
-        h = self._resolve_harness(project)
-        return h / "events.jsonl"
+        return self.layout(project).events_path
 
     def _sessions_dir(self, project: str | None = None) -> Path:
-        h = self._resolve_harness(project)
-        return h / "sessions"
+        return self.layout(project).sessions_dir
 
     def _concepts_dir(self, project: str | None = None) -> Path:
-        h = self._resolve_harness(project)
-        return h / "wiki"
+        return self.layout(project).concepts_dir
 
     def _wiki_paths(self, project: str | None = None) -> dict:
-        h = self._resolve_harness(project)
-        wiki_dir = h / "wiki"
-        return {
-            "inbox": wiki_dir / "inbox.md",
-            "concepts": wiki_dir,
-            "variant": "wiki",
-        }
+        return self.layout(project).wiki_paths()
 
-    def calculate_sha256(self, filepath: Path) -> str:
-        import hashlib
-        sha = hashlib.sha256()
-        with open(filepath, "rb") as f:
-            for block in iter(lambda: f.read(4096), b""):
-                sha.update(block)
-        return sha.hexdigest()
+
 
     # --- Internal State Management helper methods ---
-    # These are kept on the engine for lock coordination or private state-loading,
-    # and called by StateService to preserve encapsulation of filesystem tasks.
+    # Deprecated: StateService now owns registry/events I/O directly via oem_knowledge.fs.
+    # These stubs remain temporarily for any external callers; they will be removed in a future cleanup.
 
     def _load_registry_before_extraction(self, project: str | None = None) -> dict:
-        p = self._registry_path(project)
-        lock_path = p.with_suffix(".lock")
-        sfs = self._sfs(project)
-        with FileLock(lock_path):
-            if sfs.exists(p):
-                try:
-                    return json.loads(sfs.read_text(p))
-                except Exception:
-                    return {}
-            return {}
+        warnings.warn(
+            "engine._load_registry_before_extraction() is deprecated. Use engine.state._load_registry() directly.",
+            DeprecationWarning, stacklevel=2
+        )
+        return self.state._load_registry(project)
 
     def _save_registry_before_extraction(self, registry: dict, project: str | None = None):
-        p = self._registry_path(project)
-        lock_path = p.with_suffix(".lock")
-        sfs = self._sfs(project)
-        with FileLock(lock_path):
-            sfs.write_text(p, json.dumps(registry, indent=2))
+        warnings.warn(
+            "engine._save_registry_before_extraction() is deprecated. Use engine.state._save_registry() directly.",
+            DeprecationWarning, stacklevel=2
+        )
+        self.state._save_registry(registry, project)
 
     def _load_events_before_extraction(self, project: str | None = None) -> list[dict]:
-        p = self._events_path(project)
-        lock_path = p.with_suffix(".lock")
-        sfs = self._sfs(project)
-        with FileLock(lock_path):
-            if not sfs.exists(p):
-                return []
-            events = []
-            try:
-                for line in sfs.read_text(p).splitlines():
-                    line = line.strip()
-                    if line:
-                        ev_dict = json.loads(line)
-                        events.append(self.event_migrator.upcast(ev_dict))
-            except Exception:
-                return []
-            return events
+        warnings.warn(
+            "engine._load_events_before_extraction() is deprecated. Use engine.state._load_events() directly.",
+            DeprecationWarning, stacklevel=2
+        )
+        return self.state._load_events(project)
 
     def _append_event_before_extraction(self, event: dict | KnowledgeEvent, project: str | None = None):
-        from oem_knowledge.models import KnowledgeEvent
-        if isinstance(event, dict):
-            event = KnowledgeEvent(**event)
-        p = self._events_path(project)
-        lock_path = p.with_suffix(".lock")
-        sfs = self._sfs(project)
-        with FileLock(lock_path):
-            sfs.append_text(p, event.model_dump_json() + "\n")
-
+        warnings.warn(
+            "engine._append_event_before_extraction() is deprecated. Use engine.state._append_event() directly.",
+            DeprecationWarning, stacklevel=2
+        )
+        self.state._append_event(event, project)
 
 
     # --- Orchestrator Level Methods kept on engine ---
@@ -577,6 +469,7 @@ class KnowledgeEngine:
             "global_concepts": global_concepts,
         }
 
+
     def get_events(
         self,
         project: str | None = None,
@@ -584,25 +477,19 @@ class KnowledgeEngine:
         event_type: str = "",
         session_id: str = "",
     ) -> list[dict]:
-        events = self.state._load_events(project)
-        filtered = []
-        for ev in events:
-            if concept:
-                c_clean = concept.strip().replace(" ", "-").lower()
-                if c_clean not in [c.lower() for c in ev.get("concept_candidates", [])]:
-                    continue
-            if event_type and ev.get("event_type", "").lower() != event_type.lower():
-                continue
-            if session_id and ev.get("session_id", "") != session_id:
-                continue
-            filtered.append(ev)
-        return filtered
+        warnings.warn(
+            "engine.get_events() is deprecated. Use engine.state.get_events() directly.",
+            DeprecationWarning, stacklevel=2
+        )
+        return self.state.get_events(project, concept, event_type, session_id)
 
     def get_event(self, project: str | None = None, event_id: str = "") -> dict:
-        for ev in self.state._load_events(project):
-            if ev.get("event_id") == event_id:
-                return ev
-        raise KeyError(f"Event {event_id} not found")
+        warnings.warn(
+            "engine.get_event() is deprecated. Use engine.state.get_event() directly.",
+            DeprecationWarning, stacklevel=2
+        )
+        return self.state.get_event(project, event_id)
+
 
     def session_commit(
         self,
@@ -679,14 +566,26 @@ class KnowledgeEngine:
         project: str | None = None,
         goal_satisfaction: float | None = None,
     ) -> dict:
+        warnings.warn(
+            "engine.record_outcome() is deprecated. Use engine.state.record_outcome() directly.",
+            DeprecationWarning, stacklevel=2
+        )
         return self.state.record_outcome(
             outcome, referenced_concepts, reason, session_id, project, goal_satisfaction
         )
 
     def calculate_fitness(self, project: str | None = None) -> dict[str, ConceptFitness]:
+        warnings.warn(
+            "engine.calculate_fitness() is deprecated. Use engine.fitness.calculate_fitness() directly.",
+            DeprecationWarning, stacklevel=2
+        )
         return self.fitness.calculate_fitness(project)
 
     def detect_stale_concepts(self, n_sessions: int = 5, project: str | None = None) -> list[dict]:
+        warnings.warn(
+            "engine.detect_stale_concepts() is deprecated. Use engine.state.detect_stale_concepts() directly.",
+            DeprecationWarning, stacklevel=2
+        )
         return self.state.detect_stale_concepts(n_sessions, project)
 
     def propose_merges(self, similarity_threshold: float = 0.85, project: str | None = None) -> list[dict]:
@@ -711,22 +610,28 @@ class KnowledgeEngine:
         try:
             from fastembed.common.utils import define_cache_dir
             from pathlib import Path
-            cache_dir = Path(define_cache_dir(None))
             
-            # Check HuggingFace model cache directory (standard/preferred)
-            hf_dir = cache_dir / "models--qdrant--bge-small-en-v1.5-onnx-q"
-            if hf_dir.is_dir() and any(hf_dir.iterdir()):
-                return True
-                
-            # Check GCS fallback directories
-            gcs_dir = cache_dir / "bge-small-en-v1.5"
-            if gcs_dir.is_dir() and any(gcs_dir.iterdir()):
-                return True
-                
-            fast_gcs_dir = cache_dir / "fast-bge-small-en-v1.5"
-            if fast_gcs_dir.is_dir() and any(fast_gcs_dir.iterdir()):
-                return True
-                
+            # Check both the custom cache dir we use and the default fastembed one
+            cache_dirs = [
+                Path.home() / ".cache" / "fastembed",
+                Path(define_cache_dir(None))
+            ]
+            
+            for cache_dir in cache_dirs:
+                # Check HuggingFace model cache directory (standard/preferred)
+                hf_dir = cache_dir / "models--qdrant--bge-small-en-v1.5-onnx-q"
+                if hf_dir.is_dir() and any(hf_dir.iterdir()):
+                    return True
+                    
+                # Check GCS fallback directories
+                gcs_dir = cache_dir / "bge-small-en-v1.5"
+                if gcs_dir.is_dir() and any(gcs_dir.iterdir()):
+                    return True
+                    
+                fast_gcs_dir = cache_dir / "fast-bge-small-en-v1.5"
+                if fast_gcs_dir.is_dir() and any(fast_gcs_dir.iterdir()):
+                    return True
+                    
             return False
         except Exception:
             return False

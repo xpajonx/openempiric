@@ -103,7 +103,7 @@ def cmd_recover(eng: KnowledgeEngine, project: str | None = None, abort: bool = 
             session_started_at=started_at
         )
         commit_duration = time.time() - commit_start
-        eng.record_outcome("success", session_id=session_id, project=project)
+        eng.state.record_outcome("success", session_id=session_id, project=project)
 
         # Emit sessions_recovered metric
         try:

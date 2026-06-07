@@ -108,7 +108,13 @@ class SearchService:
         return dot / (norm_a * norm_b)
 
     def calculate_sha256(self, filepath: Path) -> str:
-        return self.engine.calculate_sha256(filepath)
+        import hashlib
+        sha = hashlib.sha256()
+        with open(filepath, "rb") as f:
+            for block in iter(lambda: f.read(4096), b""):
+                sha.update(block)
+        return sha.hexdigest()
+
 
     def chunk_markdown(self, filepath: Path, rel_path: str) -> list[dict]:
         try:

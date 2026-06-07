@@ -4,6 +4,7 @@ import re
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
+from oem_knowledge.fs import FileLock, SecureFileSystem
 from oem_knowledge.models import ConceptData, KnowledgeEvent
 
 if TYPE_CHECKING:
@@ -14,17 +15,50 @@ class StateService:
     def __init__(self, engine: KnowledgeEngine):
         self.engine = engine
 
+    def _sfs(self, project: str | None = None) -> SecureFileSystem:
+        return SecureFileSystem(self.engine._resolve_harness(project))
+
     def _load_registry(self, project: str | None = None) -> dict:
-        return self.engine._load_registry_before_extraction(project)
+        p = self.engine._registry_path(project)
+        sfs = self._sfs(project)
+        with FileLock(p.with_suffix(".lock")):
+            if sfs.exists(p):
+                try:
+                    return json.loads(sfs.read_text(p))
+                except Exception:
+                    return {}
+            return {}
 
     def _save_registry(self, registry: dict, project: str | None = None):
-        self.engine._save_registry_before_extraction(registry, project)
+        p = self.engine._registry_path(project)
+        sfs = self._sfs(project)
+        with FileLock(p.with_suffix(".lock")):
+            sfs.write_text(p, json.dumps(registry, indent=2))
 
     def _load_events(self, project: str | None = None) -> list[dict]:
-        return self.engine._load_events_before_extraction(project)
+        p = self.engine._events_path(project)
+        sfs = self._sfs(project)
+        with FileLock(p.with_suffix(".lock")):
+            if not sfs.exists(p):
+                return []
+            events = []
+            try:
+                for line in sfs.read_text(p).splitlines():
+                    line = line.strip()
+                    if line:
+                        ev_dict = json.loads(line)
+                        events.append(self.engine.event_migrator.upcast(ev_dict))
+            except Exception:
+                return []
+            return events
 
     def _append_event(self, event: dict | KnowledgeEvent, project: str | None = None):
-        self.engine._append_event_before_extraction(event, project)
+        if isinstance(event, dict):
+            event = KnowledgeEvent(**event)
+        p = self.engine._events_path(project)
+        sfs = self._sfs(project)
+        with FileLock(p.with_suffix(".lock")):
+            sfs.append_text(p, event.model_dump_json() + "\n")
 
     def _resolve_concept(self, term: str, registry: dict) -> tuple[str, dict]:
         import difflib
@@ -331,7 +365,7 @@ class StateService:
             return {"status": "error", "message": f"Concept {concept_id} not found."}
 
         cdata = registry[concept_id]
-        events = self.engine.get_events(project, concept=cdata["canonical_name"])
+        events = self.engine.state.get_events(project, concept=cdata["canonical_name"])
 
         from oem_knowledge.health import calculate_concept_health
         health_score = calculate_concept_health(cdata)
@@ -524,3 +558,32 @@ class StateService:
                 })
 
         return stale_concepts
+
+    def get_events(
+        self,
+        project: str | None = None,
+        concept: str = "",
+        event_type: str = "",
+        session_id: str = "",
+    ) -> list[dict]:
+        """Return events filtered by optional concept, event_type and session_id."""
+        events = self._load_events(project)
+        filtered = []
+        for ev in events:
+            if concept:
+                c_clean = concept.strip().replace(" ", "-").lower()
+                if c_clean not in [c.lower() for c in ev.get("concept_candidates", [])]:
+                    continue
+            if event_type and ev.get("event_type", "").lower() != event_type.lower():
+                continue
+            if session_id and ev.get("session_id", "") != session_id:
+                continue
+            filtered.append(ev)
+        return filtered
+
+    def get_event(self, project: str | None = None, event_id: str = "") -> dict:
+        """Return a single event by ID, raising KeyError if not found."""
+        for ev in self._load_events(project):
+            if ev.get("event_id") == event_id:
+                return ev
+        raise KeyError(f"Event {event_id} not found")

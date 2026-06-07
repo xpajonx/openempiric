@@ -137,13 +137,13 @@ def _auto_recover_stale_session(eng: KnowledgeEngine, project: str | None = None
 
         if chat_text:
             commit_res = eng.session_commit(project, conversation_text=chat_text, session_id=session_id)
-            eng.record_outcome("success", session_id=session_id, project=project)
+            eng.state.record_outcome("success", session_id=session_id, project=project)
             logging.info("Auto-recovery complete: report=%s events=%d",
                          commit_res.get("report_path", "?"),
                          len(commit_res.get("canonical_events", [])))
         else:
             logging.info("No transcript found for stale session — recording as abandoned")
-            eng.record_outcome("abandoned", session_id=session_id, project=project)
+            eng.state.record_outcome("abandoned", session_id=session_id, project=project)
 
         try:
             metrics_file = harness / "state" / "metrics.json"
@@ -469,7 +469,7 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None)
 
         # 6. Record outcome
         try:
-            eng.record_outcome("success" if committed else "failure", session_id=session_id, project=project)
+            eng.state.record_outcome("success" if committed else "failure", session_id=session_id, project=project)
         except Exception as e:
             logging.warning("Outcome recording failed: %s", e)
 

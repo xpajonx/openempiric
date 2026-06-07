@@ -162,7 +162,7 @@ class MaterializationService:
             }
 
         registry = self.engine.state._load_registry(project)
-        fitness_data = self.engine.calculate_fitness(project)
+        fitness_data = self.engine.fitness.calculate_fitness(project)
         materialized_log = []
 
         # Derive already processed session IDs from the registry

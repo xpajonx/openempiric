@@ -665,7 +665,7 @@ def run_system_command(args):
 
         # --- Knowledge Health Dashboard ---
         try:
-            fitness_data = eng.calculate_fitness(project)
+            fitness_data = eng.fitness.calculate_fitness(project)
             registry = eng.state._load_registry(project)
 
             tested = []
