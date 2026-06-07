@@ -22,7 +22,7 @@ class OpenCodeAdapter(BaseAdapter):
             skills_file = skills_dir / "openempiric.yaml"
             
             SKILLS_YAML_CONTENT = """name: openempiric
-version: 0.9.5
+version: "0.97"
 schema_version: 1
 adapter: opencode
 description: Agent knowledge runtime
@@ -100,4 +100,3 @@ best_practices:
                 return False, f"Plugin symlink broken: {e}"
 
         return True, "Plugin healthy"
-

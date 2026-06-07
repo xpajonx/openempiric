@@ -6,7 +6,7 @@ try:
     from importlib.metadata import version as _pkg_version
     _VERSION = _pkg_version("oem-knowledge")
 except Exception:
-    _VERSION = "0.9.5"
+    _VERSION = "0.97"
 
 
 def _resolve_project(args) -> str | None:

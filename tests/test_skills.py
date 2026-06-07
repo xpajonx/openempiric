@@ -53,7 +53,7 @@ def test_opencode_skill_installation(tmp_path):
         data = yaml.safe_load(f)
         
     assert data["name"] == "openempiric"
-    assert data["version"] == "0.9.5"
+    assert data["version"] == "0.97"
     assert data["schema_version"] == 1
     assert data["adapter"] == "opencode"
     assert "Agent knowledge runtime" in data["description"]
