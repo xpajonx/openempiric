@@ -21,7 +21,7 @@ Thumbs.db
 .harness/
 .oem/
 .local_vector_db/
-.opencode/plans
+.opencode/
 
 # CI artifacts
 tmp_ci_test/
@@ -30,3 +30,6 @@ tmp_ci_test/
 AGENTS.md
 CLAUDE.md
 init.sh
+
+# Local build-in-public drafts
+build-in-public/
