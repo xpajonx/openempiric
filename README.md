@@ -1,35 +1,78 @@
 <p align="center">
-  <img src="logo.png" alt="openempiric" width="800"/>
+  <img src="logo.png" alt="openempiric" width="600"/>
 </p>
 
 <p align="center">
-  <strong>Agent-first event-sourced knowledge runtime for AI coding sessions.</strong>
+  <strong>The agent-first, event-sourced knowledge runtime for AI coding sessions.</strong>
+</p>
+
+<p align="center">
+  <a href="https://github.com/xpajonx/openempiric/blob/main/LICENSE"><img src="https://img.shields.io/github/license/xpajonx/openempiric?style=flat-square&color=blue" alt="License"/></a>
+  <a href="https://python.org"><img src="https://img.shields.io/badge/python-3.12+-blue?style=flat-square" alt="Python Support"/></a>
+  <a href="https://github.com/astral-sh/uv"><img src="https://img.shields.io/badge/managed%20by-uv-purple?style=flat-square" alt="Managed by uv"/></a>
 </p>
 
 ---
 
-OpenEmpiric is an agent-first learning runtime.
+## What is OpenEmpiric?
 
-Run your coding agent through OEM:
+**OpenEmpiric (OEM)** is a local-first, agent-first learning runtime. It acts as long-term memory for your AI coding agents, capturing crucial architectural decisions, experiments, tradeoffs, failures, and outcomes directly from your developer-agent conversations. It stores this knowledge in an event-sourced ledger and structures it as a local knowledge graph, making it immediately available to guide future coding sessions.
 
-```bash
-oem run opencode
+Instead of writing and updating guidelines manually, you simply work with your agent. OEM automatically builds your project's memory map, preventing your agent from making the same mistake twice.
+
+---
+
+## How it Works
+
+OpenEmpiric shifts the model of AI coding sessions from a simple wrapped process to an **active knowledge infrastructure**. It is best explained through two layers: the user mental model (why it exists) and the internal runtime flow (how it works).
+
+### 1. User Mental Model (Why OEM Exists)
+
+Rather than just receiving static prompts, a highly productive AI coding agent relies on three balanced pillars:
+* **Developer Intent**: The immediate task, constraints, and goals you provide.
+* **Project Workflows** (e.g., `AGENTS.md` / `CLAUDE.md`): Guidelines detailing *how* the project is structured, run, and styled.
+* **Project Memory** (e.g., `.oem/`): The persistent knowledge layer managed by **OpenEmpiric**, recording *what has been learned* (prior decisions, resolved failures, validated designs).
+
+```mermaid
+graph TD
+    Intent["Developer Intent<br>(What to do)"] --> Agent("Coding Agent")
+    Workflows["Project Workflows<br>(How to work - e.g., AGENTS.md)"] --> Agent
+    Memory["Project Memory (.oem/)<br>(What we've learned)"] --> Agent
 ```
 
-Then work normally.
+---
 
-OpenEmpiric automatically:
+### 2. Internal Runtime & Tooling Flow (How OEM Works)
 
-- restores project memory
-- injects relevant context
-- learns from conversations
-- records outcomes
-- improves future retrieval
+The `.oem/` directory at the project root acts as the center of gravity. During execution, the coding agent actively queries this memory infrastructure using MCP tools rather than just reading static startup files.
 
-You don't manage memory.
+```mermaid
+graph TD
+    Developer(["Developer"]) -->|"Runs oem run agent"| OEM["OpenEmpiric Runtime"]
+    OEM -->|"1. Restore State"| Folder[(".oem/ Project Memory")]
+    Folder -.->|"Injected Context"| Agent("Coding Agent")
+    
+    Developer ---|"2. Normal Work Session"| Agent
+    
+    Agent ---|"3. Active MCP Queries<br>(knowledge_search, explain_concept, etc.)"| Folder
+    
+    Agent -->|"4. Exits"| OEM
+    OEM -->|"5. Reflects Transcripts & Diffs"| Ledger[(".oem/ Event Ledger")]
+    Ledger -->|"Updates"| Registry["concept_registry.json"]
+    Ledger -->|"Generates"| Wiki[".oem/wiki/ Concept Wiki"]
+    Registry -->|"Sync"| Folder
+    Wiki -->|"Sync"| Folder
+```
 
-You talk to your agent.
-OEM manages the learning loop.
+---
+
+## Key Features
+
+- **🧠 Zero-Config Agent Memory**: No manual updates or prompt-engineering required. OEM learns continuously in the background.
+- **🔄 Automatic Reflection**: Analyzes chat transcripts and file diffs to automatically extract new concepts, decisions, experiments, and root causes of failures.
+- **🛡️ Secure File System Guards**: SFS wrapper protects the host workspace with strict path-traversal limits and truncation protection (prevents agents from accidentally erasing large files).
+- **🔎 Local RAG Retrieval**: Perform hybrid vector-BM25 search queries across your project's memory repository locally.
+- **📚 Materialized Wiki**: Auto-generates clean, human-readable markdown documentation in `.oem/wiki/` as the knowledge graph evolves.
 
 ---
 
@@ -37,117 +80,110 @@ OEM manages the learning loop.
 
 ### 1. Install Globally
 
-Install the unified `oem` runtime globally via `uv`:
+Install the unified `oem` CLI runtime globally using `uv`:
 
 ```bash
 uv tool install "git+https://github.com/xpajonx/openempiric.git#subdirectory=packages/oem-knowledge"
 ```
 
-### 2. Verify Your Environment
+### 2. Verify Installation
 
-Check if your workspace is healthy and ready:
+Run the doctor command to ensure your environment is healthy and the embedding model is warm:
 
 ```bash
 oem doctor
 ```
 
-This automatically checks for workspace configuration, workstation integration, and warms up the embedding cache model.
+### 3. Initialize a Project
 
-### 3. Configure Workstation Integration
-
-Set up the OpenCode agent workstation-level integration (copies plugins, registers instructions, validates configuration):
-
-```bash
-oem setup opencode
-```
-
-If you ever need to forcefully overwrite and recreate the integration configuration, you can use:
-
-```bash
-oem setup opencode --repair
-```
-
-### 4. Initialize Project Memory
-
-Initialize the project-level OpenEmpiric memory repository in the root of your project:
+Run this in the root of your project directory to bootstrap the `.oem/` memory folder:
 
 ```bash
 oem init
 ```
 
-This creates the `.oem/` directory structure to store project-specific concept files, state, and event logs.
+### 4. Setup Agent Integration
 
-### 5. Run Your Agent
+Link and register workstation-level integrations for your favorite agent (e.g. OpenCode):
 
-Launch your agent (e.g., `opencode`, `claude-code`, `cursor`) and begin working:
+```bash
+oem setup opencode
+```
+
+### 5. Launch a Session
+
+Wrap your agent inside the `oem` supervisor to start learning:
 
 ```bash
 oem run opencode
 ```
 
-### 6. Verify OEM Integration
+---
 
-You can verify that OEM is available by asking the agent:
+## Supported Agents & Custom Adapters
 
-> "Use OpenEmpiric to review project memory."
+OpenEmpiric officially supports the following agent runtimes out-of-the-box:
 
-or:
+- **OpenCode** (workstation setup, native plugins, and session supervisor)
+- **Antigravity** (terminal co-pilot integration)
 
-> "Search project memory for recent decisions."
+### Extensibility: Write Your Own Adapter!
+You can easily extend OpenEmpiric to support other environments (such as Claude Code, Cursor, or your own proprietary CLI agent). All you need to do is subclass the base adapter:
 
-The agent should be able to access OEM knowledge and retrieval capabilities. If not, run `oem doctor` to diagnose the installation.
+```python
+from oem_knowledge.adapters.base import BaseAdapter
+from oem_knowledge.adapters.registry import register_adapter
+
+@register_adapter("my-custom-agent")
+class MyCustomAgentAdapter(BaseAdapter):
+    def verify_mcp(self) -> bool:
+        # Check if agent is installed and configured
+        return True
+
+    def parse_transcript(self, transcript_path) -> str:
+        # Extract dialogue text from agent logs
+        return transcript_path.read_text()
+```
+
+Refer to the [Adapter Architecture Guide](docs/adapter-architecture.md) and [Adapter Specification](docs/adapter-spec.md) for details.
 
 ---
 
-## Common Commands
+## CLI Command Reference
 
-Daily Use
-
-- `oem run opencode`
-- `oem doctor`
-- `oem search`
-
-Setup & Admin
-
-- `oem setup opencode`
-- `oem init`
-
-Knowledge Health
-
-- `oem health`
-
-Advanced
-
-- `oem merge`
-- `oem rebuild`
-- `oem reflect`
+| Command | Category | Description |
+|---|---|---|
+| `oem run <agent>` | **User** | Run a managed coding session with context injection. |
+| `oem doctor` | **User** | Verify workspace health, model warmup, and agent integrations. |
+| `oem search <query>` | **User** | Search the project knowledge base using semantic/hybrid search. |
+| `oem health` | **User** | Scan the workspace for stale, duplicate, or contradicting concepts. |
+| `oem init` | **Admin** | Initialize the `.oem/` memory repository in the current workspace. |
+| `oem config retrieval <mode>` | **Admin** | Swap retrieval strategies between `bm25` and `hybrid`. |
+| `oem merge <id1> <id2>` | **Advanced** | Manually merge two overlapping or duplicate concepts. |
+| `oem rebuild` | **Advanced** | Replay the event store log to rebuild the entire concept registry. |
+| `oem reflect` | **Advanced** | Dry-run reflection and concept extraction from raw transcripts. |
 
 ---
 
-## Best Practices
+## How It Learns: High-Value Cues
 
-OEM works automatically.
+OEM works automatically, but it extracts the highest-quality knowledge when developers state reasoning and results explicitly during a conversation.
 
-For better knowledge capture:
+| Concept Signal | Better (OEM Captures Rationale) | Worse (Vague/Context-Free) |
+|---|---|---|
+| **Decisions** | *"We decided to use TypeScript because Python startup latency caused MCP timeouts."* | *"Use TypeScript."* |
+| **Failures** | *"The pagination job failed because the pagination cursor was not reset between retries."* | *"Pagination is broken."* |
+| **Tradeoffs** | *"We chose client-side caching to avoid Redis dependency, accepting up to 5 minutes of stale data."* | *"Use client-side cache."* |
+| **Experiments** | *"We tested BM25 vs hybrid search. Hybrid scored 23% higher on recall@5, so we made it default."* | *"Hybrid search works better."* |
+| **Outcomes** | *"Restructuring the DB index reduced retrieval latency from 5.5s to 450ms."* | *"Looks faster now."* |
 
-"Session start" and
-- State your goal
-
-"Session end" and
-- State what was completed
-
-These markers are optional but help OEM generate higher-quality reflections and project memory.
-
-OpenEmpiric also learns best when decisions, experiments, and outcomes are made explicit during conversations:
-
-* **Explicit Rationale**: Instead of *"use typescript"*, write: *"we chose typescript because python startup latency caused timeouts."*
-* **Detailed Failures**: Instead of *"it failed"*, write: *"the indexing pipeline failed because ChromaDB rejected np.float32 embeddings."*
-* **Outcome Recording**: Use outcomes to help the ranking model prioritize the most relevant concepts for context injection.
+Check out the [Best Practices Guide](docs/best-practices.md) for more details.
 
 ---
 
-## Repository Structure
+## Repository Anatomy
 
-- [packages/oem-knowledge](file:///home/xpajonx/.config/openempiric/packages/oem-knowledge) — Core RAG logic, SQLite event database, and Python CLI entrypoint.
-- [packages/oem-tui](file:///home/xpajonx/.config/openempiric/packages/oem-tui) — Shared TUI layout utilities and rendering panels.
-- [plugins](file:///home/xpajonx/.config/openempiric/plugins) — TypeScript-native plugins for agent integration.
+- [packages/oem-knowledge](packages/oem-knowledge) — Core RAG logic, SQLite event database, extraction services, and CLI.
+- [packages/oem-tui](packages/oem-tui) — Terminal UI layout and visual dashboard modules.
+- [plugins](plugins) — Native TypeScript plugins for IDE/workstation agent integrations.
+- [docs](docs) — Complete specifications, architecture details, and lifecycle logs.
