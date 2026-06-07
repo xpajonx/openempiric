@@ -21,8 +21,7 @@ Thumbs.db
 .harness/
 .oem/
 .local_vector_db/
-.opencode/ 
-opencode/plans/
+.opencode/plans
 
 # CI artifacts
 tmp_ci_test/
