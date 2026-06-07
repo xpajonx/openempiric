@@ -8,6 +8,7 @@ import tempfile
 import shutil
 
 from oem_knowledge.cli import main
+from oem_knowledge.engine import KnowledgeEngine
 
 
 @pytest.fixture
@@ -161,3 +162,54 @@ def test_oem_warmup_success(tmp_proj):
                 main()
             except SystemExit as e:
                 assert e.code == 0 or e.code is None
+
+
+def test_retrieval_mode_defaults_to_auto(tmp_proj):
+    eng = KnowledgeEngine(tmp_proj)
+    eng.init_project(tmp_proj)
+
+    assert eng.search.get_retrieval_mode() == "auto"
+
+    eng.search.set_retrieval_mode("auto")
+    assert eng.search.get_retrieval_mode() == "auto"
+
+
+def test_oem_doctor_allows_bm25_only_mode(tmp_proj):
+    temp_home = tempfile.mkdtemp()
+    try:
+        with patch("pathlib.Path.home", return_value=Path(temp_home)):
+            with patch("oem_knowledge.cli.check_mcp_server", return_value=(True, True, 19, "")):
+                with patch("oem_knowledge.engine.KnowledgeEngine.embedding_cache_ready", return_value=False):
+                    with patch("oem_knowledge.services.search.SearchService.semantic_dependencies_available", return_value=False):
+                        with patch("oem_knowledge.cli.shutil.which", return_value="/mock/bin"):
+                            with patch.object(sys, "argv", ["oem", "setup", "opencode"]):
+                                main()
+                            with patch.object(sys, "argv", ["oem", "doctor", "--project", tmp_proj]):
+                                try:
+                                    main()
+                                except SystemExit as e:
+                                    assert e.code == 0 or e.code is None
+    finally:
+        shutil.rmtree(temp_home)
+
+
+def test_oem_doctor_requires_embeddings_for_forced_hybrid(tmp_proj):
+    temp_home = tempfile.mkdtemp()
+    try:
+        eng = KnowledgeEngine(tmp_proj)
+        eng.init_project(tmp_proj)
+        eng.search.set_retrieval_mode("hybrid")
+
+        with patch("pathlib.Path.home", return_value=Path(temp_home)):
+            with patch("oem_knowledge.cli.check_mcp_server", return_value=(True, True, 19, "")):
+                with patch("oem_knowledge.engine.KnowledgeEngine.embedding_cache_ready", return_value=False):
+                    with patch("oem_knowledge.services.search.SearchService.semantic_dependencies_available", return_value=False):
+                        with patch("oem_knowledge.cli.shutil.which", return_value="/mock/bin"):
+                            with patch.object(sys, "argv", ["oem", "setup", "opencode"]):
+                                main()
+                            with patch.object(sys, "argv", ["oem", "doctor", "--project", tmp_proj]):
+                                with pytest.raises(SystemExit) as exc_info:
+                                    main()
+                                assert exc_info.value.code == 1
+    finally:
+        shutil.rmtree(temp_home)

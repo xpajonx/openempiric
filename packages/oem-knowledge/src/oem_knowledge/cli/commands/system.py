@@ -551,12 +551,23 @@ def run_system_command(args):
 
         # 8. Embedding Cache Ready check
         try:
+            retrieval_mode = eng.search.get_retrieval_mode()
+            semantic_installed = eng.search.semantic_dependencies_available()
+
             if eng.embedding_cache_ready():
                 lines.append("✓ Embedding Cache Ready")
             else:
-                lines.append("✗ Embedding Cache not ready")
-                lines.append("  → Run `oem warmup` once per machine to pre-download")
-                status = "error"
+                if retrieval_mode == "hybrid":
+                    lines.append("✗ Embedding Cache not ready")
+                    lines.append("  → Run `oem warmup` once per machine to pre-download")
+                    lines.append("  → Or switch to `oem config retrieval auto` or `oem config retrieval bm25`")
+                    status = "error"
+                elif semantic_installed:
+                    lines.append("⚠ Embedding Cache cold (semantic retrieval will download on first use)")
+                    lines.append("  → Run `oem warmup` to pre-download, or let the first managed run warm it")
+                else:
+                    lines.append("⚠ Semantic retrieval not installed; BM25-only mode active")
+                    lines.append("  → Install `[semantic]` for hybrid search, or continue with BM25/auto mode")
         except Exception as e:
             lines.append(f"✗ Failed to check Embedding Cache: {e}")
             status = "error"

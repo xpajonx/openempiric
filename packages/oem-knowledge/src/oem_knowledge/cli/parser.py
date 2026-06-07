@@ -169,7 +169,7 @@ def _setup_parser() -> argparse.ArgumentParser:
     config_p = sub.add_parser("config", help="[User] View or set configuration parameters")
     config_sub = config_p.add_subparsers(dest="config_target", required=True)
     config_retrieval = config_sub.add_parser("retrieval", help="View or set the retrieval mode")
-    config_retrieval.add_argument("mode", nargs="?", choices=["bm25", "hybrid"], help="Retrieval mode to set")
+    config_retrieval.add_argument("mode", nargs="?", choices=["auto", "bm25", "hybrid"], help="Retrieval mode to set")
     config_retrieval.add_argument("--project", type=str, default="")
 
     sub.add_parser("mcp", help="Start the MCP tool server")

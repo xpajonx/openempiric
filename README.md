@@ -80,11 +80,13 @@ graph TD
 
 ### 1. Install Globally
 
-Install the unified `oem` CLI runtime globally using `uv`:
+Install the unified `oem` CLI runtime globally using `uv` with semantic retrieval support:
 
 ```bash
-uv tool install "git+https://github.com/xpajonx/openempiric.git#subdirectory=packages/oem-knowledge"
+uv tool install "git+https://github.com/xpajonx/openempiric.git#subdirectory=packages/oem-knowledge[semantic]"
 ```
+
+For a lighter BM25-only install, you can omit `[semantic]`, but the default user path assumes semantic retrieval is available when possible.
 
 ### 2. Setup Agent Integration
 
@@ -151,10 +153,10 @@ Refer to the [Adapter Architecture Guide](docs/adapter-architecture.md) and [Ada
 |---|---|---|
 | `oem run <agent>` | **User** | Run a managed coding session with context injection. |
 | `oem doctor` | **User** | Verify workspace health, model warmup, and agent integrations. |
-| `oem search <query>` | **User** | Search the project knowledge base using semantic/hybrid search. |
+| `oem search <query>` | **User** | Search the project knowledge base using automatic BM25/hybrid retrieval. |
 | `oem health` | **User** | Scan the workspace for stale, duplicate, or contradicting concepts. |
 | `oem init` | **Admin** | Initialize the `.oem/` memory repository in the current workspace. |
-| `oem config retrieval <mode>` | **Admin** | Swap retrieval strategies between `bm25` and `hybrid`. |
+| `oem config retrieval <mode>` | **Admin** | Set retrieval strategy to `auto`, `bm25`, or `hybrid`. |
 | `oem merge <id1> <id2>` | **Advanced** | Manually merge two overlapping or duplicate concepts. |
 | `oem rebuild` | **Advanced** | Replay the event store log to rebuild the entire concept registry. |
 | `oem reflect` | **Advanced** | Dry-run reflection and concept extraction from raw transcripts. |

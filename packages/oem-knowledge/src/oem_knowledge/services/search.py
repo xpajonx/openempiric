@@ -72,14 +72,14 @@ class SearchService:
         if config_file.exists():
             try:
                 data = json.loads(config_file.read_text(encoding="utf-8"))
-                return data.get("retrieval_mode", "bm25")
+                return data.get("retrieval_mode", "auto")
             except Exception:
                 pass
-        return "bm25"
+        return "auto"
 
     def set_retrieval_mode(self, mode: str):
-        if mode not in ("bm25", "hybrid"):
-            raise ValueError("Invalid retrieval mode. Use 'bm25' or 'hybrid'.")
+        if mode not in ("auto", "bm25", "hybrid"):
+            raise ValueError("Invalid retrieval mode. Use 'auto', 'bm25', or 'hybrid'.")
         harness = self.engine._resolve_harness()
         config_file = harness / "config.json"
         data = {}
@@ -90,6 +90,19 @@ class SearchService:
                 pass
         data["retrieval_mode"] = mode
         config_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    def semantic_dependencies_available(self) -> bool:
+        try:
+            import fastembed  # noqa: F401
+            return True
+        except ImportError:
+            return False
+
+    def resolve_retrieval_mode(self) -> str:
+        configured = self.get_retrieval_mode()
+        if configured == "auto":
+            return "hybrid" if self.semantic_dependencies_available() else "bm25"
+        return configured
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         if self.model is None:
@@ -228,7 +241,7 @@ class SearchService:
                 store = None
 
             if store is not None:
-                retrieval_mode = self.get_retrieval_mode()
+                retrieval_mode = self.resolve_retrieval_mode()
                 # Verify fastembed is installed for hybrid mode
                 if retrieval_mode == "hybrid":
                     try:
@@ -236,7 +249,7 @@ class SearchService:
                     except ImportError:
                         raise ImportError(
                             "Hybrid search requires fastembed. Please install it with 'uv tool install \"git+https://github.com/xpajonx/openempiric.git#subdirectory=packages/oem-knowledge[semantic]\"' "
-                            "or switch to BM25 search using 'oem config retrieval bm25'."
+                            "or switch to automatic/BM25 retrieval using 'oem config retrieval auto' or 'oem config retrieval bm25'."
                         )
 
                 for idx, (fp, path_str, old_hash, cur_hash) in enumerate(to_index):
@@ -312,7 +325,7 @@ class SearchService:
                 else:
                     return []
 
-            retrieval_mode = self.get_retrieval_mode()
+            retrieval_mode = self.resolve_retrieval_mode()
             if retrieval_mode == "hybrid":
                 # Ensure fastembed is installed
                 try:
@@ -320,7 +333,7 @@ class SearchService:
                 except ImportError:
                     raise ImportError(
                         "Hybrid search requires fastembed. Please install it with 'uv tool install \"git+https://github.com/xpajonx/openempiric.git#subdirectory=packages/oem-knowledge[semantic]\"' "
-                        "or switch to BM25 search using 'oem config retrieval bm25'."
+                        "or switch to automatic/BM25 retrieval using 'oem config retrieval auto' or 'oem config retrieval bm25'."
                     )
 
             chunks = store.all_chunks()
