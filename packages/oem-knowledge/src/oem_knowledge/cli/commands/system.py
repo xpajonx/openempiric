@@ -701,6 +701,71 @@ def run_system_command(args):
         spinner.__exit__(None, None, None)
         print(render_panel("OEM Environment Check", lines, status=status))
 
+        # --- Codex App Integration Check ---
+        codex_lines = []
+        codex_status = "ok"
+        codex_active = False
+
+        try:
+            from oem_knowledge.adapters.codex_app.adapter import CodexAppAdapter
+            codex_adapter = CodexAppAdapter(eng, project)
+            
+            # Read-only path detection: do not guess or write to paths.
+            try:
+                config_path = codex_adapter.get_config_path()
+                codex_home_detected = True
+            except RuntimeError as re_err:
+                codex_home_detected = False
+                re_msg = str(re_err)
+                lines_err = [line.strip() for line in re_msg.splitlines()]
+                if adapter_name in ("codex-app", "codex"):
+                    codex_active = True
+                    codex_lines.append("✗ Codex home not detected")
+                    for line_err in lines_err:
+                        if "Please configure" in line_err or "Example" in line_err:
+                            codex_lines.append(f"  → {line_err}")
+                    codex_status = "error"
+
+            if codex_active is False and codex_home_detected:
+                if config_path.exists() or adapter_name in ("codex-app", "codex"):
+                    codex_active = True
+                    
+                    # 1. Config found
+                    if config_path.exists():
+                        codex_lines.append("✓ Config found")
+                    else:
+                        codex_lines.append(f"✗ Config not found (missing {config_path})")
+                        codex_status = "error"
+                    
+                    # 2. OEM MCP registered
+                    if config_path.exists() and codex_adapter.verify_mcp():
+                        codex_lines.append("✓ OEM MCP registered")
+                        
+                        # 3. Tools reachable
+                        expected_mcp = codex_adapter.build_mcp_config()
+                        mcp_cmd = [expected_mcp["command"]] + expected_mcp["args"]
+                        if sys.platform != "win32" and "wsl.exe" in mcp_cmd[0].lower():
+                            mcp_cmd[0] = "wsl.exe"
+                        reachable, functional, num_tools, err = check_mcp_server(mcp_cmd)
+                        if reachable and functional:
+                            codex_lines.append("✓ Tools reachable")
+                        else:
+                            codex_lines.append(f"✗ Tools unreachable: {err}")
+                            codex_status = "error"
+                    else:
+                        codex_lines.append("✗ OEM MCP registered")
+                        codex_lines.append("✗ Tools reachable (MCP not registered)")
+                        codex_status = "error"
+
+        except Exception as e:
+            if adapter_name in ("codex-app", "codex"):
+                codex_active = True
+                codex_lines.append(f"✗ Codex App Integration Check failed: {e}")
+                codex_status = "error"
+
+        if codex_active:
+            print(render_panel("Codex App Integration", codex_lines, status=codex_status))
+
         if any("✗" in l for l in runtime_lines):
             print(render_panel("Runtime Health", runtime_lines, status="error"))
         else:
@@ -784,7 +849,7 @@ def run_system_command(args):
         except Exception as e:
             print(render_panel("Knowledge Health Dashboard", [f"Could not compute: {e}"], status="error"))
 
-        if status == "error":
+        if status == "error" or (codex_active and codex_status == "error"):
             sys.exit(1)
 
     elif args.command == "migrate":

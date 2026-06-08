@@ -42,6 +42,12 @@ class CodexAppAdapter(BaseAdapter):
         raw = os.environ.get("OEM_CODEX_HOME") or os.environ.get("CODEX_HOME")
         if not raw and sys.platform != "win32":
             raw = self._detect_windows_codex_home_from_wsl()
+            if not raw and self._is_wsl():
+                raise RuntimeError(
+                    "Could not automatically detect your Windows Codex home directory from WSL.\n"
+                    "Please configure it manually by setting the OEM_CODEX_HOME environment variable.\n"
+                    "Example: export OEM_CODEX_HOME=\"/mnt/c/Users/YourUsername/.codex\""
+                )
         if not raw:
             raw = (str(Path(os.environ["USERPROFILE"]) / ".codex") if os.environ.get("USERPROFILE") else "")
         if not raw:
@@ -74,6 +80,29 @@ class CodexAppAdapter(BaseAdapter):
     def build_mcp_config(self) -> dict[str, Any]:
         project_dir = self.get_wsl_project_dir()
         distro = self.get_wsl_distro()
+
+        # Check if we are running in a dev workspace
+        is_dev = False
+        workspace_root = Path(self.project_path or Path.cwd()).resolve()
+        while workspace_root.parent != workspace_root:
+            pyproject_path = workspace_root / "pyproject.toml"
+            if pyproject_path.exists():
+                try:
+                    content = pyproject_path.read_text(encoding="utf-8")
+                    if 'name = "oem-mcp"' in content:
+                        is_dev = True
+                        break
+                except Exception:
+                    pass
+            workspace_root = workspace_root.parent
+
+        if is_dev:
+            # Dev workspace: run local package server
+            bash_cmd = f"exec uv run --directory {project_dir} python -m oem_knowledge.server"
+        else:
+            # Global install: run oem mcp
+            bash_cmd = "exec oem mcp"
+
         return {
             "command": self.get_windows_wsl_exe(),
             "args": [
@@ -83,7 +112,7 @@ class CodexAppAdapter(BaseAdapter):
                 project_dir,
                 "bash",
                 "-lc",
-                "exec oem mcp",
+                bash_cmd,
             ],
             "startup_timeout_sec": 120,
         }
@@ -133,6 +162,11 @@ class CodexAppAdapter(BaseAdapter):
         original = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
         updated = self._upsert_mcp_block(original, self.build_mcp_config())
         if repair or updated != original:
+            if config_path.exists():
+                import datetime
+                timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+                backup_path = config_path.with_name(f"config.toml.backup-{timestamp}")
+                backup_path.write_text(original, encoding="utf-8")
             config_path.write_text(updated, encoding="utf-8")
 
         healthy, message = self.verify_health(probe_bridge=False)

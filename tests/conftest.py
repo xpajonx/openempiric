@@ -34,3 +34,12 @@ def mock_fastembed_session():
     class DummyFastembed:
         TextEmbedding = MockTextEmbedding
     sys.modules["fastembed"] = DummyFastembed
+
+
+@pytest.fixture(autouse=True)
+def mock_codex_env(tmp_path, monkeypatch):
+    """Isolate tests from host's Codex App configuration by pointing to a temp sandbox."""
+    sandbox = tmp_path / "sandbox-codex"
+    monkeypatch.setenv("OEM_CODEX_HOME", str(sandbox))
+    monkeypatch.setenv("CODEX_HOME", str(sandbox))
+
