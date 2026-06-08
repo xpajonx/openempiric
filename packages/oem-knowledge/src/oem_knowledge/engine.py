@@ -525,7 +525,8 @@ class KnowledgeEngine:
         idx_res = {"new": 0, "updated": 0, "scanned": 0, "unchanged": 0, "failed": 0}
         try:
             def index_progress(current, total):
-                progress.update_step("index", "running", detail=f"{current} / {total} embeddings")
+                mode_str = "embeddings" if self.search.resolve_retrieval_mode() == "hybrid" else "files"
+                progress.update_step("index", "running", detail=f"{current} / {total} {mode_str}")
             idx_res = self.search.index_all(progress_callback=index_progress)
         except Exception:
             pass

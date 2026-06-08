@@ -198,6 +198,8 @@ def render_commit_complete_panel(
     structured_events: int = 0,
     fallback_concepts: int = 0,
     file_observations: int = 0,
+    index_stats: dict | None = None,
+    retrieval_mode: str = "bm25",
     width: int = 60
 ) -> str:
     from oem_knowledge.ui import render_panel
@@ -211,4 +213,15 @@ def render_commit_complete_panel(
         f"  Fallback Concepts: {fallback_concepts}",
         f"  File Observations: {file_observations}"
     ]
+    if index_stats:
+        lines.append("")
+        lines.append("Search Index Changes:")
+        lines.append(f"  Retrieval Mode:   {retrieval_mode.upper()}")
+        lines.append(f"  New Chunks:       {index_stats.get('new_chunks', 0)}")
+        lines.append(f"  Updated Chunks:   {index_stats.get('updated_chunks', 0)}")
+        lines.append(f"  Unchanged Chunks: {index_stats.get('unchanged_chunks', 0)}")
+        
+        index_time_ms = index_stats.get("index_time_ms", 0)
+        lines.append(f"  Indexing Time:    {index_time_ms / 1000.0:.2f}s")
+        
     return render_panel("Session End Complete", lines, status="ok", width=width)

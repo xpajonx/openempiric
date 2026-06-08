@@ -87,6 +87,29 @@ class VectorStore:
                     pass
         return {"ids": ids}
 
+    def count_chunks_by_source(self, source_path: str) -> int:
+        try:
+            cursor = self.conn.execute(
+                "SELECT COUNT(*) FROM chunks WHERE json_extract(metadata, '$.source') = ?",
+                (source_path,)
+            )
+            return cursor.fetchone()[0]
+        except Exception:
+            # Fallback for systems without JSON1 extension
+            try:
+                cursor = self.conn.execute("SELECT metadata FROM chunks")
+                count = 0
+                for row in cursor.fetchall():
+                    try:
+                        meta = json.loads(row["metadata"])
+                        if meta.get("source") == source_path:
+                            count += 1
+                    except Exception:
+                        pass
+                return count
+            except Exception:
+                return 0
+
     def all_chunks(self) -> list[dict]:
         cursor = self.conn.execute("SELECT id, document, metadata, embedding FROM chunks")
         chunks = []

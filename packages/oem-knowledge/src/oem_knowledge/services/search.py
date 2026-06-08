@@ -101,7 +101,7 @@ class SearchService:
     def resolve_retrieval_mode(self) -> str:
         configured = self.get_retrieval_mode()
         if configured == "auto":
-            return "hybrid" if self.semantic_dependencies_available() else "bm25"
+            return "bm25"
         return configured
 
     def embed(self, texts: list[str]) -> list[list[float]]:
@@ -203,29 +203,54 @@ class SearchService:
                 registry = json.loads(reg_path.read_text())
             except (json.JSONDecodeError, OSError):
                 registry = {}
+
+        # Detect relative path migration
+        is_migration = False
+        if registry:
+            first_key = next(iter(registry.keys()))
+            if os.path.isabs(first_key):
+                is_migration = True
+                print("\n[OEM] Migrating search index registry to relative paths (one-time full re-index)...")
+                force = True
+
         stats = {
             "scanned": len(md_files),
             "new": 0,
             "updated": 0,
             "unchanged": 0,
             "failed": 0,
+            "new_chunks": 0,
+            "updated_chunks": 0,
+            "unchanged_chunks": 0,
+            "failed_chunks": 0,
+            "index_time_ms": 0,
         }
+        start_index_time = time.time()
         active_paths = set()
         new_registry = {}
         to_index = []
 
         for fp in md_files:
-            path_str = str(fp)
+            try:
+                rel_path = str(fp.relative_to(harness.parent))
+            except Exception:
+                rel_path = fp.name
+            path_str = rel_path
             active_paths.add(path_str)
             try:
                 cur_hash = self.calculate_sha256(fp)
-                old_hash = registry.get(path_str)
+                old_hash = None if is_migration else registry.get(path_str)
                 new_registry[path_str] = cur_hash
                 if force or old_hash != cur_hash:
                     stats["new" if old_hash is None else "updated"] += 1
                     to_index.append((fp, path_str, old_hash, cur_hash))
                 else:
                     stats["unchanged"] += 1
+                    try:
+                        if self.vector_store is not None:
+                            stats["unchanged_chunks"] += self.vector_store.count_chunks_by_source(path_str)
+                    except Exception:
+                        pass
             except Exception:
                 stats["failed"] += 1
                 if path_str in registry:
@@ -293,9 +318,13 @@ class SearchService:
                         try:
                             embedding = self.embed([text])[0] if retrieval_mode == "hybrid" else None
                             store.upsert(c_id, text, meta, embedding)
+                            if old_hash is None:
+                                stats["new_chunks"] += 1
+                            else:
+                                stats["updated_chunks"] += 1
                         except Exception as e:
                             print(f"Index error for {c_id}: {e}", file=sys.stderr)
-                            stats["failed"] += 1
+                            stats["failed_chunks"] += 1
 
         deleted_paths = set(registry.keys()) - active_paths
         if deleted_paths:
@@ -309,6 +338,7 @@ class SearchService:
 
         reg_path.parent.mkdir(parents=True, exist_ok=True)
         reg_path.write_text(json.dumps(new_registry, indent=2))
+        stats["index_time_ms"] = int((time.time() - start_index_time) * 1000)
         return stats
 
     def search(self, query: str, k: int = 3, hybrid: bool = True) -> list[dict]:

@@ -67,7 +67,9 @@ def run_session_command(args):
                 duration=commit_duration,
                 structured_events=exp.get("structured_events", 0),
                 fallback_concepts=exp.get("fallback_extractions", 0),
-                file_observations=exp.get("file_observations", 0)
+                file_observations=exp.get("file_observations", 0),
+                index_stats=res.get("index_stats"),
+                retrieval_mode=eng.search.resolve_retrieval_mode()
             )
         )
         if args.verbose and "explainability" in res:

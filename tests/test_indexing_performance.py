@@ -151,4 +151,71 @@ This has keywords like deletableitem.""", encoding="utf-8")
     reg_path = tmp_path / ".oem" / "state" / "file_registry.json"
     assert reg_path.exists()
     registry = json.loads(reg_path.read_text())
-    assert str(cfile) not in registry
+    rel_cfile = str(cfile.relative_to(tmp_path))
+    assert rel_cfile not in registry
+
+
+def test_retrieval_mode_resolves_to_bm25_by_default(temp_project):
+    """Verify that auto retrieval mode resolves to bm25 by default."""
+    engine, _ = temp_project
+    assert engine.search.get_retrieval_mode() == "auto"
+    assert engine.search.resolve_retrieval_mode() == "bm25"
+
+
+def test_incremental_indexing_statistics(temp_project):
+    """Verify chunk-level indexing stats (new_chunks, updated_chunks, unchanged_chunks)."""
+    engine, tmp_path = temp_project
+
+    concepts_dir = tmp_path / ".oem" / "wiki" / "concepts"
+    concepts_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 1. Create first document
+    c1 = concepts_dir / "concept_001.md"
+    c1.write_text("---\nconcept_id: concept_001\ncanonical_name: test-one\nstatus: validated\nconfidence: 3\nevidence_count: 1\nsession_count: 1\naliases: []\n---\n# Test One\nHello context.", encoding="utf-8")
+
+    # Index first document
+    stats1 = engine.search.index_all(force=True)
+    assert stats1["new_chunks"] > 0
+    assert stats1["updated_chunks"] == 0
+    assert stats1["unchanged_chunks"] == 0
+    assert stats1["index_time_ms"] >= 0
+
+    # 2. Re-index without modifications (no-op)
+    stats2 = engine.search.index_all(force=False)
+    assert stats2["new_chunks"] == 0
+    assert stats2["updated_chunks"] == 0
+    assert stats2["unchanged_chunks"] == stats1["new_chunks"]
+
+    # 3. Update the document
+    c1.write_text("---\nconcept_id: concept_001\ncanonical_name: test-one\nstatus: validated\nconfidence: 3\nevidence_count: 1\nsession_count: 1\naliases: []\n---\n# Test One\nHello context modified.", encoding="utf-8")
+    stats3 = engine.search.index_all(force=False)
+    assert stats3["new_chunks"] == 0
+    assert stats3["updated_chunks"] > 0
+    assert stats3["unchanged_chunks"] > 0
+
+
+def test_one_time_migration_warning(temp_project, capsys):
+    """Verify that old absolute path keys trigger a one-time migration warning and full reindex."""
+    engine, tmp_path = temp_project
+    concepts_dir = tmp_path / ".oem" / "wiki" / "concepts"
+    concepts_dir.mkdir(parents=True, exist_ok=True)
+    
+    c1 = concepts_dir / "concept_001.md"
+    c1.write_text("---\nconcept_id: concept_001\ncanonical_name: test-one\nstatus: validated\nconfidence: 3\nevidence_count: 1\nsession_count: 1\naliases: []\n---\n# Test One\nHello.", encoding="utf-8")
+
+    # Initial index
+    engine.search.index_all(force=False)
+
+    # Manually overwrite the registry to simulate old absolute paths
+    reg_path = tmp_path / ".oem" / "state" / "file_registry.json"
+    registry = {
+        str(c1.resolve()): "somehash"
+    }
+    reg_path.write_text(json.dumps(registry), encoding="utf-8")
+
+    # Run index_all again; it should detect absolute path and print migration message
+    stats = engine.search.index_all(force=False)
+    captured = capsys.readouterr()
+    assert "Migrating search index registry to relative paths" in captured.out
+    assert stats["new"] > 0 or stats["updated"] > 0
+

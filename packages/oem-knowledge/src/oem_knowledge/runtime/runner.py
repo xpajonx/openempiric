@@ -508,7 +508,9 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None)
                     duration=commit_duration,
                     structured_events=exp.get("structured_events", 0),
                     fallback_concepts=exp.get("fallback_extractions", 0),
-                    file_observations=exp.get("file_observations", 0)
+                    file_observations=exp.get("file_observations", 0),
+                    index_stats=commit_res.get("index_stats"),
+                    retrieval_mode=eng.search.resolve_retrieval_mode()
                 )
             )
             committed = True

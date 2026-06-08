@@ -143,7 +143,9 @@ def cmd_recover(eng: KnowledgeEngine, project: str | None = None, abort: bool = 
                 duration=commit_duration,
                 structured_events=exp.get("structured_events", 0),
                 fallback_concepts=exp.get("fallback_extractions", 0),
-                file_observations=exp.get("file_observations", 0)
+                file_observations=exp.get("file_observations", 0),
+                index_stats=commit_res.get("index_stats"),
+                retrieval_mode=eng.search.resolve_retrieval_mode()
             )
         )
     except Exception as e:
