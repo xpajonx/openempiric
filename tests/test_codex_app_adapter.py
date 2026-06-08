@@ -3,6 +3,8 @@ from __future__ import annotations
 import tomllib
 from pathlib import Path
 from unittest.mock import patch
+import subprocess
+import sys
 
 import pytest
 
@@ -61,6 +63,25 @@ def test_setup_writes_wsl_mcp_and_preserves_config(tmp_path, codex_home):
         "uv run --directory '/home/xpajonx/.config/openempiric-dev' python -m oem_knowledge.server",
     ]
     assert bridge["startup_timeout_sec"] == 120
+
+
+def test_codex_home_prefers_windows_profile_when_running_in_wsl(tmp_path, monkeypatch):
+    monkeypatch.delenv("OEM_CODEX_HOME", raising=False)
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    monkeypatch.delenv("USERPROFILE", raising=False)
+    monkeypatch.setenv("WSL_DISTRO_NAME", "Ubuntu")
+    monkeypatch.setattr(sys, "platform", "linux")
+
+    def fake_run(cmd, **kwargs):
+        if cmd[:3] == ["powershell.exe", "-NoProfile", "-Command"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="C:\\Users\\upper\n", stderr="")
+        if cmd[:2] == ["wslpath", "-u"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="/mnt/c/Users/upper/.codex\n", stderr="")
+        raise AssertionError(f"Unexpected command: {cmd}")
+
+    with patch("oem_knowledge.adapters.codex_app.adapter.subprocess.run", side_effect=fake_run):
+        adapter = CodexAppAdapter(KnowledgeEngine(str(tmp_path)), str(tmp_path))
+        assert adapter.get_codex_home() == Path("/mnt/c/Users/upper/.codex")
 
 
 def test_setup_repair_replaces_oem_owned_skill(tmp_path, codex_home):

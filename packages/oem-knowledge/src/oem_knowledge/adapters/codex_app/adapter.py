@@ -39,12 +39,13 @@ class CodexAppAdapter(BaseAdapter):
         return os.environ.get("WSL_DISTRO_NAME") or self._distro_from_unc_path(Path.cwd()) or "Ubuntu"
 
     def get_codex_home(self) -> Path:
-        raw = (
-            os.environ.get("OEM_CODEX_HOME")
-            or os.environ.get("CODEX_HOME")
-            or (str(Path(os.environ["USERPROFILE"]) / ".codex") if os.environ.get("USERPROFILE") else "")
-            or str(Path.home() / ".codex")
-        )
+        raw = os.environ.get("OEM_CODEX_HOME") or os.environ.get("CODEX_HOME")
+        if not raw and sys.platform != "win32":
+            raw = self._detect_windows_codex_home_from_wsl()
+        if not raw:
+            raw = (str(Path(os.environ["USERPROFILE"]) / ".codex") if os.environ.get("USERPROFILE") else "")
+        if not raw:
+            raw = str(Path.home() / ".codex")
         return self._windows_path_for_current_runtime(raw)
 
     def get_skill_path(self) -> Path:
@@ -244,6 +245,36 @@ class CodexAppAdapter(BaseAdapter):
         except Exception:
             return None
         return None
+
+    def _detect_windows_codex_home_from_wsl(self) -> str | None:
+        if not self._is_wsl():
+            return None
+        try:
+            proc = subprocess.run(
+                ["powershell.exe", "-NoProfile", "-Command", "$env:USERPROFILE"],
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=10,
+            )
+            if proc.returncode != 0:
+                return None
+            windows_profile = proc.stdout.strip().splitlines()[0].strip() if proc.stdout.strip() else ""
+            if not windows_profile:
+                return None
+            return windows_profile.rstrip("\\/") + "\\.codex"
+        except Exception:
+            return None
+
+    def _is_wsl(self) -> bool:
+        if os.environ.get("WSL_DISTRO_NAME"):
+            return True
+        try:
+            release = Path("/proc/sys/kernel/osrelease")
+            return release.exists() and "microsoft" in release.read_text(encoding="utf-8").lower()
+        except Exception:
+            return False
 
     def _distro_from_unc_path(self, path: Path) -> str | None:
         raw = str(path)
