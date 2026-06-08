@@ -10,6 +10,11 @@ class VectorStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
+        try:
+            self.conn.execute("PRAGMA journal_mode = WAL")
+            self.conn.execute("PRAGMA synchronous = NORMAL")
+        except Exception:
+            pass
         self._ensure_schema()
 
     def _ensure_schema(self):
@@ -129,6 +134,70 @@ class VectorStore:
                 "embedding": embedding
             })
         return chunks
+
+    def upsert_batch(self, chunks: list[tuple[str, str, dict, list[float] | None]]):
+        if not chunks:
+            return
+        data = []
+        for doc_id, document, metadata, embedding in chunks:
+            emb_json = json.dumps(embedding) if embedding is not None else None
+            meta_json = json.dumps(metadata)
+            data.append((doc_id, document, meta_json, emb_json))
+        with self.conn:
+            self.conn.executemany(
+                "INSERT OR REPLACE INTO chunks (id, document, metadata, embedding) VALUES (?, ?, ?, ?)",
+                data
+            )
+
+    def delete_by_sources(self, source_paths: list[str]):
+        if not source_paths:
+            return
+        try:
+            with self.conn:
+                self.conn.executemany(
+                    "DELETE FROM chunks WHERE json_extract(metadata, '$.source') = ?",
+                    [(path,) for path in source_paths]
+                )
+        except Exception:
+            # Fallback for systems without JSON1 extension
+            with self.conn:
+                cursor = self.conn.execute("SELECT id, metadata FROM chunks")
+                to_delete = []
+                source_set = set(source_paths)
+                for row in cursor:
+                    try:
+                        meta = json.loads(row["metadata"])
+                        if meta.get("source") in source_set:
+                            to_delete.append(row["id"])
+                    except Exception:
+                        pass
+                if to_delete:
+                    self.conn.executemany("DELETE FROM chunks WHERE id = ?", [(d,) for d in to_delete])
+
+    def count_chunks_by_source_batch(self) -> dict[str, int]:
+        counts = {}
+        try:
+            cursor = self.conn.execute(
+                "SELECT json_extract(metadata, '$.source'), COUNT(*) FROM chunks GROUP BY json_extract(metadata, '$.source')"
+            )
+            for row in cursor.fetchall():
+                if row[0]:
+                    counts[row[0]] = row[1]
+        except Exception:
+            # Fallback for systems without JSON1 extension
+            try:
+                cursor = self.conn.execute("SELECT metadata FROM chunks")
+                for row in cursor.fetchall():
+                    try:
+                        meta = json.loads(row["metadata"])
+                        source = meta.get("source")
+                        if source:
+                            counts[source] = counts.get(source, 0) + 1
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        return counts
 
     def count(self) -> int:
         cursor = self.conn.execute("SELECT COUNT(*) FROM chunks")

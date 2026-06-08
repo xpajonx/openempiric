@@ -223,6 +223,11 @@ class SearchService:
             "updated_chunks": 0,
             "unchanged_chunks": 0,
             "failed_chunks": 0,
+            "deletes": 0,
+            "count_time_s": 0.0,
+            "chunk_time_s": 0.0,
+            "embed_time_s": 0.0,
+            "write_time_s": 0.0,
             "index_time_ms": 0,
         }
         start_index_time = time.time()
@@ -230,6 +235,20 @@ class SearchService:
         new_registry = {}
         to_index = []
 
+        # 1. Count phase
+        t0 = time.time()
+        chunk_counts = {}
+        store = None
+        try:
+            store = self.vector_store
+            if store is not None:
+                chunk_counts = store.count_chunks_by_source_batch()
+        except Exception:
+            pass
+        stats["count_time_s"] = time.time() - t0
+
+        # 2. Chunk phase
+        t_chunk_start = time.time()
         for fp in md_files:
             try:
                 rel_path = str(fp.relative_to(harness.parent))
@@ -246,65 +265,49 @@ class SearchService:
                     to_index.append((fp, path_str, old_hash, cur_hash))
                 else:
                     stats["unchanged"] += 1
-                    try:
-                        if self.vector_store is not None:
-                            stats["unchanged_chunks"] += self.vector_store.count_chunks_by_source(path_str)
-                    except Exception:
-                        pass
+                    stats["unchanged_chunks"] += chunk_counts.get(path_str, 0)
             except Exception:
                 stats["failed"] += 1
                 if path_str in registry:
                     new_registry[path_str] = registry[path_str]
 
-        if to_index:
-            try:
-                store = self.vector_store
-            except Exception as e:
-                import logging
-                logging.warning("SQLite DB is unavailable for indexing: %s", e)
-                stats["failed"] += len(to_index)
-                store = None
+        chunks_to_upsert = []
+        if to_index and store is not None:
+            retrieval_mode = self.resolve_retrieval_mode()
+            # Verify fastembed is installed for hybrid mode
+            if retrieval_mode == "hybrid":
+                try:
+                    from fastembed import TextEmbedding
+                except ImportError:
+                    raise ImportError(
+                        "Hybrid search requires fastembed. Please install it with 'uv tool install \"git+https://github.com/xpajonx/openempiric.git#subdirectory=packages/oem-knowledge[semantic]\"' "
+                        "or switch to automatic/BM25 retrieval using 'oem config retrieval auto' or 'oem config retrieval bm25'."
+                    )
 
-            if store is not None:
-                retrieval_mode = self.resolve_retrieval_mode()
-                # Verify fastembed is installed for hybrid mode
-                if retrieval_mode == "hybrid":
+            for idx, (fp, path_str, old_hash, cur_hash) in enumerate(to_index):
+                if progress_callback is not None:
                     try:
-                        from fastembed import TextEmbedding
-                    except ImportError:
-                        raise ImportError(
-                            "Hybrid search requires fastembed. Please install it with 'uv tool install \"git+https://github.com/xpajonx/openempiric.git#subdirectory=packages/oem-knowledge[semantic]\"' "
-                            "or switch to automatic/BM25 retrieval using 'oem config retrieval auto' or 'oem config retrieval bm25'."
-                        )
-
-                for idx, (fp, path_str, old_hash, cur_hash) in enumerate(to_index):
-                    if progress_callback is not None:
-                        try:
-                            progress_callback(idx + 1, len(to_index))
-                        except Exception:
-                            pass
-                    if old_hash is not None:
-                        try:
-                            store.delete_by_source(path_str)
-                        except Exception:
-                            pass
-
-                    try:
-                        rel_path = str(fp.relative_to(harness.parent))
+                        progress_callback(idx + 1, len(to_index))
                     except Exception:
-                        rel_path = fp.name
+                        pass
 
-                    chunks = self.chunk_markdown(fp, rel_path)
-                    if not chunks:
-                        continue
+                try:
+                    rel_path = str(fp.relative_to(harness.parent))
+                except Exception:
+                    rel_path = fp.name
 
-                    mtime = os.path.getmtime(fp)
-                    imp = self.derive_importance(rel_path)
+                chunks = self.chunk_markdown(fp, rel_path)
+                if not chunks:
+                    continue
 
-                    for c in chunks:
-                        c_id = c["chunk_id"]
-                        text = c["text"]
-                        meta = {
+                mtime = os.path.getmtime(fp)
+                imp = self.derive_importance(rel_path)
+
+                for c in chunks:
+                    chunks_to_upsert.append({
+                        "chunk_id": c["chunk_id"],
+                        "text": c["text"],
+                        "meta": {
                             "source": path_str,
                             "rel_path": rel_path,
                             "title": c["title"],
@@ -313,32 +316,91 @@ class SearchService:
                             "created_at": str(mtime),
                             "updated_at": str(mtime),
                             "importance": imp,
-                        }
-                        
-                        try:
-                            embedding = self.embed([text])[0] if retrieval_mode == "hybrid" else None
-                            store.upsert(c_id, text, meta, embedding)
-                            if old_hash is None:
-                                stats["new_chunks"] += 1
-                            else:
-                                stats["updated_chunks"] += 1
-                        except Exception as e:
-                            print(f"Index error for {c_id}: {e}", file=sys.stderr)
-                            stats["failed_chunks"] += 1
+                        },
+                        "old_hash": old_hash
+                    })
+        stats["chunk_time_s"] = time.time() - t_chunk_start
 
-        deleted_paths = set(registry.keys()) - active_paths
-        if deleted_paths:
-            try:
-                store = self.vector_store
-                if store is not None:
-                    for path in deleted_paths:
-                        store.delete_by_source(path)
-            except Exception:
-                pass
+        # 3. Embedding phase
+        t_embed_start = time.time()
+        embeddings = []
+        if chunks_to_upsert and store is not None:
+            retrieval_mode = self.resolve_retrieval_mode()
+            if retrieval_mode == "hybrid":
+                try:
+                    texts = [c["text"] for c in chunks_to_upsert]
+                    embeddings = self.embed(texts)
+                except Exception as e:
+                    print(f"Batch embedding generation error: {e}", file=sys.stderr)
+                    embeddings = [None] * len(chunks_to_upsert)
+            else:
+                embeddings = [None] * len(chunks_to_upsert)
+        stats["embed_time_s"] = time.time() - t_embed_start
+
+        # 4. SQLite write phase
+        t_write_start = time.time()
+        if store is not None:
+            # Batch delete
+            sources_to_delete = [path_str for _, path_str, old_hash, _ in to_index if old_hash is not None]
+            if sources_to_delete:
+                try:
+                    store.delete_by_sources(sources_to_delete)
+                    stats["deletes"] += len(sources_to_delete)
+                except Exception:
+                    pass
+
+            # Batch upsert
+            if chunks_to_upsert:
+                batch_data = []
+                for idx, c in enumerate(chunks_to_upsert):
+                    batch_data.append((
+                        c["chunk_id"],
+                        c["text"],
+                        c["meta"],
+                        embeddings[idx]
+                    ))
+                    if c["old_hash"] is None:
+                        stats["new_chunks"] += 1
+                    else:
+                        stats["updated_chunks"] += 1
+
+                try:
+                    store.upsert_batch(batch_data)
+                except Exception as e:
+                    print(f"Batch upsert error: {e}", file=sys.stderr)
+                    stats["failed_chunks"] += len(chunks_to_upsert)
+
+            # Handle deleted paths
+            deleted_paths = set(registry.keys()) - active_paths
+            if deleted_paths:
+                try:
+                    store.delete_by_sources(list(deleted_paths))
+                    stats["deletes"] += len(deleted_paths)
+                except Exception:
+                    pass
+        stats["write_time_s"] = time.time() - t_write_start
 
         reg_path.parent.mkdir(parents=True, exist_ok=True)
         reg_path.write_text(json.dumps(new_registry, indent=2))
-        stats["index_time_ms"] = int((time.time() - start_index_time) * 1000)
+        
+        total_time = time.time() - start_index_time
+        stats["index_time_ms"] = int(total_time * 1000)
+
+        # Output the print instrumentation
+        total_chunks = stats["new_chunks"] + stats["updated_chunks"] + stats["unchanged_chunks"]
+        print(f"\nIndex Profile:")
+        print(f"  Files scanned:       {stats['scanned']}")
+        print(f"  Chunks total:        {total_chunks}")
+        print(f"  New chunks:          {stats['new_chunks']}")
+        print(f"  Updated chunks:      {stats['updated_chunks']}")
+        print(f"  Unchanged chunks:    {stats['unchanged_chunks']}")
+        print(f"  Deletes:             {stats['deletes']}")
+        print(f"  Count phase:         {stats['count_time_s']:.2f}s")
+        print(f"  Chunk phase:         {stats['chunk_time_s']:.2f}s")
+        print(f"  Embedding phase:     {stats['embed_time_s']:.2f}s")
+        print(f"  SQLite write phase:  {stats['write_time_s']:.2f}s")
+        print(f"  Total:               {total_time:.2f}s")
+
         return stats
 
     def search(self, query: str, k: int = 3, hybrid: bool = True) -> list[dict]:

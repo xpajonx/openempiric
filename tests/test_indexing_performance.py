@@ -219,3 +219,80 @@ def test_one_time_migration_warning(temp_project, capsys):
     assert "Migrating search index registry to relative paths" in captured.out
     assert stats["new"] > 0 or stats["updated"] > 0
 
+
+def test_batch_sqlite_operations(temp_project):
+    """Verify that batch inserts and batch deletes work as expected."""
+    engine, _ = temp_project
+    store = engine.search.vector_store
+
+    # 1. Batch insert
+    chunks = [
+        ("chunk_a", "Doc A text", {"source": "doc_a.md"}, None),
+        ("chunk_b", "Doc B text", {"source": "doc_b.md"}, None),
+    ]
+    store.upsert_batch(chunks)
+    assert store.count() == 2
+
+    # 2. Batch delete
+    store.delete_by_sources(["doc_a.md", "doc_b.md"])
+    assert store.count() == 0
+
+
+def test_batch_count_chunks(temp_project):
+    """Verify count_chunks_by_source_batch matches individual counts."""
+    engine, _ = temp_project
+    store = engine.search.vector_store
+
+    chunks = [
+        ("chunk1", "Doc 1 text", {"source": "doc_1.md"}, None),
+        ("chunk2", "Doc 1 text Part 2", {"source": "doc_1.md"}, None),
+        ("chunk3", "Doc 2 text", {"source": "doc_2.md"}, None),
+    ]
+    store.upsert_batch(chunks)
+
+    counts = store.count_chunks_by_source_batch()
+    assert counts.get("doc_1.md") == 2
+    assert counts.get("doc_2.md") == 1
+    assert counts.get("nonexistent.md") is None
+
+
+def test_index_all_uses_batched_writes(temp_project):
+    """Verify indexing uses batch operations exclusively and does not call individual ones."""
+    from unittest.mock import MagicMock
+    engine, tmp_path = temp_project
+
+    concepts_dir = tmp_path / ".oem" / "wiki" / "concepts"
+    concepts_dir.mkdir(parents=True, exist_ok=True)
+    c1 = concepts_dir / "concept_001.md"
+    c1.write_text("---\nconcept_id: concept_001\ncanonical_name: test-one\nstatus: validated\nconfidence: 3\nevidence_count: 1\nsession_count: 1\naliases: []\n---\n# Test One\nHello.", encoding="utf-8")
+
+    # Warm up / create registry to simulate update path
+    engine.search.index_all(force=False)
+    
+    # Modify file
+    c1.write_text("---\nconcept_id: concept_001\ncanonical_name: test-one\nstatus: validated\nconfidence: 3\nevidence_count: 1\nsession_count: 1\naliases: []\n---\n# Test One\nHello modified.", encoding="utf-8")
+
+    # Mock the vector store methods
+    store = engine.search.vector_store
+    store.upsert = MagicMock()
+    store.delete_by_source = MagicMock()
+    store.count_chunks_by_source = MagicMock()
+
+    store.upsert_batch = MagicMock()
+    store.delete_by_sources = MagicMock()
+    store.count_chunks_by_source_batch = MagicMock(return_value={".oem/wiki/concepts/concept_001.md": 1})
+
+    # Run indexing
+    engine.search.index_all(force=False)
+
+    # Assert old single methods were NEVER called
+    store.upsert.assert_not_called()
+    store.delete_by_source.assert_not_called()
+    store.count_chunks_by_source.assert_not_called()
+
+    # Assert batch methods WERE called
+    store.count_chunks_by_source_batch.assert_called_once()
+    store.delete_by_sources.assert_called_once()
+    store.upsert_batch.assert_called_once()
+
+
