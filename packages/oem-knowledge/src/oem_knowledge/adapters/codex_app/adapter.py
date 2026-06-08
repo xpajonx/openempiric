@@ -230,7 +230,7 @@ class CodexAppAdapter(BaseAdapter):
         pattern = re.compile(r"(?ms)^\[mcp_servers\.openempiric\]\s*\n.*?(?=^\[|\Z)")
         stripped = text.rstrip()
         if pattern.search(text):
-            return pattern.sub(block, text).rstrip() + "\n"
+            return pattern.sub(lambda _match: block, text).rstrip() + "\n"
         if not stripped:
             return block
         return stripped + "\n\n" + block

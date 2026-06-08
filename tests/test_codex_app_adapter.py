@@ -66,6 +66,21 @@ def test_setup_writes_wsl_mcp_and_preserves_config(tmp_path, codex_home):
     assert bridge["startup_timeout_sec"] == 120
 
 
+def test_setup_replaces_existing_mcp_block_with_parseable_windows_path(tmp_path, codex_home):
+    config = codex_home / "config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        '[mcp_servers.openempiric]\ncommand = "wsl.exe"\nargs = []\n',
+        encoding="utf-8",
+    )
+
+    adapter = CodexAppAdapter(KnowledgeEngine(str(tmp_path)), str(tmp_path))
+    adapter.setup(repair=True)
+
+    data = tomllib.loads(config.read_text(encoding="utf-8"))
+    assert data["mcp_servers"]["openempiric"]["command"] == "C:\\Windows\\System32\\wsl.exe"
+
+
 def test_codex_home_prefers_windows_profile_when_running_in_wsl(tmp_path, monkeypatch):
     monkeypatch.delenv("OEM_CODEX_HOME", raising=False)
     monkeypatch.delenv("CODEX_HOME", raising=False)
