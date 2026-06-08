@@ -142,6 +142,45 @@ def mount_tools(mcp: object) -> None:
         ]
         return render_panel("Knowledge Graph", lines, status="organize")
 
+    def _commit_session_from_tool(
+        eng: KnowledgeEngine, project: str, conversation_text: str, session_id: str
+    ) -> str:
+        try:
+            res = eng.session_commit(project or None, conversation_text, session_id)
+        except Exception as e:
+            return f"# Session End Failure\n\nError: {e}"
+
+        events = res.get("knowledge_events", [])
+        event_counts: dict[str, int] = {}
+        for ev in events:
+            t = ev.get("type", "observation")
+            event_counts[t] = event_counts.get(t, 0) + 1
+
+        lines = [
+            "# Session End / Commit Complete",
+            "",
+            "Session ended successfully / Session commit succeeded.",
+            f"**Report**: {Path(res.get('report_path', '')).name}",
+            "",
+            "### Extracted Knowledge Events:",
+        ]
+        if event_counts:
+            for t, c in sorted(event_counts.items()):
+                lines.append(f"- **{t.title()}**: {c} events")
+        else:
+            lines.append("- None")
+
+        lines.extend(
+            [
+                "",
+                "### Graph & Index Updates:",
+                f"- **Materialized**: {len(res.get('materialized_log', []))} concepts",
+                f"- **Links updated**: {res.get('links_updated', 0)}",
+                f"- **Index**: {res.get('index_stats', {}).get('new', 0)} new, {res.get('index_stats', {}).get('updated', 0)} updated",
+            ]
+        )
+        return "\n".join(lines)
+
     @mcp.tool()
     def knowledge_session_commit(
         project: str = "", conversation_text: str = "", session_id: str = ""
@@ -157,40 +196,21 @@ def mount_tools(mcp: object) -> None:
             session_id: Optional session ID for correlation.
         """
         eng = KnowledgeEngine(project or None)
-        try:
-            res = eng.session_commit(project or None, conversation_text, session_id)
-        except Exception as e:
-            return render_panel(
-                "Session Commit Failure", [f"Error: {e}"], status="error"
-            )
+        return _commit_session_from_tool(eng, project, conversation_text, session_id)
 
-        events = res.get("knowledge_events", [])
-        event_counts: dict[str, int] = {}
-        for ev in events:
-            t = ev.get("type", "observation")
-            event_counts[t] = event_counts.get(t, 0) + 1
+    @mcp.tool()
+    def knowledge_session_end(
+        project: str = "", conversation_text: str = "", session_id: str = ""
+    ) -> str:
+        """End the current knowledge session, trigger reflection/materialization, update graph, and re-index.
 
-        lines = [
-            "Session commit succeeded.",
-            f"Report: {Path(res.get('report_path', '')).name}",
-            "",
-            "Extracted Knowledge Events:",
-        ]
-        if event_counts:
-            for t, c in sorted(event_counts.items()):
-                lines.append(f"  - {t.title()}: {c} events")
-        else:
-            lines.append("  - None")
-        lines.extend(
-            [
-                "",
-                "Graph & Index:",
-                f"  Materialized:   {len(res.get('materialized_log', []))} concepts",
-                f"  Links updated:  {res.get('links_updated', 0)}",
-                f"  Index: {res.get('index_stats', {}).get('new', 0)} new, {res.get('index_stats', {}).get('updated', 0)} updated",
-            ]
-        )
-        return render_panel("Session Commit Complete", lines, status="ok")
+        Args:
+            project: Project directory path. Defaults to current directory.
+            conversation_text: Raw conversation text or history for knowledge extraction.
+            session_id: Optional session ID.
+        """
+        eng = KnowledgeEngine(project or None)
+        return _commit_session_from_tool(eng, project, conversation_text, session_id)
 
     @mcp.tool()
     def knowledge_consolidate(project: str = "") -> str:

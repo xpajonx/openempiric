@@ -512,3 +512,110 @@ We discuss [[AI Safety]] here."""
         sfs.write_text(target, "A very long text content " * 10)
         with pytest.raises(ValueError, match="Truncation risk detected"):
             sfs.write_text(target, "Short")
+
+
+    def test_registration_additivity(self):
+        """Assert that registering knowledge_session_end is additive and does not modify other tool registrations."""
+        # Get all registered tools on the test FastMCP instance
+        import asyncio
+        tools = [t.name for t in asyncio.run(mcp.list_tools())]
+        
+        # Verify new tool is registered
+        assert "knowledge_session_end" in tools
+        
+        # Verify existing tools remain registered
+        assert "knowledge_search" in tools
+        assert "knowledge_explain_concept" in tools
+        assert "knowledge_graph_query" in tools
+        assert "knowledge_usage_report" in tools
+        assert "knowledge_session_commit" in tools
+
+    def test_knowledge_session_end(self, tmp_proj):
+        """Verify knowledge_session_end works correctly and returns clean markdown."""
+        _call("knowledge_init", {"project": tmp_proj})
+        
+        convo = "decision: Use React for the UI"
+        result = _call(
+            "knowledge_session_end",
+            {
+                "project": tmp_proj,
+                "conversation_text": convo,
+            }
+        )
+        
+        text = result.content[0].text
+        # Clean markdown checks (no ANSI colors or ASCII frame decorators)
+        assert "Session End / Commit Complete" in text
+        assert "Session ended successfully" in text
+        assert "React" not in text  # It writes events but doesn't print raw text details by default
+        assert "\u2502" not in text  # ASCII border characters
+        assert "\u2551" not in text
+        assert "\x1b" not in text  # ANSI codes
+
+        # Check session report was written
+        sessions_dir = Path(tmp_proj) / OEM_DIR / "sessions"
+        assert sessions_dir.is_dir()
+        assert len(list(sessions_dir.glob("*.md"))) >= 1
+
+    def test_backward_compatibility(self, tmp_proj):
+        """Verify knowledge_session_commit is backward compatible and behaves same as session_end."""
+        _call("knowledge_init", {"project": tmp_proj})
+        
+        convo = "decision: Use Tailwind"
+        result = _call(
+            "knowledge_session_commit",
+            {
+                "project": tmp_proj,
+                "conversation_text": convo,
+            }
+        )
+        
+        text = result.content[0].text
+        assert "Session End / Commit Complete" in text
+        assert "Session ended successfully" in text
+
+    def test_no_config_mutation(self, tmp_proj):
+        """Verify calling session_end does not mutate or write opencode.jsonc config file."""
+        _call("knowledge_init", {"project": tmp_proj})
+        
+        opencode_config = Path.home() / ".config" / "opencode" / "opencode.jsonc"
+        # Record stats of file if it exists, or verify it is not created
+        exists_before = opencode_config.exists()
+        mtime_before = opencode_config.stat().st_mtime if exists_before else None
+        
+        _call(
+            "knowledge_session_end",
+            {
+                "project": tmp_proj,
+                "conversation_text": "decision: Keep config clean",
+            }
+        )
+        
+        if exists_before:
+            assert opencode_config.stat().st_mtime == mtime_before
+        else:
+            assert not opencode_config.exists()
+
+    def test_double_end_safety(self, tmp_proj):
+        """Verify double end calls do not corrupt state or crash."""
+        _call("knowledge_init", {"project": tmp_proj})
+        
+        # Call once
+        res1 = _call(
+            "knowledge_session_end",
+            {
+                "project": tmp_proj,
+                "conversation_text": "decision: First commit",
+            }
+        )
+        assert "Session ended successfully" in res1.content[0].text
+        
+        # Call twice
+        res2 = _call(
+            "knowledge_session_end",
+            {
+                "project": tmp_proj,
+                "conversation_text": "decision: Second commit",
+            }
+        )
+        assert "Session ended successfully" in res2.content[0].text
