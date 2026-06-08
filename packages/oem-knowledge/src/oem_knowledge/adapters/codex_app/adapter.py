@@ -169,6 +169,8 @@ class CodexAppAdapter(BaseAdapter):
                 backup_path.write_text(original, encoding="utf-8")
             config_path.write_text(updated, encoding="utf-8")
 
+        self.install_project_skill()
+
         healthy, message = self.verify_health(probe_bridge=False)
         return {
             "codex_home": str(codex_home),
@@ -178,6 +180,63 @@ class CodexAppAdapter(BaseAdapter):
             "healthy": healthy,
             "message": message,
         }
+
+    def install_project_skill(self) -> bool:
+        try:
+            harness = self.engine._resolve_harness(self.project_path)
+            skills_dir = harness / "skills"
+            skills_dir.mkdir(parents=True, exist_ok=True)
+            skills_file = skills_dir / "openempiric.yaml"
+
+            import yaml
+            existing_data = {}
+            if skills_file.exists():
+                try:
+                    with open(skills_file, "r", encoding="utf-8") as f:
+                        existing_data = yaml.safe_load(f) or {}
+                except Exception:
+                    pass
+
+            adapters = existing_data.get("adapters", [])
+            if not isinstance(adapters, list):
+                adapters = [adapters] if adapters else []
+            
+            if "adapter" in existing_data:
+                legacy = existing_data["adapter"]
+                if legacy and legacy not in adapters:
+                    adapters.append(legacy)
+
+            if "codex-app" not in adapters:
+                adapters.append("codex-app")
+
+            updated_data = dict(existing_data)
+            updated_data["name"] = existing_data.get("name", "openempiric")
+            updated_data["version"] = existing_data.get("version", "0.97")
+            updated_data["schema_version"] = existing_data.get("schema_version", 1)
+            updated_data["adapters"] = adapters
+            
+            if "adapter" in updated_data:
+                del updated_data["adapter"]
+
+            updated_data["description"] = existing_data.get("description", "Agent knowledge runtime")
+            updated_data["required"] = existing_data.get("required", ["knowledge_search", "knowledge_capture_after_work"])
+            updated_data["tools"] = existing_data.get("tools", ["oem", "knowledge_search"])
+            updated_data["best_practices"] = existing_data.get("best_practices", [
+                "OpenEmpiric is already active for this session; do not initialize it manually.",
+                "Relevant project memory has been restored automatically into your context.",
+                "When OEM knowledge is relevant, prefer calling OEM tools directly instead of executing shell commands.",
+                "Do not use shell execution when a corresponding OEM tool is available.",
+                "Refer to active concepts and past failures during planning to align with existing decisions.",
+                "Report referenced memory concepts at session end using the knowledge_usage_report tool.",
+                "Use knowledge_search when additional project context is needed.",
+                "Fallback Strategy: If the MCP server is unreachable or a tool call fails, fall back to the OEM CLI (oem search)."
+            ])
+
+            with open(skills_file, "w", encoding="utf-8") as f:
+                yaml.safe_dump(updated_data, f, default_flow_style=False, sort_keys=False)
+            return True
+        except Exception:
+            return False
 
     def install_skill(self) -> bool:
         try:

@@ -178,3 +178,80 @@ def test_safe_wsl_home_detection_failure(temp_env):
                         adapter.get_codex_home()
                     
                     assert "Could not automatically detect your Windows Codex home directory from WSL" in str(exc_info.value)
+
+
+def test_multi_adapter_skill_merging(temp_env):
+    """Verify that setups for both opencode and codex-app merge non-destructively in openempiric.yaml."""
+    import yaml
+    # Initialize engine/project
+    eng = KnowledgeEngine(temp_env)
+    eng.init_project(str(temp_env))
+    
+    # Skills yaml path
+    skills_file = temp_env / ".oem" / "skills" / "openempiric.yaml"
+    assert skills_file.exists()
+    
+    # 1. Run setup for opencode
+    with patch("pathlib.Path.home", return_value=temp_env), patch("os.getcwd", return_value=str(temp_env)):
+        with patch.object(sys, "argv", ["oem", "setup", "opencode"]):
+            main()
+            
+    with open(skills_file, "r") as f:
+        data = yaml.safe_load(f)
+    assert "opencode" in data["adapters"]
+    assert "codex-app" not in data["adapters"]
+    
+    # 2. Run setup for codex-app
+    codex_home = temp_env / "codex-home"
+    env_vars = {
+        "OEM_CODEX_HOME": str(codex_home),
+        "OEM_CODEX_WSL_PROJECT_DIR": str(temp_env),
+        "WSL_DISTRO_NAME": "Ubuntu",
+    }
+    with patch.dict(os.environ, env_vars):
+        with patch("pathlib.Path.home", return_value=temp_env), patch("os.getcwd", return_value=str(temp_env)):
+            with patch.object(sys, "argv", ["oem", "setup", "codex-app"]):
+                main()
+                
+    with open(skills_file, "r") as f:
+        data = yaml.safe_load(f)
+    assert "opencode" in data["adapters"]
+    assert "codex-app" in data["adapters"]
+
+
+def test_legacy_skill_migration_to_adapters(temp_env):
+    """Verify that a legacy adapter: opencode is converted to adapters: [opencode] during setup."""
+    import yaml
+    eng = KnowledgeEngine(temp_env)
+    eng.init_project(str(temp_env))
+    
+    skills_file = temp_env / ".oem" / "skills" / "openempiric.yaml"
+    
+    # Write legacy format
+    legacy_data = {
+        "name": "openempiric",
+        "version": "0.97",
+        "schema_version": 1,
+        "adapter": "opencode"
+    }
+    with open(skills_file, "w") as f:
+        yaml.safe_dump(legacy_data, f)
+        
+    # Run setup to trigger migration
+    codex_home = temp_env / "codex-home"
+    env_vars = {
+        "OEM_CODEX_HOME": str(codex_home),
+        "OEM_CODEX_WSL_PROJECT_DIR": str(temp_env),
+        "WSL_DISTRO_NAME": "Ubuntu",
+    }
+    with patch.dict(os.environ, env_vars):
+        with patch("pathlib.Path.home", return_value=temp_env), patch("os.getcwd", return_value=str(temp_env)):
+            with patch.object(sys, "argv", ["oem", "setup", "codex-app"]):
+                main()
+                
+    with open(skills_file, "r") as f:
+        data = yaml.safe_load(f)
+    assert "adapter" not in data
+    assert "opencode" in data["adapters"]
+    assert "codex-app" in data["adapters"]
+

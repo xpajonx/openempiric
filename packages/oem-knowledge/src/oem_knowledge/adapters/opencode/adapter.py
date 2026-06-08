@@ -20,35 +20,53 @@ class OpenCodeAdapter(BaseAdapter):
             skills_dir = harness / "skills"
             skills_dir.mkdir(parents=True, exist_ok=True)
             skills_file = skills_dir / "openempiric.yaml"
+
+            import yaml
+            existing_data = {}
+            if skills_file.exists():
+                try:
+                    with open(skills_file, "r", encoding="utf-8") as f:
+                        existing_data = yaml.safe_load(f) or {}
+                except Exception:
+                    pass
+
+            adapters = existing_data.get("adapters", [])
+            if not isinstance(adapters, list):
+                adapters = [adapters] if adapters else []
             
-            SKILLS_YAML_CONTENT = """name: openempiric
-version: "0.97"
-schema_version: 1
-adapter: opencode
-description: Agent knowledge runtime
-required:
-  - knowledge_search
-  - knowledge_capture_after_work
-tools:
-  - oem
-  - knowledge_search
-best_practices:
-  - OpenEmpiric is already active for this session; do not initialize it manually.
-  - Relevant project memory has been restored automatically into your context.
-  - When OEM knowledge is relevant, prefer calling OEM tools directly instead of executing shell commands.
-  - Do not use shell execution (e.g. uv run ... oem search) when a corresponding OEM tool (e.g. knowledge_search) is available.
-  - Refer to active concepts and past failures during planning to align with existing decisions.
-  - Report referenced memory concepts at session end using the knowledge_usage_report tool.
-  - Use knowledge_search when additional project context is needed (such as reviewing project history, understanding prior decisions, or investigating known failures).
-  - Use knowledge_health_check rarely and only if diagnostics/runtime issues are suspected (routine health checks are handled automatically by the runtime supervisor).
-  - Fallback Strategy: If the MCP server is unreachable or a tool call fails, fall back to the OEM CLI (oem search), and only fall back to raw shell execution if the CLI is unavailable.
-  - Explicitly state decisions and rationale.
-  - Record failures and root causes.
-  - Summarize experiments and outcomes.
-  - Capture important tradeoffs.
-  - Record session outcomes and goal satisfaction when available.
-"""
-            skills_file.write_text(SKILLS_YAML_CONTENT, encoding="utf-8")
+            if "adapter" in existing_data:
+                legacy = existing_data["adapter"]
+                if legacy and legacy not in adapters:
+                    adapters.append(legacy)
+
+            if "opencode" not in adapters:
+                adapters.append("opencode")
+
+            updated_data = dict(existing_data)
+            updated_data["name"] = existing_data.get("name", "openempiric")
+            updated_data["version"] = existing_data.get("version", "0.97")
+            updated_data["schema_version"] = existing_data.get("schema_version", 1)
+            updated_data["adapters"] = adapters
+            
+            if "adapter" in updated_data:
+                del updated_data["adapter"]
+
+            updated_data["description"] = existing_data.get("description", "Agent knowledge runtime")
+            updated_data["required"] = existing_data.get("required", ["knowledge_search", "knowledge_capture_after_work"])
+            updated_data["tools"] = existing_data.get("tools", ["oem", "knowledge_search"])
+            updated_data["best_practices"] = existing_data.get("best_practices", [
+                "OpenEmpiric is already active for this session; do not initialize it manually.",
+                "Relevant project memory has been restored automatically into your context.",
+                "When OEM knowledge is relevant, prefer calling OEM tools directly instead of executing shell commands.",
+                "Do not use shell execution when a corresponding OEM tool is available.",
+                "Refer to active concepts and past failures during planning to align with existing decisions.",
+                "Report referenced memory concepts at session end using the knowledge_usage_report tool.",
+                "Use knowledge_search when additional project context is needed.",
+                "Fallback Strategy: If the MCP server is unreachable or a tool call fails, fall back to the OEM CLI (oem search)."
+            ])
+
+            with open(skills_file, "w", encoding="utf-8") as f:
+                yaml.safe_dump(updated_data, f, default_flow_style=False, sort_keys=False)
             return True
         except Exception:
             return False

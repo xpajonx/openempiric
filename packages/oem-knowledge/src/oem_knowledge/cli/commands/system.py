@@ -450,87 +450,6 @@ def run_system_command(args):
                 status = "error"
             lines.append("⚠ Development workspace not detected")
 
-        # OpenCode Workstation Integration Checks
-        opencode_dir = Path.home() / ".config" / "opencode"
-        plugin_dest = opencode_dir / "plugins" / "openempiric.ts"
-        inst_dest = opencode_dir / "instructions" / "memory-start.md"
-        jsonc_file = opencode_dir / "opencode.jsonc"
-
-        # Check plugin
-        if not plugin_dest.exists():
-            lines.append("⚠ OpenCode Plugin not installed (missing plugins/openempiric.ts) — run 'oem setup opencode'")
-        else:
-            try:
-                p_content = plugin_dest.read_text(encoding="utf-8")
-                if "knowledge_session_start" in p_content or "verify plugin array" in p_content or "session lifecycle is automatic" in p_content:
-                    lines.append("⚠ OpenCode Plugin is legacy/outdated — run 'oem setup opencode --repair'")
-                else:
-                    lines.append("✓ OpenCode Plugin installed")
-            except Exception as e:
-                lines.append(f"⚠ Failed to read openempiric.ts plugin: {e}")
-
-        # Check instructions
-        if not inst_dest.exists():
-            lines.append("⚠ OpenCode Instructions not installed (missing instructions/memory-start.md) — run 'oem setup opencode'")
-        else:
-            try:
-                i_content = inst_dest.read_text(encoding="utf-8")
-                if "knowledge_session_start" in i_content or "knowledge_session_commit" in i_content or "verify plugin array" in i_content:
-                    lines.append("⚠ OpenCode Instructions are legacy/outdated — run 'oem setup opencode --repair'")
-                else:
-                    lines.append("✓ OpenCode Instructions installed")
-            except Exception as e:
-                lines.append(f"⚠ Failed to read memory-start.md instructions: {e}")
-
-        # Check config
-        mcp_registered = False
-        mcp_cmd = []
-        if not jsonc_file.exists():
-            lines.append("⚠ OpenCode Config missing (missing opencode.jsonc) — run 'oem setup opencode'")
-        else:
-            try:
-                text = jsonc_file.read_text(encoding="utf-8")
-                cleaned = _strip_jsonc_comments(text)
-                config_data = json.loads(cleaned, strict=False)
-                inst_path_str = str(inst_dest.resolve())
-                inst_list = config_data.get("instructions", [])
-                if inst_path_str not in inst_list:
-                    lines.append("⚠ OpenCode Config does not register memory-start.md instruction — run 'oem setup opencode'")
-                else:
-                    lines.append("✓ OpenCode Config verified")
-
-                mcp_config = config_data.get("mcp", {}).get("openempiric")
-                if mcp_config:
-                    mcp_registered = True
-                    cmd = mcp_config.get("command")
-                    mcp_args = mcp_config.get("args", [])
-                    if isinstance(cmd, str):
-                        mcp_cmd = [cmd] + mcp_args
-                    elif isinstance(cmd, list):
-                        mcp_cmd = cmd + mcp_args
-                    lines.append("✓ OEM MCP Server registered in OpenCode config")
-                else:
-                    lines.append("✗ OEM MCP Server not registered in OpenCode config — run 'oem setup opencode'")
-                    status = "error"
-            except Exception as e:
-                lines.append(f"⚠ OpenCode Config validation failed: {e} — run 'oem setup opencode'")
-                status = "error"
-
-        # Check MCP Server Reachability and Functionality
-        if mcp_registered and mcp_cmd:
-            reachable, functional, num_tools, err = check_mcp_server(mcp_cmd)
-            if reachable:
-                lines.append("✓ OEM MCP Server reachable")
-                if functional:
-                    lines.append("✓ OEM MCP Server functional (stats call succeeded)")
-                else:
-                    lines.append(f"✗ OEM MCP Server functional check failed: {err}")
-                    status = "error"
-                lines.append(f"✓ {num_tools} tools available")
-            else:
-                lines.append(f"✗ OEM MCP Server unreachable: {err}")
-                status = "error"
-
         # 5. Events log schema version check
         try:
             schema_status = eng.event_migrator.get_schema_status(project)
@@ -547,20 +466,29 @@ def run_system_command(args):
             status = "error"
 
         # 6. Skill installation check & adapter detection
-        adapter_name = "opencode"
+        enabled_adapters = []
         try:
             h_dir = eng._resolve_harness(project)
             skills_file = h_dir / "skills" / "openempiric.yaml"
             if skills_file.exists():
-                lines.append("✓ OEM Skill Installed")
                 try:
                     import yaml
                     with open(skills_file, "r", encoding="utf-8") as f:
                         data = yaml.safe_load(f)
-                        if data and "adapter" in data:
-                            adapter_name = data["adapter"]
+                        if data:
+                            if "adapters" in data:
+                                val = data["adapters"]
+                                if isinstance(val, list):
+                                    enabled_adapters = list(val)
+                                else:
+                                    enabled_adapters = [val]
+                            elif "adapter" in data:
+                                enabled_adapters = [data["adapter"]]
                 except Exception:
                     pass
+                
+                adapters_str = ", ".join(enabled_adapters) if enabled_adapters else "none"
+                lines.append(f"✓ OEM Skill Installed (enabled adapters: {adapters_str})")
             else:
                 lines.append("✗ OEM Skill not installed (missing skills/openempiric.yaml)")
                 status = "error"
@@ -568,20 +496,11 @@ def run_system_command(args):
             lines.append(f"✗ Failed to verify OEM Skill installation: {e}")
             status = "error"
 
-        # 7. MCP Registered check (adapter-aware)
-        try:
-            from oem_knowledge.adapters import get_adapter
-            adapter = get_adapter(adapter_name, eng, project)
-            if adapter.verify_mcp():
-                lines.append("✓ MCP Registered")
-            else:
-                lines.append(f"✗ MCP not registered (for adapter: {adapter_name})")
-                status = "error"
-        except Exception as e:
-            lines.append(f"✗ Failed to verify MCP registration: {e}")
-            status = "error"
+        # Default to opencode if none found
+        if not enabled_adapters:
+            enabled_adapters = ["opencode"]
 
-        # 8. Embedding Cache Ready check
+        # 7. Embedding Cache Ready check
         try:
             retrieval_mode = eng.search.get_retrieval_mode()
             semantic_installed = eng.search.semantic_dependencies_available()
@@ -604,49 +523,17 @@ def run_system_command(args):
             lines.append(f"✗ Failed to check Embedding Cache: {e}")
             status = "error"
 
-        # 9. Context Injection Working check
-        from oem_knowledge.runtime import _OEM_RUNTIME_CONTEXT_PATH
+        # 8. Managed Runtime Available check
         try:
-            # Lazy import context compiler locally
-            from oem_knowledge.runtime import _compile_oem_context
-            _ = _compile_oem_context(eng)
-            if adapter_name == "opencode":
-                context_dir = _OEM_RUNTIME_CONTEXT_PATH.parent
-            elif adapter_name in ("agy", "antigravity"):
-                from oem_knowledge.adapters import get_adapter
-                adapter = get_adapter(adapter_name, eng, project)
-                context_dir = adapter.get_app_data_dir()
-            else:
-                context_dir = Path.home() / ".config" / "opencode" / "plugins"
-            
-            context_dir.mkdir(parents=True, exist_ok=True)
-            test_file = context_dir / ".oem_doctor_write_test"
-            test_file.write_text("test", encoding="utf-8")
-            test_file.unlink()
-            lines.append("✓ Context Injection Working")
-        except Exception as e:
-            lines.append(f"✗ Context Injection not working: {e}")
-            status = "error"
-
-        # 10. Managed Runtime Available check
-        try:
-            bin_name = "opencode"
-            if adapter_name == "opencode":
-                bin_name = "opencode"
-            elif adapter_name in ("agy", "antigravity"):
-                bin_name = "agy"
-            else:
-                bin_name = adapter_name
-            
-            if shutil.which(bin_name):
+            if shutil.which("oem"):
                 lines.append("✓ Managed Runtime Available")
             else:
-                lines.append(f"⚠ Managed Runtime not available (executable '{bin_name}' not found in PATH)")
+                lines.append("⚠ Managed Runtime not available (executable 'oem' not found in PATH)")
         except Exception as e:
             lines.append(f"✗ Failed to check Managed Runtime: {e}")
             status = "error"
 
-        # 11. Search Pipeline Available check
+        # 9. Search Pipeline Available check
         try:
             _ = eng.search.stats()
             eng.search.search("test", k=1)
@@ -658,7 +545,7 @@ def run_system_command(args):
         # --- Runtime Health Checks ---
         runtime_lines = []
 
-        # 12. Session Recovery Ready
+        # 10. Session Recovery Ready
         from oem_knowledge.runtime import SessionState
         try:
             active_file = resolved_dir / "state" / "active_session.json"
@@ -667,7 +554,7 @@ def run_system_command(args):
         except Exception as e:
             runtime_lines.append(f"✗ Session Recovery not ready: {e}")
 
-        # 13. Reflection Pipeline Ready
+        # 11. Reflection Pipeline Ready
         try:
             rs = eng.reflection
             res = rs.reflect_session(project, conversation_text="")
@@ -678,7 +565,7 @@ def run_system_command(args):
         except Exception as e:
             runtime_lines.append(f"✗ Reflection Pipeline not ready: {e}")
 
-        # 14. Materialization Pipeline Ready
+        # 12. Materialization Pipeline Ready
         try:
             mat_res = eng.materialization.materialize_concepts(project)
             if mat_res.get("status") == "success":
@@ -688,12 +575,10 @@ def run_system_command(args):
         except Exception as e:
             runtime_lines.append(f"✗ Materialization Pipeline not ready: {e}")
 
-        # 15. Outcome Tracking Ready
+        # 13. Outcome Tracking Ready
         try:
             outcomes_file = resolved_dir / "state" / "outcomes.jsonl"
             outcomes_file.parent.mkdir(parents=True, exist_ok=True)
-            from oem_knowledge.services.state import StateService
-            _ = StateService
             runtime_lines.append("✓ Outcome Tracking Ready")
         except Exception as e:
             runtime_lines.append(f"✗ Outcome Tracking not ready: {e}")
@@ -701,7 +586,135 @@ def run_system_command(args):
         spinner.__exit__(None, None, None)
         print(render_panel("OEM Environment Check", lines, status=status))
 
-        # --- Codex App Integration Check ---
+        # --- OpenCode Integration Panel ---
+        opencode_lines = []
+        opencode_status = "ok"
+        opencode_dir = Path.home() / ".config" / "opencode"
+        jsonc_file = opencode_dir / "opencode.jsonc"
+        opencode_active = ("opencode" in enabled_adapters or jsonc_file.exists())
+
+        if opencode_active:
+            plugin_dest = opencode_dir / "plugins" / "openempiric.ts"
+            inst_dest = opencode_dir / "instructions" / "memory-start.md"
+
+            # Check plugin
+            if not plugin_dest.exists():
+                opencode_lines.append("✗ OpenCode Plugin not installed (missing plugins/openempiric.ts) — run 'oem setup opencode'")
+                opencode_status = "error"
+            else:
+                try:
+                    p_content = plugin_dest.read_text(encoding="utf-8")
+                    if "knowledge_session_start" in p_content or "verify plugin array" in p_content or "session lifecycle is automatic" in p_content:
+                        opencode_lines.append("⚠ OpenCode Plugin is legacy/outdated — run 'oem setup opencode --repair'")
+                        if opencode_status != "error":
+                            opencode_status = "warning"
+                    else:
+                        opencode_lines.append("✓ OpenCode Plugin installed")
+                except Exception as e:
+                    opencode_lines.append(f"⚠ Failed to read openempiric.ts plugin: {e}")
+                    if opencode_status != "error":
+                        opencode_status = "warning"
+
+            # Check instructions
+            if not inst_dest.exists():
+                opencode_lines.append("✗ OpenCode Instructions not installed (missing instructions/memory-start.md) — run 'oem setup opencode'")
+                opencode_status = "error"
+            else:
+                try:
+                    i_content = inst_dest.read_text(encoding="utf-8")
+                    if "knowledge_session_start" in i_content or "knowledge_session_commit" in i_content or "verify plugin array" in i_content:
+                        opencode_lines.append("⚠ OpenCode Instructions are legacy/outdated — run 'oem setup opencode --repair'")
+                        if opencode_status != "error":
+                            opencode_status = "warning"
+                    else:
+                        opencode_lines.append("✓ OpenCode Instructions installed")
+                except Exception as e:
+                    opencode_lines.append(f"⚠ Failed to read memory-start.md instructions: {e}")
+                    if opencode_status != "error":
+                        opencode_status = "warning"
+
+            # Check config
+            mcp_registered = False
+            mcp_cmd = []
+            if not jsonc_file.exists():
+                opencode_lines.append("✗ OpenCode Config missing (missing opencode.jsonc) — run 'oem setup opencode'")
+                opencode_status = "error"
+            else:
+                try:
+                    text = jsonc_file.read_text(encoding="utf-8")
+                    cleaned = _strip_jsonc_comments(text)
+                    config_data = json.loads(cleaned, strict=False)
+                    inst_path_str = str(inst_dest.resolve())
+                    inst_list = config_data.get("instructions", [])
+                    if inst_path_str not in inst_list:
+                        opencode_lines.append("✗ OpenCode Config does not register memory-start.md instruction — run 'oem setup opencode'")
+                        opencode_status = "error"
+                    else:
+                        opencode_lines.append("✓ OpenCode Config verified")
+
+                    mcp_config = config_data.get("mcp", {}).get("openempiric")
+                    if mcp_config:
+                        mcp_registered = True
+                        cmd = mcp_config.get("command")
+                        mcp_args = mcp_config.get("args", [])
+                        if isinstance(cmd, str):
+                            mcp_cmd = [cmd] + mcp_args
+                        elif isinstance(cmd, list):
+                            mcp_cmd = cmd + mcp_args
+                        opencode_lines.append("✓ OEM MCP Server registered in OpenCode config")
+                    else:
+                        opencode_lines.append("✗ OEM MCP Server not registered in OpenCode config — run 'oem setup opencode'")
+                        opencode_status = "error"
+                except Exception as e:
+                    opencode_lines.append(f"✗ OpenCode Config validation failed: {e} — run 'oem setup opencode'")
+                    opencode_status = "error"
+
+            # Check MCP Server Reachability and Functionality
+            if mcp_registered and mcp_cmd:
+                reachable, functional, num_tools, err = check_mcp_server(mcp_cmd)
+                if reachable:
+                    opencode_lines.append("✓ OEM MCP Server reachable")
+                    if functional:
+                        opencode_lines.append("✓ OEM MCP Server functional (stats call succeeded)")
+                    else:
+                        opencode_lines.append(f"✗ OEM MCP Server functional check failed: {err}")
+                        opencode_status = "error"
+                    opencode_lines.append(f"✓ {num_tools} tools available")
+                else:
+                    opencode_lines.append(f"✗ OEM MCP Server unreachable: {err}")
+                    opencode_status = "error"
+
+            # Check Context Injection Working
+            from oem_knowledge.runtime import _OEM_RUNTIME_CONTEXT_PATH
+            try:
+                from oem_knowledge.runtime import _compile_oem_context
+                _ = _compile_oem_context(eng)
+                context_dir = _OEM_RUNTIME_CONTEXT_PATH.parent
+                context_dir.mkdir(parents=True, exist_ok=True)
+                test_file = context_dir / ".oem_doctor_write_test"
+                test_file.write_text("test", encoding="utf-8")
+                test_file.unlink()
+                opencode_lines.append("✓ Context Injection Working")
+            except Exception as e:
+                opencode_lines.append(f"✗ Context Injection not working: {e}")
+                opencode_status = "error"
+
+            # Check MCP Registered (via adapter)
+            try:
+                from oem_knowledge.adapters import get_adapter
+                adapter = get_adapter("opencode", eng, project)
+                if adapter.verify_mcp():
+                    opencode_lines.append("✓ MCP Registered")
+                else:
+                    opencode_lines.append("✗ MCP not registered")
+                    opencode_status = "error"
+            except Exception as e:
+                opencode_lines.append(f"✗ Failed to verify MCP registration: {e}")
+                opencode_status = "error"
+
+            print(render_panel("OpenCode Integration", opencode_lines, status=opencode_status))
+
+        # --- Codex App Integration Panel ---
         codex_lines = []
         codex_status = "ok"
         codex_active = False
@@ -710,7 +723,6 @@ def run_system_command(args):
             from oem_knowledge.adapters.codex_app.adapter import CodexAppAdapter
             codex_adapter = CodexAppAdapter(eng, project)
             
-            # Read-only path detection: do not guess or write to paths.
             try:
                 config_path = codex_adapter.get_config_path()
                 codex_home_detected = True
@@ -718,7 +730,7 @@ def run_system_command(args):
                 codex_home_detected = False
                 re_msg = str(re_err)
                 lines_err = [line.strip() for line in re_msg.splitlines()]
-                if adapter_name in ("codex-app", "codex"):
+                if "codex-app" in enabled_adapters or "codex" in enabled_adapters:
                     codex_active = True
                     codex_lines.append("✗ Codex home not detected")
                     for line_err in lines_err:
@@ -727,7 +739,7 @@ def run_system_command(args):
                     codex_status = "error"
 
             if codex_active is False and codex_home_detected:
-                if config_path.exists() or adapter_name in ("codex-app", "codex"):
+                if config_path.exists() or "codex-app" in enabled_adapters or "codex" in enabled_adapters:
                     codex_active = True
                     
                     # 1. Config found
@@ -757,8 +769,19 @@ def run_system_command(args):
                         codex_lines.append("✗ Tools reachable (MCP not registered)")
                         codex_status = "error"
 
+                    # 4. Check MCP Registered hook (via adapter)
+                    try:
+                        if codex_adapter.verify_mcp():
+                            codex_lines.append("✓ MCP Registered")
+                        else:
+                            codex_lines.append("✗ MCP not registered")
+                            codex_status = "error"
+                    except Exception as e:
+                        codex_lines.append(f"✗ Failed to verify MCP registration: {e}")
+                        codex_status = "error"
+
         except Exception as e:
-            if adapter_name in ("codex-app", "codex"):
+            if "codex-app" in enabled_adapters or "codex" in enabled_adapters:
                 codex_active = True
                 codex_lines.append(f"✗ Codex App Integration Check failed: {e}")
                 codex_status = "error"
@@ -766,10 +789,14 @@ def run_system_command(args):
         if codex_active:
             print(render_panel("Codex App Integration", codex_lines, status=codex_status))
 
+        # Runtime Health Check Panel
         if any("✗" in l for l in runtime_lines):
             print(render_panel("Runtime Health", runtime_lines, status="error"))
         else:
             print(render_panel("Runtime Health", runtime_lines, status="ok"))
+
+        if status == "error" or (codex_active and codex_status == "error"):
+            sys.exit(1)
 
         # --- Knowledge Health Dashboard ---
         try:
