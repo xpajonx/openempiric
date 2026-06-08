@@ -19,6 +19,8 @@ def render_supervisor_panel(project: str | None, agent_name: str, checks: list[R
         agent_display = "Cursor"
     elif agent_name in ("agy", "antigravity"):
         agent_display = "Antigravity"
+    elif agent_name in ("codex", "codex-app"):
+        agent_display = "Codex App"
     else:
         agent_display = agent_name.title()
 

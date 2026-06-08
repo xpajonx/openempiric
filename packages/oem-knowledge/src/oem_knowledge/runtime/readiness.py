@@ -85,7 +85,15 @@ class RuntimeReadiness:
             ))
 
         # Check 4: Skill installed
-        if harness is not None:
+        if adapter is not None and hasattr(adapter, "get_skill_path"):
+            skills_file = adapter.get_skill_path()
+            installed = Path(skills_file).exists()
+            checks.append(ReadinessCheck(
+                name="Skill installed",
+                status="success" if installed else "warning",
+                suggestion=None if installed else "Run 'oem setup codex-app' to install/verify skills"
+            ))
+        elif harness is not None:
             skills_file = harness / "skills" / "openempiric.yaml"
             installed = skills_file.exists()
             checks.append(ReadinessCheck(

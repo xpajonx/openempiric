@@ -162,6 +162,8 @@ def _setup_parser() -> argparse.ArgumentParser:
     setup_sub = setup_p.add_subparsers(dest="setup_target", required=True)
     setup_opencode = setup_sub.add_parser("opencode", help="Integrate OpenCode workspace settings and plugins")
     setup_opencode.add_argument("--repair", action="store_true", help="Forcefully overwrite and recreate all integration files")
+    setup_codex = setup_sub.add_parser("codex-app", help="Integrate Codex App with OEM through the WSL bridge")
+    setup_codex.add_argument("--repair", action="store_true", help="Forcefully overwrite and recreate OEM-owned Codex integration files")
 
     migrate_p = sub.add_parser("migrate", help="Migrate legacy .harness directory to .oem format")
     migrate_p.add_argument("--project", type=str, default="")

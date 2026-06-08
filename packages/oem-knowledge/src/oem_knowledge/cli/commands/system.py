@@ -290,6 +290,36 @@ def cmd_setup_opencode(repair: bool = False) -> None:
         sys.exit(1)
 
 
+def cmd_setup_codex_app(eng, project: str | None = None, repair: bool = False) -> None:
+    print("OEM Codex App Setup\n")
+
+    try:
+        from oem_knowledge.adapters.codex_app.adapter import CodexAppAdapter
+
+        adapter = CodexAppAdapter(eng, project)
+        res = adapter.setup(repair=repair)
+    except Exception as e:
+        print(render_panel("OEM Codex App Setup Failed", [f"Setup failed: {e}"], status="error"))
+        sys.exit(1)
+
+    mcp = res["mcp_config"]
+    lines = [
+        f"Codex Home: {res['codex_home']}",
+        f"Skill:      {res['skill_path']}",
+        f"Config:     {res['config_path']}",
+        "",
+        "MCP Bridge:",
+        f"  Command: {mcp['command']}",
+        f"  Args:    {' '.join(mcp['args'])}",
+        "",
+        "Run `oem doctor` to perform a full bridge health check.",
+    ]
+    if repair:
+        lines.append("Re-installed all components (--repair)")
+
+    print(render_panel("OEM Codex App Setup", lines, status="ok"))
+
+
 def run_system_command(args):
     # Setup deferred logging Configuration
     import logging
@@ -306,6 +336,8 @@ def run_system_command(args):
     if args.command == "setup":
         if args.setup_target == "opencode":
             cmd_setup_opencode(repair=args.repair)
+        elif args.setup_target == "codex-app":
+            cmd_setup_codex_app(eng, project=project, repair=args.repair)
 
     elif args.command == "warmup":
         res = eng.warmup()

@@ -61,6 +61,17 @@ def _link_plugin():
             logging.warning("Failed to copy plugin file to %s: %s", plugin_dest, e)
 
 
+def _repair_adapter_integration(adapter) -> None:
+    if adapter.__class__.__name__ == "OpenCodeAdapter":
+        _link_plugin()
+        return
+    if hasattr(adapter, "setup"):
+        adapter.setup(repair=False)
+        return
+    if hasattr(adapter, "install_skill"):
+        adapter.install_skill()
+
+
 def _ensure_workspace_ready(eng: KnowledgeEngine, project: str | None, adapter, warnings: list[str]) -> None:
     """Auto-init project + warm up model + verify plugin. Idempotent. Critical steps fail fast, optional steps fail open."""
     # Critical - fail fast
@@ -88,8 +99,8 @@ def _ensure_workspace_ready(eng: KnowledgeEngine, project: str | None, adapter, 
 
     try:
         if not adapter.verify_mcp():
-            logging.info("Plugin not linked — installing...")
-            _link_plugin()
+            logging.info("Adapter MCP not registered — installing...")
+            _repair_adapter_integration(adapter)
     except Exception as e:
         logging.warning("Plugin linkage/repair failed: %s", e)
         warnings.append("Plugin integration disabled")
@@ -201,8 +212,7 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None)
             if not healthy:
                 logging.warning("Adapter health check failed: %s — attempting repair", msg)
                 try:
-                    _link_plugin()
-                    adapter.install_skill()
+                    _repair_adapter_integration(adapter)
                     healthy, msg = adapter.verify_health()
                 except Exception as e:
                     healthy, msg = False, str(e)
@@ -338,6 +348,8 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None)
             agent_display = "Cursor"
         elif agent_name in ("agy", "antigravity"):
             agent_display = "Antigravity"
+        elif agent_name in ("codex", "codex-app"):
+            agent_display = "Codex App"
         else:
             agent_display = agent_name.title()
             
@@ -355,6 +367,33 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None)
         panel_lines.append("")
         panel_lines.append("Agent session continues normally.")
         print(render_panel("Warning", panel_lines, status="warning"))
+
+    if agent_name in ("codex", "codex-app"):
+        from oem_knowledge.ui import render_panel
+
+        print(
+            render_panel(
+                "Codex App Ready",
+                [
+                    "OEM MCP and the OpenEmpiric Codex skill have been refreshed.",
+                    "Open or continue a Codex App thread in this workspace; OEM tools are available there.",
+                    "No desktop Codex process was launched by this command.",
+                ],
+                status="ok",
+            )
+        )
+        for cleanup_path in [_OEM_RUNTIME_CONTEXT_PATH, _OEM_TEMP_INSTRUCTIONS]:
+            if cleanup_path.exists():
+                try:
+                    cleanup_path.unlink()
+                except Exception:
+                    pass
+        try:
+            if active_session_file.exists():
+                active_session_file.unlink()
+        except Exception:
+            pass
+        return
 
     # 3. Spawn agent with managed mode env vars
     managed_env = os.environ.copy()
