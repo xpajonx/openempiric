@@ -19,6 +19,7 @@ def codex_home(tmp_path, monkeypatch):
     home = tmp_path / "codex-home"
     monkeypatch.setenv("OEM_CODEX_HOME", str(home))
     monkeypatch.setenv("OEM_CODEX_WSL_PROJECT_DIR", "/home/xpajonx/.config/openempiric-dev")
+    monkeypatch.setenv("OEM_CODEX_WSL_EXE", "C:\\Windows\\System32\\wsl.exe")
     monkeypatch.setenv("WSL_DISTRO_NAME", "Ubuntu")
     return home
 
@@ -52,7 +53,7 @@ def test_setup_writes_wsl_mcp_and_preserves_config(tmp_path, codex_home):
 
     data = tomllib.loads(text)
     bridge = data["mcp_servers"]["openempiric"]
-    assert bridge["command"] == "wsl.exe"
+    assert bridge["command"] == "C:\\Windows\\System32\\wsl.exe"
     assert bridge["args"] == [
         "-d",
         "Ubuntu",
@@ -60,7 +61,7 @@ def test_setup_writes_wsl_mcp_and_preserves_config(tmp_path, codex_home):
         "/home/xpajonx/.config/openempiric-dev",
         "bash",
         "-lc",
-        "uv run --directory '/home/xpajonx/.config/openempiric-dev' python -m oem_knowledge.server",
+        "exec oem mcp",
     ]
     assert bridge["startup_timeout_sec"] == 120
 

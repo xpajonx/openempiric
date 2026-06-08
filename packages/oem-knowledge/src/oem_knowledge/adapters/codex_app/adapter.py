@@ -75,7 +75,7 @@ class CodexAppAdapter(BaseAdapter):
         project_dir = self.get_wsl_project_dir()
         distro = self.get_wsl_distro()
         return {
-            "command": "wsl.exe",
+            "command": self.get_windows_wsl_exe(),
             "args": [
                 "-d",
                 distro,
@@ -83,7 +83,7 @@ class CodexAppAdapter(BaseAdapter):
                 project_dir,
                 "bash",
                 "-lc",
-                f"uv run --directory {self._shell_quote(project_dir)} python -m oem_knowledge.server",
+                "exec oem mcp",
             ],
             "startup_timeout_sec": 120,
         }
@@ -92,12 +92,32 @@ class CodexAppAdapter(BaseAdapter):
         project_dir = self.get_wsl_project_dir()
         distro = self.get_wsl_distro()
         check = (
-            "command -v uv >/dev/null "
-            f"&& test -d {self._shell_quote(project_dir)} "
-            f"&& uv run --directory {self._shell_quote(project_dir)} "
-            "python -c 'import oem_knowledge.server'"
+            f"test -d {self._shell_quote(project_dir)} "
+            "&& command -v oem >/dev/null "
+            "&& oem --version >/dev/null"
         )
-        return ["wsl.exe", "-d", distro, "--cd", project_dir, "bash", "-lc", check]
+        return [self.get_probe_wsl_exe(), "-d", distro, "--cd", project_dir, "bash", "-lc", check]
+
+    def get_windows_wsl_exe(self) -> str:
+        override = os.environ.get("OEM_CODEX_WSL_EXE")
+        if override:
+            return override
+
+        windir = os.environ.get("WINDIR") or os.environ.get("SystemRoot")
+        if windir:
+            return str(Path(windir) / "System32" / "wsl.exe")
+
+        if self._is_wsl():
+            detected = self._detect_windows_env("WINDIR") or self._detect_windows_env("SystemRoot")
+            if detected:
+                return detected.rstrip("\\/") + "\\System32\\wsl.exe"
+
+        return "C:\\Windows\\System32\\wsl.exe"
+
+    def get_probe_wsl_exe(self) -> str:
+        if sys.platform == "win32":
+            return self.get_windows_wsl_exe()
+        return "wsl.exe"
 
     def setup(self, repair: bool = False) -> dict[str, Any]:
         codex_home = self.get_codex_home()
@@ -249,9 +269,17 @@ class CodexAppAdapter(BaseAdapter):
     def _detect_windows_codex_home_from_wsl(self) -> str | None:
         if not self._is_wsl():
             return None
+        windows_profile = self._detect_windows_env("USERPROFILE")
+        if not windows_profile:
+            return None
+        return windows_profile.rstrip("\\/") + "\\.codex"
+
+    def _detect_windows_env(self, name: str) -> str | None:
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name):
+            return None
         try:
             proc = subprocess.run(
-                ["powershell.exe", "-NoProfile", "-Command", "$env:USERPROFILE"],
+                ["powershell.exe", "-NoProfile", "-Command", f"$env:{name}"],
                 check=False,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -260,10 +288,8 @@ class CodexAppAdapter(BaseAdapter):
             )
             if proc.returncode != 0:
                 return None
-            windows_profile = proc.stdout.strip().splitlines()[0].strip() if proc.stdout.strip() else ""
-            if not windows_profile:
-                return None
-            return windows_profile.rstrip("\\/") + "\\.codex"
+            value = proc.stdout.strip().splitlines()[0].strip() if proc.stdout.strip() else ""
+            return value or None
         except Exception:
             return None
 
