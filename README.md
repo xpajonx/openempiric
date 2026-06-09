@@ -29,6 +29,7 @@ OpenEmpiric shifts the model of AI coding sessions from a simple wrapped process
 ### 1. User Mental Model (Why OEM Exists)
 
 Rather than just receiving static prompts, a highly productive AI coding agent relies on three balanced pillars:
+
 * **Developer Intent**: The immediate task, constraints, and goals you provide.
 * **Project Workflows** (e.g., `AGENTS.md` / `CLAUDE.md`): Guidelines detailing *how* the project is structured, run, and styled.
 * **Project Memory** (e.g., `.oem/`): The persistent knowledge layer managed by **OpenEmpiric**, recording *what has been learned* (prior decisions, resolved failures, validated designs).
@@ -51,11 +52,11 @@ graph TD
     Developer(["Developer"]) -->|"Runs oem run agent"| OEM["OpenEmpiric Runtime"]
     OEM -->|"1. Restore State"| Folder[(".oem/ Project Memory")]
     Folder -.->|"Injected Context"| Agent("Coding Agent")
-    
+  
     Developer ---|"2. Normal Work Session"| Agent
-    
+  
     Agent ---|"3. Active MCP Queries<br>(knowledge_search, explain_concept, etc.)"| Folder
-    
+  
     Agent -->|"4. Exits"| OEM
     OEM -->|"5. Reflects Transcripts & Diffs"| Ledger[(".oem/ Event Ledger")]
     Ledger -->|"Updates"| Registry["concept_registry.json"]
@@ -93,11 +94,13 @@ For a lighter BM25-only install, you can omit `[semantic]`, but the default user
 Register your preferred agent integration with OpenEmpiric.
 
 For terminal-based workstation environments (like OpenCode):
+
 ```bash
 oem setup opencode
 ```
 
 For desktop-based non-terminal environments (like Codex App):
+
 ```bash
 oem setup codex-app
 ```
@@ -105,6 +108,7 @@ oem setup codex-app
 ### 3. Launch a Session
 
 From any project directory, launch a managed session:
+
 ```bash
 mkdir demo-project
 cd demo-project
@@ -118,6 +122,7 @@ oem run opencode
 ### 4. Diagnose Problems
 
 Verify your workspace integration and bridge health:
+
 ```bash
 oem doctor
 ```
@@ -133,6 +138,7 @@ OpenEmpiric officially supports the following agent runtimes out-of-the-box:
 - **Codex App**: First-class MCP-based non-terminal desktop runtime, configured automatically via the WSL bridge architecture (`oem setup codex-app`).
 
 ### Extensibility: Write Your Own Adapter!
+
 You can easily extend OpenEmpiric to support other environments (such as Claude Code, Cursor, or your own proprietary CLI agent). All you need to do is subclass the base adapter:
 
 ```python
@@ -156,20 +162,21 @@ Refer to the [Adapter Architecture Guide](docs/adapter-architecture.md) and [Ada
 
 ## CLI Command Reference
 
-| Command | Category | Description |
-|---|---|---|
-| `oem run <agent>` | **User** | Run a managed coding agent session with context injection. |
-| `oem setup <target>` | **User** | Configure and register integrations (`opencode` or `codex-app`). |
-| `oem doctor` | **User** | Verify workspace health, plugin links, model warmup, and agent integrations. |
-| `oem search <query>` | **User** | Search the project knowledge base using automatic/BM25/hybrid retrieval. |
-| `oem health` | **User** | Scan the workspace for stale concepts, duplicates, and contradicting knowledge. |
-| `oem config retrieval <mode>` | **User** | View or set retrieval strategy to `auto`, `bm25`, or `hybrid`. |
-| `oem init` | **Admin** | Initialize the `.oem/` memory repository in the current workspace. |
-| `oem migrate` | **Admin** | Migrate legacy `.harness/` directory to `.oem/` format. |
-| `oem mcp` | **Admin** | Start the background MCP tool server for non-terminal runtimes. |
-| `oem merge <id1> <id2>` | **Advanced** | Manually merge two overlapping or duplicate concepts. |
-| `oem rebuild` | **Advanced** | Replay the event store log to rebuild the entire concept registry. |
-| `oem reflect` | **Advanced** | Dry-run reflection and concept extraction from raw transcripts. |
+
+| Command                       | Category     | Description                                                                     |
+| ------------------------------- | -------------- | --------------------------------------------------------------------------------- |
+| `oem run <agent>`             | **User**     | Run a managed coding agent session with context injection.                      |
+| `oem setup <target>`          | **User**     | Configure and register integrations (`opencode` or `codex-app`).                |
+| `oem doctor`                  | **User**     | Verify workspace health, plugin links, model warmup, and agent integrations.    |
+| `oem search <query>`          | **User**     | Search the project knowledge base using automatic/BM25/hybrid retrieval.        |
+| `oem health`                  | **User**     | Scan the workspace for stale concepts, duplicates, and contradicting knowledge. |
+| `oem config retrieval <mode>` | **User**     | View or set retrieval strategy to`auto`, `bm25`, or `hybrid`.                   |
+| `oem init`                    | **Admin**    | Initialize the`.oem/` memory repository in the current workspace.               |
+| `oem migrate`                 | **Admin**    | Migrate legacy`.harness/` directory to `.oem/` format.                          |
+| `oem mcp`                     | **Admin**    | Start the background MCP tool server for non-terminal runtimes.                 |
+| `oem merge <id1> <id2>`       | **Advanced** | Manually merge two overlapping or duplicate concepts.                           |
+| `oem rebuild`                 | **Advanced** | Replay the event store log to rebuild the entire concept registry.              |
+| `oem reflect`                 | **Advanced** | Dry-run reflection and concept extraction from raw transcripts.                 |
 
 ---
 
@@ -178,22 +185,26 @@ Refer to the [Adapter Architecture Guide](docs/adapter-architecture.md) and [Ada
 When integrated as an MCP server, OpenEmpiric exposes the following tools to the AI agent to support context injection, memory retrieval, task tracking, and session commitment:
 
 ### Core Retrieval & Exploration
+
 * **`knowledge_search(query: str, k: int, project: str)`**: Perform hybrid semantic and keyword search across concepts.
 * **`knowledge_explain_concept(concept_id: str, project: str)`**: Retrieve full markdown documentation, canonical name, and recent learnings/evidence for a concept.
 * **`knowledge_graph_query(concept_id: str, direction: str, project: str)`**: Query semantic relationships (incoming/outgoing/both) between concept nodes.
 * **`knowledge_stats(project: str)`**: View high-level statistics of the knowledge base and local vector database size.
 
 ### Session Lifecycle & Telemetry
+
 * **`knowledge_session_end(project: str, conversation_text: str, session_id: str)`**: Ends the session, runs transcript analysis and git diff extraction to update concept records, and commits all changes. Returns a clean markdown summary report.
 * **`knowledge_usage_report(concepts_used: list[str], concepts_ignored: list[str], decisions: list[str], project: str)`**: Reports telemetry regarding concept usage and decision alignment during a session.
 * **`knowledge_health_check(stale_sessions: int, similarity_threshold: float, project: str)`**: Propose duplicate merges, find stale concepts, and detect contradictions.
 
 ### Task / TODO Management
+
 * **`oem_todo_read(workdir: str)`**: View the active session task checklist from `.oem/state/todos.json`.
 * **`oem_todo_write(items: str, workdir: str)`**: Overwrite the todo list with a new JSON list of items.
 * **`oem_todo_advance(item_id: str, status: str, workdir: str)`**: Update a task's status (`pending`, `in_progress`, `completed`) and automatically cycle next items.
 
 ### Concept Management & Verification
+
 * **`knowledge_consolidate(project: str)`**: Identify and merge duplicate and overlapping concept nodes automatically.
 * **`knowledge_merge_concepts(project: str, primary_id: str, secondary_id: str)`**: Manually merge a secondary concept into a primary concept.
 * **`knowledge_lint(project: str, max_parallel: int, fix: bool)`**: Find broken/orphan concept links and automatically heal matching aliases.
@@ -204,13 +215,14 @@ When integrated as an MCP server, OpenEmpiric exposes the following tools to the
 
 OEM works automatically, but it extracts the highest-quality knowledge when developers state reasoning and results explicitly during a conversation.
 
-| Concept Signal | Better (OEM Captures Rationale) | Worse (Vague/Context-Free) |
-|---|---|---|
-| **Decisions** | *"We decided to use TypeScript because Python startup latency caused MCP timeouts."* | *"Use TypeScript."* |
-| **Failures** | *"The pagination job failed because the pagination cursor was not reset between retries."* | *"Pagination is broken."* |
-| **Tradeoffs** | *"We chose client-side caching to avoid Redis dependency, accepting up to 5 minutes of stale data."* | *"Use client-side cache."* |
-| **Experiments** | *"We tested BM25 vs hybrid search. Hybrid scored 23% higher on recall@5, so we made it default."* | *"Hybrid search works better."* |
-| **Outcomes** | *"Restructuring the DB index reduced retrieval latency from 5.5s to 450ms."* | *"Looks faster now."* |
+
+| Concept Signal  | Better (OEM Captures Rationale)                                                                      | Worse (Vague/Context-Free)      |
+| ----------------- | ------------------------------------------------------------------------------------------------------ | --------------------------------- |
+| **Decisions**   | *"We decided to use TypeScript because Python startup latency caused MCP timeouts."*                 | *"Use TypeScript."*             |
+| **Failures**    | *"The pagination job failed because the pagination cursor was not reset between retries."*           | *"Pagination is broken."*       |
+| **Tradeoffs**   | *"We chose client-side caching to avoid Redis dependency, accepting up to 5 minutes of stale data."* | *"Use client-side cache."*      |
+| **Experiments** | *"We tested BM25 vs hybrid search. Hybrid scored 23% higher on recall@5, so we made it default."*    | *"Hybrid search works better."* |
+| **Outcomes**    | *"Restructuring the DB index reduced retrieval latency from 5.5s to 450ms."*                         | *"Looks faster now."*           |
 
 Check out the [Best Practices Guide](docs/best-practices.md) for more details.
 
@@ -219,6 +231,5 @@ Check out the [Best Practices Guide](docs/best-practices.md) for more details.
 ## Repository Anatomy
 
 - [packages/oem-knowledge](packages/oem-knowledge) — Core RAG logic, SQLite event database, extraction services, and CLI.
-- [packages/oem-tui](packages/oem-tui) — Terminal UI layout and visual dashboard modules.
 - [plugins](plugins) — Native TypeScript plugins for IDE/workstation agent integrations.
 - [docs](docs) — Complete specifications, architecture details, and lifecycle logs.
