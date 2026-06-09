@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+import logging
 import re
 import time
 from pathlib import Path
@@ -9,6 +10,13 @@ from oem_knowledge.models import ConceptData, KnowledgeEvent
 
 if TYPE_CHECKING:
     from oem_knowledge.engine import KnowledgeEngine
+
+logger = logging.getLogger(__name__)
+
+
+class StateCorruptionError(ValueError):
+    """Raised when state files (like the concept registry) contain corrupt or invalid JSON."""
+    pass
 
 
 class StateService:
@@ -25,15 +33,23 @@ class StateService:
             if sfs.exists(p):
                 try:
                     return json.loads(sfs.read_text(p))
-                except Exception:
-                    return {}
+                except json.JSONDecodeError as e:
+                    logger.error("Corrupt concept registry JSON at %s: %s", p, e)
+                    raise StateCorruptionError(f"Corrupt concept registry JSON at {p}: {e}") from e
+                except OSError as e:
+                    logger.error("Failed to read concept registry at %s: %s", p, e)
+                    raise
             return {}
 
     def _save_registry(self, registry: dict, project: str | None = None):
         p = self.engine._registry_path(project)
         sfs = self._sfs(project)
         with FileLock(p.with_suffix(".lock")):
-            sfs.write_text(p, json.dumps(registry, indent=2))
+            try:
+                sfs.write_text(p, json.dumps(registry, indent=2))
+            except OSError as e:
+                logger.error("Failed to save concept registry at %s: %s", p, e)
+                raise
 
     def _load_events(self, project: str | None = None) -> list[dict]:
         p = self.engine._events_path(project)
@@ -43,13 +59,21 @@ class StateService:
                 return []
             events = []
             try:
-                for line in sfs.read_text(p).splitlines():
-                    line = line.strip()
-                    if line:
-                        ev_dict = json.loads(line)
-                        events.append(self.engine.event_migrator.upcast(ev_dict))
-            except Exception:
-                return []
+                content = sfs.read_text(p)
+            except OSError as e:
+                logger.error("Failed to read events file at %s: %s", p, e)
+                raise
+
+            for line_idx, line in enumerate(content.splitlines(), start=1):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    ev_dict = json.loads(line)
+                    events.append(self.engine.event_migrator.upcast(ev_dict))
+                except json.JSONDecodeError as e:
+                    logger.warning("Skipping corrupt event line %d in %s: %s", line_idx, p, e)
+                    continue
             return events
 
     def _append_event(self, event: dict | KnowledgeEvent, project: str | None = None):
@@ -58,7 +82,11 @@ class StateService:
         p = self.engine._events_path(project)
         sfs = self._sfs(project)
         with FileLock(p.with_suffix(".lock")):
-            sfs.append_text(p, event.model_dump_json() + "\n")
+            try:
+                sfs.append_text(p, event.model_dump_json() + "\n")
+            except OSError as e:
+                logger.error("Failed to append event to %s: %s", p, e)
+                raise
 
     def _resolve_concept(self, term: str, registry: dict) -> tuple[str, dict]:
         import difflib
@@ -228,7 +256,8 @@ class StateService:
             from oem_knowledge.health import calculate_concept_health
             try:
                 h_score = calculate_concept_health(data)
-            except Exception:
+            except Exception as e:
+                logger.warning("Failed to calculate health score for concept %s: %s", cid, e)
                 h_score = 0.0
             return (status_val, ev_count, h_score)
 
@@ -273,7 +302,11 @@ class StateService:
             try:
                 content_primary = sfs.read_text(f_primary)
                 content_secondary = sfs.read_text(f_secondary)
-            except Exception:
+            except OSError as e:
+                logger.warning("Failed to read concept files for merging (%s, %s): %s", f_primary, f_secondary, e)
+                continue
+            except Exception as e:
+                logger.warning("Unexpected error reading concept files for merging (%s, %s): %s", f_primary, f_secondary, e)
                 continue
 
             # Merge markdown contents
@@ -308,8 +341,10 @@ class StateService:
             for f in concepts_dir.glob("concept_*.md"):
                 try:
                     sfs.unlink(f)
-                except Exception:
-                    pass
+                except OSError as e:
+                    logger.warning("Failed to unlink temporary concept file %s during rebuild: %s", f, e)
+                except Exception as e:
+                    logger.warning("Unexpected error unlinking temporary concept file %s during rebuild: %s", f, e)
 
         fitness_data = self.engine.calculate_fitness(project)
         events = self._load_events(project)
@@ -452,8 +487,12 @@ class StateService:
                 if not resolved_session_id:
                     resolved_session_id = state_data.get("session_id")
                 injected_concepts = state_data.get("last_injected_concepts", [])
-            except Exception:
-                pass
+            except json.JSONDecodeError as e:
+                logger.warning("Corrupt session state JSON at %s: %s", session_state_path, e)
+            except OSError as e:
+                logger.warning("Failed to read session state at %s: %s", session_state_path, e)
+            except Exception as e:
+                logger.warning("Unexpected error reading session state at %s: %s", session_state_path, e)
 
         if not resolved_session_id:
             resolved_session_id = f"session_{int(time.time() * 1000)}"
@@ -472,8 +511,12 @@ class StateService:
                 concepts_injected = metrics_data.get("knowledge_usage", {}).get("concepts_injected", 0)
                 concepts_referenced = metrics_data.get("knowledge_usage", {}).get("concepts_referenced", 0)
                 search_count = metrics_data.get("retrieval", {}).get("search_count", 0)
-            except Exception:
-                pass
+            except json.JSONDecodeError as e:
+                logger.warning("Corrupt metrics JSON at %s: %s", metrics_file, e)
+            except OSError as e:
+                logger.warning("Failed to read metrics at %s: %s", metrics_file, e)
+            except Exception as e:
+                logger.warning("Unexpected error reading metrics at %s: %s", metrics_file, e)
 
         # Handle default goal satisfaction based on binary outcome
         resolved_satisfaction = goal_satisfaction
@@ -525,14 +568,20 @@ class StateService:
         all_sessions = []
         if outcomes_file.exists():
             try:
-                for line in outcomes_file.read_text(encoding="utf-8").splitlines():
+                content = outcomes_file.read_text(encoding="utf-8")
+                for line_idx, line in enumerate(content.splitlines(), start=1):
                     if line.strip():
-                        record = json.loads(line)
-                        sid = record.get("session_id")
-                        if sid:
-                            all_sessions.append(sid)
-            except Exception:
-                pass
+                        try:
+                            record = json.loads(line)
+                            sid = record.get("session_id")
+                            if sid:
+                                all_sessions.append(sid)
+                        except json.JSONDecodeError as e:
+                            logger.warning("Skipping corrupt line %d in outcomes file %s: %s", line_idx, outcomes_file, e)
+            except OSError as e:
+                logger.warning("Failed to read outcomes file at %s: %s", outcomes_file, e)
+            except Exception as e:
+                logger.warning("Unexpected error reading outcomes file at %s: %s", outcomes_file, e)
 
         if len(all_sessions) < n_sessions:
             return []
