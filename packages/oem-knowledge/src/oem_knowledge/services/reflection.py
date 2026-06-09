@@ -5,6 +5,8 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from oem_knowledge.source_classifier import classify_source
+
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
@@ -86,6 +88,14 @@ class ReflectionService:
         structured_events_found = 0
         fallback_extraction_used = False
         fallback_extractions_count = 0
+        excluded_oem_generated_paths: set[str] = set()
+
+        def _track_excluded_file(path: Path | str) -> None:
+            try:
+                path_key = str(Path(path).resolve(strict=False))
+            except Exception:
+                path_key = str(path)
+            excluded_oem_generated_paths.add(path_key)
 
         self.engine._resolve_harness(project)
         concepts_dir = self.engine._concepts_dir(project)
@@ -125,6 +135,17 @@ class ReflectionService:
                 modified_files.append(fp)
 
         for fp in modified_files:
+            try:
+                source_text = fp.read_text(encoding="utf-8")
+            except Exception as e:
+                logger.warning("Failed to read concept file %s for source classification: %s", fp.name, e)
+                source_text = None
+
+            source_classification = classify_source(fp, source_text)
+            if not source_classification.ingestion_eligible:
+                _track_excluded_file(fp)
+                continue
+
             concept = fp.stem.replace("_", " ").replace("-", " ").title()
             knowledge_events.append(
                 {
@@ -172,9 +193,24 @@ class ReflectionService:
                 seen_files = set()
                 for f in modified_code_files:
                     f = f.strip()
-                    if not f or f in seen_files or f.startswith(".oem") or f.startswith(".git"):
+                    if not f or f in seen_files:
                         continue
                     seen_files.add(f)
+
+                    source_path = p_path / f
+                    try:
+                        source_text = source_path.read_text(encoding="utf-8") if source_path.is_file() else None
+                    except Exception as e:
+                        logger.warning("Failed to read modified file %s for source classification: %s", f, e)
+                        source_text = None
+
+                    source_classification = classify_source(f, source_text)
+                    if not source_classification.ingestion_eligible:
+                        _track_excluded_file(source_path)
+                        continue
+
+                    if f.startswith(".git"):
+                        continue
                     
                     # Check for matching concepts in registry
                     f_path = Path(f)
@@ -400,6 +436,8 @@ project: {project or "default"}
             "fallback_extractions": fallback_extractions_count,
             "fallback_extraction_used": fallback_extraction_used,
             "file_observations": file_observations_count,
+            "file_observations_count": file_observations_count,
+            "excluded_oem_generated_files": len(excluded_oem_generated_paths),
             "generated_concepts": [
                 e["concept_candidates"][0]
                 for e in canonical_events

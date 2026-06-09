@@ -170,3 +170,77 @@ def test_list_tolerant_fallback_extraction(engine, tmp_path):
     assert "fallback-parser" in concepts
 
 
+def test_reflection_excludes_oem_generated_files(engine, tmp_path):
+    import os
+    import time
+
+    concepts_dir = engine._concepts_dir(str(tmp_path))
+    old_time = time.time() - 3600
+    for existing_file in concepts_dir.rglob("*.md"):
+        os.utime(existing_file, (old_time, old_time))
+
+    session_started_at = time.time()
+    generated_wiki = concepts_dir / "generated_oem.md"
+    generated_wiki.write_text("# Generated OEM concept\n", encoding="utf-8")
+    os.utime(generated_wiki, (session_started_at + 1, session_started_at + 1))
+
+    generated_source = tmp_path / "src" / "generated.md"
+    generated_source.parent.mkdir(parents=True, exist_ok=True)
+    generated_source.write_text(
+        "---\ngenerated_by: openempiric\n---\n# Generated summary\n",
+        encoding="utf-8",
+    )
+    user_source = tmp_path / "src" / "user_module.py"
+    user_source.write_text("def user_authored():\n    return True\n", encoding="utf-8")
+
+    engine.state._save_registry(
+        {
+            "concept_generated": {
+                "canonical_name": "generated-summary",
+                "aliases": ["generated.md", "src/generated.md"],
+            },
+            "concept_user": {
+                "canonical_name": "user-module",
+                "aliases": ["user_module.py", "src/user_module.py"],
+            },
+        },
+        str(tmp_path),
+    )
+
+    class GitResult:
+        def __init__(self, stdout):
+            self.returncode = 0
+            self.stdout = stdout
+
+    def fake_run(cmd, **kwargs):
+        if cmd == ["git", "diff", "--name-only"]:
+            return GitResult(
+                "\n".join(
+                    [
+                        ".oem/wiki/generated_oem.md",
+                        ".oem/state/metrics.json",
+                        "src/generated.md",
+                        "src/user_module.py",
+                    ]
+                )
+            )
+        return GitResult("")
+
+    from unittest.mock import patch
+
+    with patch("subprocess.run", new=fake_run):
+        res = engine.reflection.reflect_session(
+            project=str(tmp_path),
+            conversation_text="",
+            session_id="test_exclude_oem_generated",
+            session_started_at=session_started_at,
+        )
+
+    assert res["status"] == "success"
+    assert res["explainability"]["excluded_oem_generated_files"] == 3
+    assert res["explainability"]["file_observations_count"] == 1
+
+    diff_evidence = [
+        e["evidence"] for e in res["canonical_events"] if e.get("source") == "diff"
+    ]
+    assert diff_evidence == ["Code modified in workspace: src/user_module.py"]
