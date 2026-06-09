@@ -220,11 +220,17 @@ def _empty_report(project: Path, scope: str, mode: CleanMode = "dry_run") -> dic
         },
         "duplicates": {
             "duplicate_runtime_events": 0,
+            "removed_duplicate_runtime_events": 0,
+            "duplicate_runtime_event_details": [],
         },
         "structure": {
             "orphan_wiki_files": 0,
             "missing_wiki_files": 0,
             "duplicate_slugs": 0,
+        },
+        "system_concepts": {
+            "suspicious_concepts": 0,
+            "suspicious_concept_ids": [],
         },
         "changed_files": [],
         "files_backed_up": [],
@@ -299,6 +305,7 @@ def _runtime_events_path(project: Path) -> Path:
     return _oem_dir(project) / "runtime_events.jsonl"
 
 
+<<<<<<< ours
 def _legacy_events_path(project: Path) -> Path:
     return _oem_dir(project) / "events.jsonl"
 
@@ -313,6 +320,16 @@ def _outcomes_path(project: Path) -> Path:
 >>>>>>> theirs
 def _outcomes_path(project: Path) -> Path:
     return _oem_dir(project) / "outcomes.jsonl"
+
+
+def _runtime_events_path(project: Path) -> Path:
+    return _oem_dir(project) / "runtime_events.jsonl"
+
+
+=======
+>>>>>>> theirs
+def _event_log_paths(project: Path) -> tuple[Path, ...]:
+    return (_runtime_events_path(project), _events_path(project))
 
 
 def _registry_path(project: Path) -> Path:
@@ -460,6 +477,8 @@ def _slug(value: str) -> str:
     return value.strip("-")
 
 
+<<<<<<< ours
+<<<<<<< ours
 def _concept_slug(cid: str, concept: dict[str, Any]) -> str:
     for key in ("slug", "canonical_slug"):
         if concept.get(key):
@@ -518,6 +537,73 @@ def _duplicate_runtime_records(
             seen.add(key)
             kept.append(record)
     return kept, duplicates
+=======
+=======
+>>>>>>> theirs
+def _is_suspicious_system_concept(value: str | None) -> bool:
+    if value is None:
+        return False
+    slug = _slug(str(value))
+    return slug in {
+        "index",
+        "log",
+        "inbox",
+        "schema",
+        "purpose",
+        "triggers",
+        "runtime-events",
+        "outcomes",
+        "session-report",
+    } or bool(re.fullmatch(r"concept-\d+", slug))
+
+
+def _dedupe_key_for_line(line: str) -> tuple[str, str] | None:
+    raw = line.strip()
+    if not raw:
+        return None
+    try:
+        item = json.loads(raw)
+    except json.JSONDecodeError:
+        return ("raw", raw)
+    if not isinstance(item, dict):
+        return ("raw", raw)
+    return ("json", json.dumps(_event_duplicate_key(item), sort_keys=True))
+
+
+def _dedupe_runtime_event_lines(path: Path, mutate: bool) -> dict[str, Any]:
+    if not path.exists():
+        return {"removed": 0, "details": [], "changed": False}
+
+    original = path.read_text(encoding="utf-8").splitlines()
+    seen: set[tuple[str, str]] = set()
+    kept: list[str] = []
+    details: list[dict[str, Any]] = []
+
+    for line_no, line in enumerate(original, start=1):
+        key = _dedupe_key_for_line(line)
+        if key is None:
+            kept.append(line)
+            continue
+        if key in seen:
+            details.append({
+                "path": str(path),
+                "line": line_no,
+                "preview": line[:160],
+            })
+            continue
+        seen.add(key)
+        kept.append(line)
+
+    changed = len(details) > 0
+    if mutate and changed:
+        trailing_newline = "\n" if path.read_text(encoding="utf-8").endswith("\n") else ""
+        path.write_text("\n".join(kept) + trailing_newline, encoding="utf-8")
+
+    return {"removed": len(details), "details": details, "changed": changed}
+<<<<<<< ours
+>>>>>>> theirs
+=======
+>>>>>>> theirs
 
 
 def _update_status(report: dict[str, Any]) -> None:
@@ -529,11 +615,24 @@ def _update_status(report: dict[str, Any]) -> None:
 
     structure = report.get("structure", {})
     issue_count = (
+<<<<<<< ours
         report.get("self_ingestion", {}).get("suspect_events", 0)
         + report.get("self_ingestion", {}).get("suspect_concepts", 0)
         + report.get("duplicates", {}).get("duplicate_runtime_events", 0)
         + sum(int(structure.get(key, 0) or 0) for key in structure)
         + len(report.get("findings", []))
+=======
+        report["self_ingestion"]["suspect_events"]
+        + report["self_ingestion"]["suspect_concepts"]
+        + report["duplicates"]["duplicate_runtime_events"]
+        + report["structure"]["orphan_wiki_files"]
+        + report["structure"]["missing_wiki_files"]
+        + report["structure"]["duplicate_slugs"]
+        + report.get("system_concepts", {}).get("suspicious_concepts", 0)
+<<<<<<< ours
+>>>>>>> theirs
+=======
+>>>>>>> theirs
         + sum(
             1
             for warning in report["warnings"]
@@ -561,10 +660,20 @@ def analyze_project(
     events: list[dict[str, Any]] = []
     event_records: list[_JsonlRecord] = []
     if _selected(scope, "self-ingestion") or _selected(scope, "duplicates"):
+<<<<<<< ours
+<<<<<<< ours
         event_records = _read_jsonl_records(events_path, report)
         events = [
             record.parsed for record in event_records if record.parsed is not None
         ]
+=======
+        for event_path in _event_log_paths(resolved_project):
+            events.extend(_read_jsonl(event_path, report))
+>>>>>>> theirs
+=======
+        for event_path in _event_log_paths(resolved_project):
+            events.extend(_read_jsonl(event_path, report))
+>>>>>>> theirs
 
     if _selected(scope, "self-ingestion"):
 <<<<<<< ours
@@ -653,7 +762,19 @@ def analyze_project(
                 )
         report["self_ingestion"]["suspect_concepts"] = suspect_concepts
 
+    if _selected(scope, "self-ingestion"):
+        registry = _read_registry(_registry_path(resolved_project), report)
+        suspicious_ids = []
+        for cid, concept in registry.items():
+            name = concept.get("canonical_name") if isinstance(concept, dict) else cid
+            if _is_suspicious_system_concept(str(name)) or _is_suspicious_system_concept(str(cid)):
+                suspicious_ids.append(str(cid))
+        report["system_concepts"]["suspicious_concepts"] = len(suspicious_ids)
+        report["system_concepts"]["suspicious_concept_ids"] = suspicious_ids
+
     if _selected(scope, "duplicates"):
+<<<<<<< ours
+<<<<<<< ours
 <<<<<<< ours
 <<<<<<< ours
 <<<<<<< ours
@@ -679,14 +800,18 @@ def analyze_project(
 >>>>>>> theirs
         report["checks_performed"].append("duplicates")
         seen: set[tuple[str, str, str, str, str]] = set()
+=======
+>>>>>>> theirs
+=======
+>>>>>>> theirs
         duplicate_count = 0
-        for event in events:
-            key = _event_duplicate_key(event)
-            if key in seen:
-                duplicate_count += 1
-            else:
-                seen.add(key)
+        duplicate_details: list[dict[str, Any]] = []
+        for event_path in _event_log_paths(resolved_project):
+            result = _dedupe_runtime_event_lines(event_path, mutate=False)
+            duplicate_count += result["removed"]
+            duplicate_details.extend(result["details"])
         report["duplicates"]["duplicate_runtime_events"] = duplicate_count
+        report["duplicates"]["duplicate_runtime_event_details"] = duplicate_details
 
     if _selected(scope, "structure"):
         report["checks_performed"].append("structure")
@@ -1310,6 +1435,75 @@ def _write_json(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
+<<<<<<< ours
+=======
+def _write_apply_report(project: Path, report: dict[str, Any]) -> Path:
+    reports_dir = project / ".oem" / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    report_path = reports_dir / f"clean-{stamp}.md"
+    suffix = 1
+    while report_path.exists():
+        suffix += 1
+        report_path = reports_dir / f"clean-{stamp}-{suffix}.md"
+
+    duplicate_details = report.get("duplicates", {}).get("duplicate_runtime_event_details", [])
+    lines = [
+        "# OEM Clean Report",
+        "",
+        f"Mode: {report.get('mode')}",
+        f"Status: {report.get('status')}",
+        f"Project: {report.get('project')}",
+        f"Backup: {report.get('backup_dir') or 'none'}",
+        "",
+        "## Removed duplicates",
+        f"Removed duplicate runtime events: {report.get('duplicates', {}).get('removed_duplicate_runtime_events', 0)}",
+    ]
+    for detail in duplicate_details:
+        lines.append(
+            f"- {detail.get('path')}:{detail.get('line')} — {detail.get('preview')}"
+        )
+    if not duplicate_details:
+        lines.append("- none")
+    report_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return report_path
+
+
+def _write_apply_report(project: Path, report: dict[str, Any]) -> Path:
+    reports_dir = project / ".oem" / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    report_path = reports_dir / f"clean-{stamp}.md"
+    suffix = 1
+    while report_path.exists():
+        suffix += 1
+        report_path = reports_dir / f"clean-{stamp}-{suffix}.md"
+
+    duplicate_details = report.get("duplicates", {}).get("duplicate_runtime_event_details", [])
+    lines = [
+        "# OEM Clean Report",
+        "",
+        f"Mode: {report.get('mode')}",
+        f"Status: {report.get('status')}",
+        f"Project: {report.get('project')}",
+        f"Backup: {report.get('backup_dir') or 'none'}",
+        "",
+        "## Removed duplicates",
+        f"Removed duplicate runtime events: {report.get('duplicates', {}).get('removed_duplicate_runtime_events', 0)}",
+    ]
+    for detail in duplicate_details:
+        lines.append(
+            f"- {detail.get('path')}:{detail.get('line')} — {detail.get('preview')}"
+        )
+    if not duplicate_details:
+        lines.append("- none")
+    report_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return report_path
+
+
+def apply_cleanups(project: str | Path | None, report: dict[str, Any], backup: bool = True) -> dict[str, Any]:
+    """Apply safe cleanups from a prior analysis report.
+>>>>>>> theirs
 
 def _apply_duplicate_runtime_repair(
     project: Path, report: CleanReport, audit_dir: Path
@@ -1452,10 +1646,18 @@ def apply_repairs(
 <<<<<<< ours
             backup_dir = _create_backup_dir(resolved_project)
             apply_report["backup_dir"] = str(backup_dir)
+<<<<<<< ours
+<<<<<<< ours
             for path in (
                 *_runtime_event_paths(resolved_project),
                 _registry_path(resolved_project),
             ):
+=======
+            for path in (*_event_log_paths(resolved_project), _registry_path(resolved_project)):
+>>>>>>> theirs
+=======
+            for path in (*_event_log_paths(resolved_project), _registry_path(resolved_project)):
+>>>>>>> theirs
                 _copy_backup(path, backup_dir, resolved_project)
             audit_dir = backup_dir / "audit"
 <<<<<<< ours
@@ -1491,6 +1693,8 @@ def apply_repairs(
 >>>>>>> theirs
         audit_dir = _create_report_dir(resolved_project)
 
+<<<<<<< ours
+<<<<<<< ours
     if analysis.get("duplicates", {}).get("duplicate_runtime_events", 0):
         try:
             repaired_duplicates = _apply_duplicate_runtime_repair(
@@ -1557,6 +1761,26 @@ def apply_repairs(
         message = "Exact duplicate runtime event repair is detected but deferred; no events were mutated."
         apply_report["warnings"].append(message)
         apply_report["skipped_unsafe_repairs"].append(message)
+=======
+=======
+>>>>>>> theirs
+    if report.get("duplicates", {}).get("duplicate_runtime_events", 0):
+        removed = 0
+        removed_details: list[dict[str, Any]] = []
+        for event_path in _event_log_paths(resolved_project):
+            if not _safe_to_mutate(event_path, resolved_project):
+                continue
+            result = _dedupe_runtime_event_lines(event_path, mutate=True)
+            removed += result["removed"]
+            removed_details.extend(result["details"])
+            if result["changed"]:
+                apply_report["changed_files"].append(str(event_path))
+        apply_report["duplicates"]["removed_duplicate_runtime_events"] = removed
+        apply_report["duplicates"]["duplicate_runtime_event_details"] = removed_details
+<<<<<<< ours
+>>>>>>> theirs
+=======
+>>>>>>> theirs
     if (
         report.get("self_ingestion", {}).get("suspect_events", 0)
         or report.get("self_ingestion", {}).get("suspect_concepts", 0)
@@ -1636,6 +1860,7 @@ def apply_repairs(
 >>>>>>> theirs
 
     _update_status(apply_report)
+<<<<<<< ours
 
     try:
         report_path = write_clean_report(resolved_project, apply_report, timestamp)
@@ -1655,6 +1880,7 @@ def apply_repairs(
             _relative_display(report_path, resolved_project)
         )
     _update_status(apply_report)
+<<<<<<< ours
 =======
 >>>>>>> theirs
     try:
@@ -1663,6 +1889,20 @@ def apply_repairs(
         apply_report["warnings"].append(f"Error writing clean report: {exc}")
         _update_status(apply_report)
 
+=======
+=======
+>>>>>>> theirs
+    if apply_report.get("status") != "error":
+        try:
+            report_path = _write_apply_report(resolved_project, apply_report)
+            apply_report["report_path"] = str(report_path)
+        except OSError as exc:
+            apply_report["warnings"].append(f"Error writing clean report: {exc}")
+            apply_report["status"] = "error"
+<<<<<<< ours
+>>>>>>> theirs
+=======
+>>>>>>> theirs
     return apply_report
 
 

@@ -63,6 +63,19 @@ def _init_oem(project: Path) -> Path:
     return oem
 
 
+def _write_polluted_materialization_fixture(project: Path) -> Path:
+    oem = _init_oem(project)
+    runtime_events = oem / "runtime_events.jsonl"
+    lines = [
+        "Ingest | Materialized concept concept_023 (runtime-events) as validated",
+        "Ingest | Materialized concept concept_023 (runtime-events) as validated",
+        "Ingest | Materialized concept concept_024 (adapter-config) as validated",
+        "Ingest | Materialized concept concept_023 (runtime-events) as validated",
+    ]
+    runtime_events.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return runtime_events
+
+
 def test_clean_default_is_dry_run(tmp_path):
     args = _setup_parser().parse_args(["clean", "--project", str(tmp_path)])
 
@@ -75,25 +88,112 @@ def test_clean_default_is_dry_run(tmp_path):
     report = analyze_cleanliness(tmp_path, args.scope)
     assert report["mode"] == "dry_run"
     assert report["changed_files"] == []
+    assert not (tmp_path / ".oem" / "reports").exists()
 
 
-def test_clean_rejects_apply_and_dry_run_together():
-    with pytest.raises(SystemExit):
-        _setup_parser().parse_args(["clean", "--dry-run", "--apply"])
+def test_clean_detects_duplicate_materialization_events(tmp_path):
+    _write_polluted_materialization_fixture(tmp_path)
+<<<<<<< ours
 
+    report = analyze_cleanliness(tmp_path, "duplicates")
 
-def test_clean_apply_creates_backup_by_default(tmp_path):
+    assert report["duplicates"]["duplicate_runtime_events"] == 2
+    assert report["status"] == "issues_found"
+    assert len(report["duplicates"]["duplicate_runtime_event_details"]) == 2
+=======
+>>>>>>> theirs
+
+    report = analyze_cleanliness(tmp_path, "duplicates")
+
+    assert report["duplicates"]["duplicate_runtime_events"] == 2
+    assert report["status"] == "issues_found"
+    assert len(report["duplicates"]["duplicate_runtime_event_details"]) == 2
+
+<<<<<<< ours
+def test_clean_detects_self_ingestion_sources(tmp_path):
     oem = _init_oem(tmp_path)
+<<<<<<< ours
     runtime_events = oem / "runtime_events.jsonl"
     _write_event(runtime_events)
+=======
+=======
+
+def test_clean_detects_self_ingestion_sources(tmp_path):
+    oem = _init_oem(tmp_path)
+>>>>>>> theirs
+    events = oem / "runtime_events.jsonl"
+    _write_event(events, source=".oem/wiki/concept_a.md")
+    registry = {
+        "concept_a": {
+            "concept_id": "concept_a",
+            "canonical_name": "Concept A",
+            "source": ".oem/sessions/session_report.md",
+        }
+    }
+    (oem / "concept_registry.json").write_text(json.dumps(registry), encoding="utf-8")
+
+    report = analyze_cleanliness(tmp_path, "self-ingestion")
+
+    assert report["self_ingestion"]["suspect_events"] == 1
+    assert report["self_ingestion"]["suspect_concepts"] == 1
+    assert report["status"] == "issues_found"
+
+
+def test_clean_detects_suspicious_system_concepts(tmp_path):
+    oem = _init_oem(tmp_path)
+    registry = {
+        "concept_023": {
+            "concept_id": "concept_023",
+            "canonical_name": "concept_023",
+        },
+        "concept_safe": {
+            "concept_id": "concept_safe",
+            "canonical_name": "User Authored Project Convention",
+        },
+        "concept_schema": {
+            "concept_id": "concept_schema",
+            "canonical_name": "schema",
+        },
+    }
+    (oem / "concept_registry.json").write_text(json.dumps(registry), encoding="utf-8")
+
+    report = analyze_cleanliness(tmp_path, "self-ingestion")
+
+    assert report["system_concepts"]["suspicious_concepts"] == 2
+    assert report["system_concepts"]["suspicious_concept_ids"] == [
+        "concept_023",
+        "concept_schema",
+    ]
+    assert report["status"] == "issues_found"
+
+
+def test_clean_dry_run_does_not_modify_files(tmp_path):
+    runtime_events = _write_polluted_materialization_fixture(tmp_path)
+    before = runtime_events.read_text(encoding="utf-8")
+
+    report = analyze_cleanliness(tmp_path, "all")
+
+    assert report["mode"] == "dry_run"
+    assert runtime_events.read_text(encoding="utf-8") == before
+    assert not (tmp_path / ".oem" / "reports").exists()
+
+
+def test_clean_apply_creates_backup(tmp_path):
+    runtime_events = _write_polluted_materialization_fixture(tmp_path)
+    before = runtime_events.read_text(encoding="utf-8")
+<<<<<<< ours
+>>>>>>> theirs
+=======
+>>>>>>> theirs
 
     report = analyze_cleanliness(tmp_path, "all")
     applied = apply_cleanups(tmp_path, report)
 
     assert applied["mode"] == "apply"
-    assert applied["backup_dir"] is not None
     backup_dir = Path(applied["backup_dir"])
     assert backup_dir.is_dir()
+<<<<<<< ours
+<<<<<<< ours
 <<<<<<< ours
 <<<<<<< ours
 <<<<<<< ours
@@ -116,9 +216,13 @@ def test_clean_apply_creates_backup_by_default(tmp_path):
 def test_clean_apply_creates_backup_dir(tmp_path):
     oem = _init_oem(tmp_path)
     (oem / "runtime_events.jsonl").write_text("{}\n", encoding="utf-8")
+=======
+    assert (backup_dir / ".oem" / "runtime_events.jsonl").read_text(encoding="utf-8") == before
+>>>>>>> theirs
 
     applied = apply_cleanups(tmp_path, analyze_cleanliness(tmp_path, "all"))
 
+<<<<<<< ours
     assert Path(applied["backup_dir"]).is_dir()
     assert Path(applied["backup_dir"]).name.startswith("clean-")
 
@@ -160,17 +264,26 @@ def test_clean_backup_skips_missing_files_gracefully(tmp_path):
         encoding="utf-8"
     ) == events.read_text(encoding="utf-8")
 >>>>>>> theirs
+=======
+    assert (backup_dir / ".oem" / "runtime_events.jsonl").read_text(encoding="utf-8") == before
+>>>>>>> theirs
 
 
-def test_clean_no_backup_only_valid_with_apply():
-    with pytest.raises(SystemExit):
-        _setup_parser().parse_args(["clean", "--no-backup"])
+def test_clean_apply_deduplicates_runtime_events(tmp_path):
+    runtime_events = _write_polluted_materialization_fixture(tmp_path)
 
-    args = _setup_parser().parse_args(["clean", "--apply", "--no-backup"])
-    assert args.apply is True
-    assert args.backup is False
+    report = analyze_cleanliness(tmp_path, "all")
+    applied = apply_cleanups(tmp_path, report)
 
+    lines = runtime_events.read_text(encoding="utf-8").splitlines()
+    assert lines == [
+        "Ingest | Materialized concept concept_023 (runtime-events) as validated",
+        "Ingest | Materialized concept concept_024 (adapter-config) as validated",
+    ]
+    assert applied["duplicates"]["removed_duplicate_runtime_events"] == 2
+    assert str(runtime_events) in applied["changed_files"]
 
+<<<<<<< ours
 def test_clean_no_backup_without_apply_errors():
     with pytest.raises(SystemExit):
         _setup_parser().parse_args(["clean", "--no-backup"])
@@ -213,39 +326,99 @@ def test_clean_backup_failure_aborts_apply(tmp_path, monkeypatch):
     assert applied["report_path"] is None
     assert "disk full" in "\n".join(applied["warnings"])
     assert not (tmp_path / ".oem" / "reports").exists()
+=======
+def test_clean_apply_deduplicates_runtime_events(tmp_path):
+    runtime_events = _write_polluted_materialization_fixture(tmp_path)
 
+    report = analyze_cleanliness(tmp_path, "all")
+    applied = apply_cleanups(tmp_path, report)
+>>>>>>> theirs
 
+    lines = runtime_events.read_text(encoding="utf-8").splitlines()
+    assert lines == [
+        "Ingest | Materialized concept concept_023 (runtime-events) as validated",
+        "Ingest | Materialized concept concept_024 (adapter-config) as validated",
+    ]
+    assert applied["duplicates"]["removed_duplicate_runtime_events"] == 2
+    assert str(runtime_events) in applied["changed_files"]
+
+<<<<<<< ours
 def test_clean_dry_run_does_not_modify_files(tmp_path):
     oem = _init_oem(tmp_path)
     events = oem / "runtime_events.jsonl"
     _write_event(events)
     before = events.read_text(encoding="utf-8")
+=======
+
+def test_clean_apply_writes_report(tmp_path):
+    _write_polluted_materialization_fixture(tmp_path)
+>>>>>>> theirs
 
     report = analyze_cleanliness(tmp_path, "all")
+    applied = apply_cleanups(tmp_path, report)
 
-    assert report["mode"] == "dry_run"
-    assert events.read_text(encoding="utf-8") == before
+    report_path = Path(applied["report_path"])
+    assert report_path.parent == tmp_path / ".oem" / "reports"
+    assert report_path.name.startswith("clean-")
+    content = report_path.read_text(encoding="utf-8")
+    assert "Removed duplicate runtime events: 2" in content
+    assert "Ingest | Materialized concept concept_023" in content
 
 
+<<<<<<< ours
 def test_clean_dry_run_writes_no_backup_and_no_report(tmp_path):
     oem = _init_oem(tmp_path)
     events = oem / "runtime_events.jsonl"
     _write_event(events)
+=======
+
+def test_clean_apply_writes_report(tmp_path):
+    _write_polluted_materialization_fixture(tmp_path)
+>>>>>>> theirs
 
     report = analyze_cleanliness(tmp_path, "all")
+    applied = apply_cleanups(tmp_path, report)
 
+<<<<<<< ours
     assert report["mode"] == "dry_run"
     assert not (oem / "backups").exists()
     assert not (oem / "reports").exists()
 
 
 def test_clean_never_touches_adapter_config_paths(tmp_path, monkeypatch):
+=======
+=======
+    report_path = Path(applied["report_path"])
+    assert report_path.parent == tmp_path / ".oem" / "reports"
+    assert report_path.name.startswith("clean-")
+    content = report_path.read_text(encoding="utf-8")
+    assert "Removed duplicate runtime events: 2" in content
+    assert "Ingest | Materialized concept concept_023" in content
+
+
+>>>>>>> theirs
+def test_clean_apply_does_not_touch_project_files(tmp_path):
+    _write_polluted_materialization_fixture(tmp_path)
+    project_file = tmp_path / "src" / "module.py"
+    project_file.parent.mkdir(parents=True)
+    project_file.write_text("print('do not touch')\n", encoding="utf-8")
+    before = project_file.read_text(encoding="utf-8")
+
+    report = analyze_cleanliness(tmp_path, "all")
+    apply_cleanups(tmp_path, report)
+
+    assert project_file.read_text(encoding="utf-8") == before
+
+
+def test_clean_apply_does_not_touch_adapter_configs(tmp_path, monkeypatch):
+<<<<<<< ours
+>>>>>>> theirs
+=======
+>>>>>>> theirs
     fake_home = tmp_path / "home"
     monkeypatch.setattr(Path, "home", lambda: fake_home)
-    oem = _init_oem(tmp_path / "project")
     project = tmp_path / "project"
-    events = oem / "events.jsonl"
-    _write_event(events)
+    _write_polluted_materialization_fixture(project)
 
     forbidden_paths = [
         fake_home / ".config" / "opencode" / "settings.json",
@@ -269,33 +442,17 @@ def test_clean_never_touches_adapter_config_paths(tmp_path, monkeypatch):
         assert forbidden_path.read_text(encoding="utf-8") == content
 
 
-def test_clean_detects_duplicate_runtime_events(tmp_path):
-    oem = _init_oem(tmp_path)
-    events = oem / "events.jsonl"
-    _write_event(events, event_id="first")
-    _write_event(events, event_id="second")
-
-    report = analyze_cleanliness(tmp_path, "duplicates")
-
-    assert report["duplicates"]["duplicate_runtime_events"] == 1
-    assert report["status"] == "issues_found"
+def test_clean_rejects_apply_and_dry_run_together():
+    with pytest.raises(SystemExit):
+        _setup_parser().parse_args(["clean", "--dry-run", "--apply"])
+<<<<<<< ours
 
 
-def test_clean_detects_self_ingestion_suspects(tmp_path):
-    oem = _init_oem(tmp_path)
-    events = oem / "events.jsonl"
-    _write_event(events, source=".oem/wiki/concept_a.md")
-    registry = {
-        "concept_a": {
-            "concept_id": "concept_a",
-            "canonical_name": "Concept A",
-            "source": ".oem/sessions/session_report.md",
-        }
-    }
-    (oem / "concept_registry.json").write_text(json.dumps(registry), encoding="utf-8")
+def test_clean_no_backup_only_valid_with_apply():
+    with pytest.raises(SystemExit):
+        _setup_parser().parse_args(["clean", "--no-backup"])
 
-    report = analyze_cleanliness(tmp_path, "self-ingestion")
-
+<<<<<<< ours
     assert report["self_ingestion"]["suspect_events"] == 1
     assert report["self_ingestion"]["suspect_concepts"] == 1
     assert report["status"] == "issues_found"
@@ -358,3 +515,19 @@ def test_analyze_project_flags_suspicious_system_and_registry_consistency(tmp_pa
     assert any(
         finding.code == "suspicious_system_concept" for finding in report.findings
     )
+=======
+    args = _setup_parser().parse_args(["clean", "--apply", "--no-backup"])
+    assert args.apply is True
+    assert args.backup is False
+>>>>>>> theirs
+=======
+
+
+def test_clean_no_backup_only_valid_with_apply():
+    with pytest.raises(SystemExit):
+        _setup_parser().parse_args(["clean", "--no-backup"])
+
+    args = _setup_parser().parse_args(["clean", "--apply", "--no-backup"])
+    assert args.apply is True
+    assert args.backup is False
+>>>>>>> theirs
