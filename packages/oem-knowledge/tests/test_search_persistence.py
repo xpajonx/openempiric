@@ -24,6 +24,31 @@ def temp_project(tmp_path):
     yield project_dir
     shutil.rmtree(project_dir)
 
+
+def test_oem_wiki_chunks_remain_indexed_with_ingestion_metadata(temp_project):
+    engine = KnowledgeEngine(temp_project)
+
+    stats = engine.search.index_all(force=True)
+
+    assert stats["status"] == "success"
+    chunks = engine.search.vector_store.all_chunks()
+    wiki_chunks = [
+        chunk for chunk in chunks
+        if chunk["metadata"].get("rel_path", "").startswith(".oem/wiki/")
+    ]
+    assert wiki_chunks
+
+    wiki_meta = wiki_chunks[0]["metadata"]
+    assert wiki_meta["source_type"] == "oem_wiki"
+    assert wiki_meta["ingestion_eligible"] is False
+    assert wiki_meta["source_path"].startswith(".oem/wiki/")
+
+    results = engine.search.search("LinkedConcept", k=3, hybrid=False)
+    assert any(
+        result["metadata"].get("rel_path", "").startswith(".oem/wiki/")
+        for result in results
+    )
+
 def test_vector_store_write_failure_during_index_all(temp_project, caplog):
     engine = KnowledgeEngine(temp_project)
     

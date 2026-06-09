@@ -10,6 +10,7 @@ from collections import Counter
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from oem_knowledge.source_classifier import classify_source
 from oem_knowledge.vector_store import VectorStore
 
 if TYPE_CHECKING:
@@ -335,6 +336,8 @@ class SearchService:
                     rel_path = fp.name
 
                 try:
+                    content = fp.read_text(encoding="utf-8")
+                    classification = classify_source(fp, content=content)
                     chunks = self.chunk_markdown(fp, rel_path)
                     if not chunks:
                         continue
@@ -348,7 +351,10 @@ class SearchService:
                             "text": c["text"],
                             "meta": {
                                 "source": path_str,
+                                "source_path": rel_path,
                                 "rel_path": rel_path,
+                                "source_type": classification.source_type,
+                                "ingestion_eligible": classification.ingestion_eligible,
                                 "title": c["title"],
                                 "content_hash": cur_hash,
                                 "linked_concepts": ",".join(c["linked_concepts"]),
