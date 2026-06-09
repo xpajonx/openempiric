@@ -141,6 +141,8 @@ def _empty_report(
             },
             "duplicates": {
                 "duplicate_runtime_events": 0,
+                "removed_duplicate_runtime_events": 0,
+                "duplicate_runtime_event_details": [],
             },
             "structure": {
                 "orphan_wiki_files": 0,
@@ -154,6 +156,13 @@ def _empty_report(
                 "legacy_harness_artifacts": 0,
                 "unknown_harness_files": 0,
             },
+            "system_concepts": {
+                "suspicious_concepts": 0,
+                "suspicious_concept_ids": [],
+            },
+            "checks_performed": [],
+            "files_backed_up": [],
+            "backup_warnings": [],
             "changed_files": [],
             "backup_dir": None,
             "report_path": None,
@@ -191,6 +200,10 @@ def _runtime_events_path(project: Path) -> Path:
 
 def _legacy_events_path(project: Path) -> Path:
     return _oem_dir(project) / "events.jsonl"
+
+
+def _event_log_paths(project: Path) -> tuple[Path, ...]:
+    return tuple(_runtime_event_paths(project))
 
 
 def _outcomes_path(project: Path) -> Path:
@@ -402,6 +415,13 @@ def _is_suspicious_system_concept(value: str | None) -> bool:
         "outcomes",
         "session-report",
     } or bool(re.fullmatch(r"concept-\d+", slug))
+
+
+def _event_duplicate_key(event: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(event)
+    normalized.pop("event_id", None)
+    normalized.pop("id", None)
+    return normalized
 
 
 def _dedupe_key_for_line(line: str) -> tuple[str, str] | None:
@@ -912,7 +932,7 @@ def write_clean_report(
         "",
         "## Duplicate events removed",
         f"- Duplicate runtime events detected: {report.get('duplicates', {}).get('duplicate_runtime_events', 0)}",
-        "- Removed: 0",
+        f"- Removed: {report.get('duplicates', {}).get('removed_duplicate_runtime_events', 0)}",
         "",
         "## Suspicious concepts",
         f"- Suspect concepts: {report.get('self_ingestion', {}).get('suspect_concepts', 0)}",
@@ -980,21 +1000,32 @@ def apply_cleanups(project: str | Path | None, report: dict[str, Any], backup: b
     """Apply safe cleanups from a prior analysis report."""
     resolved_project = _resolve_project(project)
     apply_report: dict[str, Any] = report.copy()
+    apply_report["mode"] = "apply"
+    backup_result: CleanBackupResult | None = None
     
     if backup:
         timestamp = clean_timestamp()
-        backup_result = create_clean_backup(resolved_project, timestamp)
+        try:
+            backup_result = create_clean_backup(resolved_project, timestamp)
+        except OSError as exc:
+            apply_report["status"] = "error"
+            apply_report["warnings"].append(f"Error creating clean backup: {exc}")
+            apply_report["report_path"] = None
+            return apply_report
         apply_report["backup_dir"] = str(backup_result.backup_dir)
         apply_report["files_backed_up"] = [str(p) for p in backup_result.files_backed_up]
         apply_report["backup_warnings"] = backup_result.warnings
 
-    for path in (
-        *_runtime_event_paths(resolved_project),
-        _registry_path(resolved_project),
-    ):
-        _copy_backup(path, backup_result.backup_dir if backup else None, resolved_project)
-
-    audit_dir = backup_result.backup_dir / "audit" if backup else None
+    if backup and backup_result is not None:
+        for path in (
+            *_runtime_event_paths(resolved_project),
+            _registry_path(resolved_project),
+        ):
+            _copy_backup(path, backup_result.backup_dir, resolved_project)
+        audit_dir = backup_result.backup_dir / "audit"
+    else:
+        audit_dir = _oem_dir(resolved_project) / "audit"
+        audit_dir.mkdir(parents=True, exist_ok=True)
 
     if apply_report.get("duplicates", {}).get("duplicate_runtime_events", 0):
         try:
@@ -1002,6 +1033,23 @@ def apply_cleanups(project: str | Path | None, report: dict[str, Any], backup: b
                 resolved_project, apply_report, audit_dir
             )
             apply_report["duplicates"]["removed_duplicate_runtime_events"] = repaired_duplicates
+            if repaired_duplicates:
+                apply_report["duplicates"]["duplicate_runtime_events"] = max(
+                    0,
+                    int(
+                        apply_report.get("duplicates", {}).get(
+                            "duplicate_runtime_events", 0
+                        )
+                        or 0
+                    )
+                    - repaired_duplicates,
+                )
+                apply_report["changed_files"] = [
+                    str((resolved_project / path).resolve())
+                    if not Path(path).is_absolute()
+                    else str(path)
+                    for path in apply_report.get("changed_files", [])
+                ]
         except Exception as exc:
             apply_report["status"] = "error"
             apply_report["warnings"].append(f"Error applying duplicate cleanup: {exc}")
@@ -1102,6 +1150,12 @@ def _apply_self_ingestion_repair(
             report["changed_files"].append(_relative_display(registry_path, project))
     
     return result
+
+
+def _format_clean_report_list(values: list[Any]) -> list[str]:
+    if not values:
+        return ["- none"]
+    return [f"- {value}" for value in values]
 
 
 def _copy_backup(source: Path, backup_dir: Path, project: Path) -> None:

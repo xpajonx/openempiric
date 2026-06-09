@@ -5,7 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from oem_knowledge.clean import analyze_cleanliness, analyze_project, apply_cleanups
+import oem_knowledge.clean as clean_module
+from oem_knowledge.clean import analyze_cleanliness, analyze_project, apply_cleanups, create_clean_backup
 from oem_knowledge.cli.parser import _setup_parser
 
 
@@ -147,7 +148,8 @@ def test_clean_apply_creates_backup(tmp_path):
     backup_dir = Path(applied["backup_dir"])
     assert backup_dir.is_dir()
     assert backup_dir.parent == tmp_path / ".oem" / "backups"
-    assert (backup_dir / "runtime_events.jsonl").read_text(encoding="utf-8") == runtime_events.read_text(encoding="utf-8")
+    assert (backup_dir / "runtime_events.jsonl").read_text(encoding="utf-8") == before
+    assert runtime_events.read_text(encoding="utf-8") != before
 
 
 def test_clean_apply_creates_backup_dir(tmp_path):

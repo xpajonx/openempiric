@@ -20,9 +20,16 @@ def temp_project(tmp_path):
     wiki_dir.mkdir(parents=True, exist_ok=True)
     (wiki_dir / "concept1.md").write_text("# Concept 1\n\nSome body text [[LinkedConcept]]")
     (wiki_dir / "concept2.md").write_text("# Concept 2\n\nSome other text")
-    
+
     yield project_dir
-    shutil.rmtree(project_dir)
+    try:
+        engine.search.vector_store.close()
+    except Exception:
+        pass
+    try:
+        shutil.rmtree(project_dir)
+    except FileNotFoundError:
+        pass
 
 
 def test_oem_wiki_chunks_remain_indexed_with_ingestion_metadata(temp_project):
