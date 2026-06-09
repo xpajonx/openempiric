@@ -22,3 +22,11 @@ def test_source_classifier_marks_project_file_as_ingestion_eligible():
     assert classification.source_type == SourceType.PROJECT_FILE
     assert classification.ingestion_eligible is True
     assert is_ingestion_eligible("src/package/module.py") is True
+
+
+def test_source_classifier_marks_clean_reports_as_not_ingestion_eligible():
+    classification = classify_source(".oem/reports/clean-20260609-120000.md")
+
+    assert classification.source_type == SourceType.OEM_SESSION_REPORT
+    assert classification.ingestion_eligible is False
+    assert is_ingestion_eligible(".oem/reports/clean-20260609-120000.md") is False

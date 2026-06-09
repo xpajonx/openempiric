@@ -49,6 +49,7 @@ def _render_clean_lines(report: dict) -> list[str]:
         f"Project: {report.get('project', '')}",
         f"Status: {report.get('status', '')}",
         f"Backup: {report.get('backup_dir') or 'none'}",
+        f"Report: {report.get('report_path') or 'none'}",
         "",
         "Self-ingestion:",
         f"  Suspect events: {report.get('self_ingestion', {}).get('suspect_events', 0)}",
@@ -65,6 +66,7 @@ def _render_clean_lines(report: dict) -> list[str]:
         f"  Legacy harness artifacts: {report.get('structure', {}).get('legacy_harness_artifacts', 0)}",
         f"  Unknown harness files: {report.get('structure', {}).get('unknown_harness_files', 0)}",
         f"Changed files: {len(report.get('changed_files', []))}",
+        f"Files backed up: {len(report.get('files_backed_up', []))}",
     ]
     if report.get("changed_files"):
         lines.extend(f"  {path}" for path in report["changed_files"])

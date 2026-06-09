@@ -5,7 +5,31 @@ from pathlib import Path
 
 import pytest
 
+<<<<<<< ours
+<<<<<<< ours
+<<<<<<< ours
+<<<<<<< ours
+<<<<<<< ours
 from oem_knowledge.clean import analyze_cleanliness, analyze_project, apply_cleanups
+=======
+import oem_knowledge.clean as clean_module
+from oem_knowledge.clean import analyze_cleanliness, apply_cleanups, create_clean_backup
+>>>>>>> theirs
+=======
+import oem_knowledge.clean as clean_module
+from oem_knowledge.clean import analyze_cleanliness, apply_cleanups, create_clean_backup
+>>>>>>> theirs
+=======
+import oem_knowledge.clean as clean_module
+from oem_knowledge.clean import analyze_cleanliness, apply_cleanups, create_clean_backup
+>>>>>>> theirs
+=======
+import oem_knowledge.clean as clean_module
+from oem_knowledge.clean import analyze_cleanliness, apply_cleanups, create_clean_backup
+>>>>>>> theirs
+=======
+from oem_knowledge.clean import analyze_cleanliness, analyze_project, apply_cleanups
+>>>>>>> theirs
 from oem_knowledge.cli.parser import _setup_parser
 
 
@@ -60,8 +84,8 @@ def test_clean_rejects_apply_and_dry_run_together():
 
 def test_clean_apply_creates_backup_by_default(tmp_path):
     oem = _init_oem(tmp_path)
-    events = oem / "events.jsonl"
-    _write_event(events)
+    runtime_events = oem / "runtime_events.jsonl"
+    _write_event(runtime_events)
 
     report = analyze_cleanliness(tmp_path, "all")
     applied = apply_cleanups(tmp_path, report)
@@ -70,9 +94,72 @@ def test_clean_apply_creates_backup_by_default(tmp_path):
     assert applied["backup_dir"] is not None
     backup_dir = Path(applied["backup_dir"])
     assert backup_dir.is_dir()
+<<<<<<< ours
+<<<<<<< ours
+<<<<<<< ours
+<<<<<<< ours
+<<<<<<< ours
     assert (backup_dir / ".oem" / "events.jsonl").read_text(
         encoding="utf-8"
     ) == events.read_text(encoding="utf-8")
+=======
+=======
+>>>>>>> theirs
+=======
+>>>>>>> theirs
+=======
+>>>>>>> theirs
+    assert backup_dir.parent == tmp_path / ".oem" / "backups"
+    assert (backup_dir / "runtime_events.jsonl").read_text(encoding="utf-8") == runtime_events.read_text(encoding="utf-8")
+
+
+def test_clean_apply_creates_backup_dir(tmp_path):
+    oem = _init_oem(tmp_path)
+    (oem / "runtime_events.jsonl").write_text("{}\n", encoding="utf-8")
+
+    applied = apply_cleanups(tmp_path, analyze_cleanliness(tmp_path, "all"))
+
+    assert Path(applied["backup_dir"]).is_dir()
+    assert Path(applied["backup_dir"]).name.startswith("clean-")
+
+
+def test_clean_backup_preserves_relative_paths(tmp_path):
+    oem = _init_oem(tmp_path)
+    wiki_file = oem / "wiki" / "nested" / "concept_001.md"
+    wiki_file.parent.mkdir()
+    wiki_file.write_text("# Concept 001\n", encoding="utf-8")
+
+    backup = create_clean_backup(tmp_path, "20260609-120000")
+
+    assert (backup.backup_dir / "wiki" / "nested" / "concept_001.md").read_text(encoding="utf-8") == "# Concept 001\n"
+    assert not (backup.backup_dir / "concept_001.md").exists()
+
+
+def test_clean_backup_skips_missing_files_gracefully(tmp_path):
+    (tmp_path / ".oem").mkdir()
+
+    backup = create_clean_backup(tmp_path, "20260609-120001")
+
+    assert backup.backup_dir.is_dir()
+    assert any("concept_registry.json" in warning for warning in backup.warnings)
+    assert any("runtime_events.jsonl" in warning for warning in backup.warnings)
+    assert any("outcomes.jsonl" in warning for warning in backup.warnings)
+    assert any("wiki" in warning for warning in backup.warnings)
+<<<<<<< ours
+<<<<<<< ours
+<<<<<<< ours
+>>>>>>> theirs
+=======
+>>>>>>> theirs
+=======
+>>>>>>> theirs
+=======
+>>>>>>> theirs
+=======
+    assert (backup_dir / ".oem" / "events.jsonl").read_text(
+        encoding="utf-8"
+    ) == events.read_text(encoding="utf-8")
+>>>>>>> theirs
 
 
 def test_clean_no_backup_only_valid_with_apply():
@@ -84,9 +171,53 @@ def test_clean_no_backup_only_valid_with_apply():
     assert args.backup is False
 
 
+def test_clean_no_backup_without_apply_errors():
+    with pytest.raises(SystemExit):
+        _setup_parser().parse_args(["clean", "--no-backup"])
+
+
+def test_clean_apply_writes_report(tmp_path):
+    _init_oem(tmp_path)
+
+    applied = apply_cleanups(tmp_path, analyze_cleanliness(tmp_path, "all"))
+
+    report_path = Path(applied["report_path"])
+    assert report_path.is_file()
+    assert report_path.parent == tmp_path / ".oem" / "reports"
+    assert "# OEM Clean Report" in report_path.read_text(encoding="utf-8")
+
+
+def test_clean_report_contains_generated_by_metadata(tmp_path):
+    _init_oem(tmp_path)
+
+    applied = apply_cleanups(tmp_path, analyze_cleanliness(tmp_path, "all"))
+
+    contents = Path(applied["report_path"]).read_text(encoding="utf-8")
+    assert "generated_by: openempiric" in contents
+    assert "source_type: oem_generated" in contents
+    assert "command: oem clean" in contents
+    assert "mode: apply" in contents
+
+
+def test_clean_backup_failure_aborts_apply(tmp_path, monkeypatch):
+    _init_oem(tmp_path)
+
+    def fail_backup(harness, timestamp):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(clean_module, "create_clean_backup", fail_backup)
+
+    applied = apply_cleanups(tmp_path, analyze_cleanliness(tmp_path, "all"), backup=True)
+
+    assert applied["status"] == "error"
+    assert applied["report_path"] is None
+    assert "disk full" in "\n".join(applied["warnings"])
+    assert not (tmp_path / ".oem" / "reports").exists()
+
+
 def test_clean_dry_run_does_not_modify_files(tmp_path):
     oem = _init_oem(tmp_path)
-    events = oem / "events.jsonl"
+    events = oem / "runtime_events.jsonl"
     _write_event(events)
     before = events.read_text(encoding="utf-8")
 
@@ -94,6 +225,18 @@ def test_clean_dry_run_does_not_modify_files(tmp_path):
 
     assert report["mode"] == "dry_run"
     assert events.read_text(encoding="utf-8") == before
+
+
+def test_clean_dry_run_writes_no_backup_and_no_report(tmp_path):
+    oem = _init_oem(tmp_path)
+    events = oem / "runtime_events.jsonl"
+    _write_event(events)
+
+    report = analyze_cleanliness(tmp_path, "all")
+
+    assert report["mode"] == "dry_run"
+    assert not (oem / "backups").exists()
+    assert not (oem / "reports").exists()
 
 
 def test_clean_never_touches_adapter_config_paths(tmp_path, monkeypatch):

@@ -147,11 +147,11 @@ def classify_source(
                 source_path,
             )
 
-        if oem_parts[0] == "session_reports":
+        if oem_parts[0] in {"session_reports", "reports"}:
             return _classification(
                 SourceType.OEM_SESSION_REPORT,
                 False,
-                ".oem/session_reports files are generated session reports",
+                ".oem generated report files are not source evidence",
                 source_path,
             )
 
