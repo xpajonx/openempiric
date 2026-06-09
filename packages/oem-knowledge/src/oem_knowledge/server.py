@@ -156,18 +156,38 @@ def mount_tools(mcp: object) -> None:
         except Exception as e:
             return f"# Session End Failure\n\nError: {e}"
 
+        if res.get("status") == "error":
+            failed_step = res.get("failed_step", "reflection/materialization")
+            reason = res.get("message", "Unknown failure")
+            return f"""# Session End Failure
+
+Session reflection completed, but materialization/reflection failed.
+
+Failed step: {failed_step}  
+Reason: {reason}
+
+Your conversation was not fully committed to OEM memory. Please retry session end after fixing the issue."""
+
         events = res.get("knowledge_events", [])
         event_counts: dict[str, int] = {}
         for ev in events:
             t = ev.get("type", "observation")
             event_counts[t] = event_counts.get(t, 0) + 1
 
+        res_status = res.get("status", "success")
+        if res_status == "partial":
+            status_line = "Session commit completed partially. Some steps succeeded, but others had failures (see warnings below)."
+        else:
+            status_line = "Session ended successfully / Session commit succeeded."
+
         lines = [
             "# Session End / Commit Complete",
             "",
-            "Session ended successfully / Session commit succeeded.",
-            f"**Report**: {Path(res.get('report_path', '')).name}",
+            status_line,
         ]
+        if res.get("report_path"):
+            lines.append(f"**Report**: {Path(res.get('report_path')).name}")
+            
         if res.get("warnings"):
             lines.extend([
                 "",

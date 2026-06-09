@@ -1,10 +1,13 @@
 from __future__ import annotations
 import difflib
 import json
+import logging
 import re
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from oem_knowledge.engine import KnowledgeEngine
@@ -60,8 +63,8 @@ class MaterializationService:
         if sfs.exists(file_path):
             try:
                 old_content = sfs.read_text(file_path)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Failed to read concept file %s for revision log: %s", file_path, e)
                 
         diff_str = ""
         if old_content:
@@ -89,8 +92,8 @@ class MaterializationService:
         
         try:
             sfs.append_text(history_file, json.dumps(entry) + "\n")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to append entry to history file %s: %s", history_file, e)
 
     def get_concept_history(self, concept_id: str, project: str | None = None) -> list[dict]:
         """Read all revision log entries for a given concept_id."""
@@ -105,8 +108,8 @@ class MaterializationService:
                     entry = json.loads(line)
                     if entry.get("concept_id") == concept_id:
                         history.append(entry)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Failed to parse history entry in %s: %s", history_file, e)
         return history
 
     def _safe_write_concept_file(
@@ -185,8 +188,10 @@ class MaterializationService:
                     data = json.loads(json_match.group(1))
                     if "knowledge_events" in data:
                         knowledge_events = data["knowledge_events"]
-                except Exception:
-                    pass
+                except json.JSONDecodeError as e:
+                    logger.warning("Corrupt JSON in session file %s: %s", session_file, e)
+                except Exception as e:
+                    logger.warning("Unexpected error parsing JSON in session file %s: %s", session_file, e)
 
             if not knowledge_events:
                 continue
@@ -209,29 +214,30 @@ class MaterializationService:
 
                 concept_file = concepts_dir / f"{cid}.md"
 
-                if new_status in ("validated", "canonical", "needs_review"):
-                    existing_body = ""
-                    is_new = not concept_file.exists()
-                    if not is_new:
-                        try:
-                            text = concept_file.read_text(encoding="utf-8")
-                            fm = re.match(r"^---\s*\n.*?\n---\s*\n(.*)$", text, re.DOTALL)
-                            existing_body = fm.group(1).strip() if fm else text.strip()
-                        except Exception:
-                            pass
+                try:
+                    if new_status in ("validated", "canonical", "needs_review"):
+                        existing_body = ""
+                        is_new = not concept_file.exists()
+                        if not is_new:
+                            try:
+                                text = concept_file.read_text(encoding="utf-8")
+                                fm = re.match(r"^---\s*\n.*?\n---\s*\n(.*)$", text, re.DOTALL)
+                                existing_body = fm.group(1).strip() if fm else text.strip()
+                            except Exception as e:
+                                logger.warning("Failed to read existing concept file %s: %s", concept_file, e)
 
-                    learning = f"- **{e_type.title()}**: {evidence}" if evidence else ""
-                    if is_new:
-                        if new_status == "needs_review":
-                            body = f"# {cdata['canonical_name'].replace('-', ' ').title()}\n\nThis concept requires review due to repeated session failures.\n\n## Learnings\n{learning}\n"
+                        learning = f"- **{e_type.title()}**: {evidence}" if evidence else ""
+                        if is_new:
+                            if new_status == "needs_review":
+                                body = f"# {cdata['canonical_name'].replace('-', ' ').title()}\n\nThis concept requires review due to repeated session failures.\n\n## Learnings\n{learning}\n"
+                            else:
+                                body = f"# {cdata['canonical_name'].replace('-', ' ').title()}\n\nThis concept is a validated organizational knowledge node.\n\n## Learnings\n{learning}\n"
                         else:
-                            body = f"# {cdata['canonical_name'].replace('-', ' ').title()}\n\nThis concept is a validated organizational knowledge node.\n\n## Learnings\n{learning}\n"
-                    else:
-                        body = existing_body
-                        if learning:
-                            body += f"\n\n## Learnings ({time.strftime('%Y-%m-%d')})\n{learning}\n"
+                            body = existing_body
+                            if learning:
+                                body += f"\n\n## Learnings ({time.strftime('%Y-%m-%d')})\n{learning}\n"
 
-                    concept_content = f"""---
+                        concept_content = f"""---
 concept_id: {cid}
 canonical_name: {cdata["canonical_name"]}
 status: {new_status}
@@ -242,29 +248,32 @@ aliases: {json.dumps(cdata.get("aliases", []))}
 ---
 {body}"""
 
-                    self._safe_write_concept_file(concept_file, concept_content, project)
-                    self._log_action(
-                        f"Ingest | Materialized concept {cid} ({cdata['canonical_name']}) as {new_status}",
-                        project,
-                    )
-                    self._sync_index(cdata["canonical_name"], cid, project)
-                    materialized_log.append(
-                        f"{cid} ({cdata['canonical_name']}) = {new_status}"
-                    )
-
-                elif new_status == "deprecated":
-                    if concept_file.exists():
-                        concept_file.unlink()
+                        self._safe_write_concept_file(concept_file, concept_content, project)
                         self._log_action(
-                            f"Delete | Deprecated concept {cid} ({cdata['canonical_name']})",
+                            f"Ingest | Materialized concept {cid} ({cdata['canonical_name']}) as {new_status}",
                             project,
                         )
-                    materialized_log.append(f"Deprecated: {cid}")
+                        self._sync_index(cdata["canonical_name"], cid, project)
+                        materialized_log.append(
+                            f"{cid} ({cdata['canonical_name']}) = {new_status}"
+                        )
 
-                else:
-                    materialized_log.append(
-                        f"{cid} ({cdata['canonical_name']}) = {new_status} (not materialized)"
-                    )
+                    elif new_status == "deprecated":
+                        if concept_file.exists():
+                            concept_file.unlink()
+                            self._log_action(
+                                f"Delete | Deprecated concept {cid} ({cdata['canonical_name']})",
+                                project,
+                            )
+                        materialized_log.append(f"Deprecated: {cid}")
+
+                    else:
+                        materialized_log.append(
+                            f"{cid} ({cdata['canonical_name']}) = {new_status} (not materialized)"
+                        )
+                except Exception as e:
+                    logger.error("Failed to materialize/write concept file %s: %s", concept_file, e)
+                    return {"status": "error", "failed_step": "materialization", "message": f"Failed to write concept file {concept_file.name}: {e}"}
 
         if registry_updated:
             self.engine.state._save_registry(registry, project)
@@ -278,8 +287,8 @@ aliases: {json.dumps(cdata.get("aliases", []))}
             metrics_file = (root / OEM_DIR / "state" / "metrics.json")
             if materialized_log:
                 update_metrics_file(metrics_file, {"materializations": len(materialized_log)})
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to emit materializations metrics: %s", e)
 
         return {"status": "success", "materialized": materialized_log}
 

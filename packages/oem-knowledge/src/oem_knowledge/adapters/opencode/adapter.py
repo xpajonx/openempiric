@@ -1,7 +1,11 @@
+import logging
 from pathlib import Path
 from typing import Optional
+import yaml
 from oem_knowledge.adapters.base import BaseAdapter
 from oem_knowledge.adapters.registry import register_adapter
+
+logger = logging.getLogger(__name__)
 
 @register_adapter("opencode")
 class OpenCodeAdapter(BaseAdapter):
@@ -21,14 +25,13 @@ class OpenCodeAdapter(BaseAdapter):
             skills_dir.mkdir(parents=True, exist_ok=True)
             skills_file = skills_dir / "openempiric.yaml"
 
-            import yaml
             existing_data = {}
             if skills_file.exists():
                 try:
                     with open(skills_file, "r", encoding="utf-8") as f:
                         existing_data = yaml.safe_load(f) or {}
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"Failed to parse existing OpenCode skills file {skills_file}: {e}")
 
             adapters = existing_data.get("adapters", [])
             if not isinstance(adapters, list):
@@ -68,7 +71,8 @@ class OpenCodeAdapter(BaseAdapter):
             with open(skills_file, "w", encoding="utf-8") as f:
                 yaml.safe_dump(updated_data, f, default_flow_style=False, sort_keys=False)
             return True
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Failed to install OpenCode skill: {e}", exc_info=True)
             return False
 
     def verify_mcp(self) -> bool:

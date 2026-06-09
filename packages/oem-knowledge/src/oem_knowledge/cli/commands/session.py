@@ -41,8 +41,8 @@ def run_session_command(args):
             session_state = SessionState.load(active_session_file)
             if session_state:
                 session_started_at = session_state.started_at
-        except Exception:
-            pass
+        except Exception as e:
+            logging.debug(f"Could not load active session state: {e}")
 
         commit_start = time.time()
         res = eng.session_commit(
@@ -147,8 +147,8 @@ def run_session_command(args):
                 try:
                     sdata = json.loads(session_state_file.read_text(encoding="utf-8"))
                     injected_count = len(sdata.get("last_injected_concepts", []))
-                except Exception:
-                    pass
+                except Exception as e:
+                    logging.warning(f"Failed to load session state details from {session_state_file}: {e}")
 
             # Determine reflection/materialization/outcome status
             is_running = session_state.status in ("started", "running")

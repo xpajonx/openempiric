@@ -1,8 +1,11 @@
 from __future__ import annotations
 import json
+import logging
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from oem_knowledge.engine import KnowledgeEngine
@@ -96,8 +99,8 @@ class ReflectionService:
                         mtime = fp.stat().st_mtime
                         if mtime < session_started_at:
                             continue
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning("Failed to check modification time for concept file %s: %s", fp.name, e)
                 
                 # 2. Check if body actually changed compared to last revision log
                 try:
@@ -116,8 +119,8 @@ class ReflectionService:
                         
                         if current_body.strip() == last_body.strip():
                             continue
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("Failed to read or diff history for concept file %s: %s", fp.name, e)
                 
                 modified_files.append(fp)
 
@@ -210,8 +213,7 @@ class ReflectionService:
                         })
                         file_observations_count += 1
         except Exception as e:
-            import logging
-            logging.warning("Failed to extract codebase modifications via git diff: %s", e)
+            logger.warning("Failed to extract codebase modifications via git diff: %s", e)
             warnings_list.append("Git diff extraction failed, so code modification evidence may be incomplete.")
 
 
@@ -229,14 +231,18 @@ class ReflectionService:
                     "source": "orchestrator",
                 }
             )
-        if text_clean.startswith("{"):
+        is_structured = False
+        if text_clean.startswith("{") and "knowledge_events" in text_clean:
+            is_structured = True
             try:
                 data = json.loads(text_clean)
                 if "knowledge_events" in data:
                     knowledge_events.extend(data["knowledge_events"])
-            except Exception:
-                pass
-        else:
+            except json.JSONDecodeError as e:
+                logger.error("Failed to parse structured JSON transcript: %s", e)
+                return {"status": "error", "failed_step": "reflection", "message": f"Failed to parse structured JSON transcript: {e}"}
+
+        if not is_structured:
             for line in conversation_text.splitlines():
                 lower = line.strip().lower()
                 if lower.startswith("hypothesis:") or lower.startswith("hyp:"):
@@ -365,7 +371,11 @@ project: {project or "default"}
 {yaml_content}
 ```
 """
-        sfs.write_text(report_file, report, force_allow_truncation=True)
+        try:
+            sfs.write_text(report_file, report, force_allow_truncation=True)
+        except OSError as e:
+            logger.error("Failed to write session learning report to %s: %s", report_file, e)
+            return {"status": "error", "failed_step": "reflection", "message": f"Failed to write session learning report: {e}"}
 
         source_counts = {}
         for ev in canonical_events:
@@ -416,8 +426,8 @@ project: {project or "default"}
                 "empty_reflections": 1 if structured_events_found == 0 and not fallback_extraction_used and file_observations_count == 0 else 0,
                 "reflections": 1,
             })
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to emit reflection metrics: %s", e)
 
         return {
             "status": "success",

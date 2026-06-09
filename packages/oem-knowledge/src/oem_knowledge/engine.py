@@ -513,11 +513,36 @@ class KnowledgeEngine:
         )
         if res["status"] == "error":
             progress.update_step("reflection", "failed")
-            return res
+            return {
+                "status": "error",
+                "failed_step": res.get("failed_step", "reflection"),
+                "message": res.get("message", "Reflection failed"),
+                "report_path": res.get("report_path"),
+                "knowledge_events": res.get("knowledge_events", []),
+                "materialized_log": [],
+                "links_updated": 0,
+                "index_stats": {},
+                "explainability": res.get("explainability", {}),
+                "warnings": res.get("warnings", []),
+            }
         progress.update_step("reflection", "success")
 
         progress.update_step("materialization", "running")
         mat_res = self.materialization.materialize_concepts(project)
+        if mat_res.get("status") == "error":
+            progress.update_step("materialization", "failed")
+            return {
+                "status": "error",
+                "failed_step": mat_res.get("failed_step", "materialization"),
+                "message": mat_res.get("message", "Materialization failed"),
+                "report_path": res.get("report_path"),
+                "knowledge_events": res.get("knowledge_events", []),
+                "materialized_log": [],
+                "links_updated": 0,
+                "index_stats": {},
+                "explainability": res.get("explainability", {}),
+                "warnings": res.get("warnings", []),
+            }
         mat_log = mat_res.get("materialized", [])
         progress.update_step("materialization", "success")
 

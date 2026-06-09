@@ -1,6 +1,8 @@
 from __future__ import annotations
-import sys
+import logging
 from typing import Dict, Type
+
+logger = logging.getLogger(__name__)
 
 # Global registration dictionary
 _REGISTRY: Dict[str, Type] = {}
@@ -35,9 +37,9 @@ def get_registered_adapter(name: str) -> Type | None:
                     cls = ep.load()
                     _REGISTRY[name_clean] = cls
                     return cls
-                except Exception:
-                    pass
-    except Exception:
-        pass
+                except Exception as e:
+                    logger.warning(f"Failed to load entry point adapter '{ep.name}': {e}", exc_info=True)
+    except Exception as e:
+        logger.debug(f"Failed to query entry points for adapters: {e}")
         
     return None

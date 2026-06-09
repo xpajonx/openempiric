@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shutil
@@ -11,6 +12,8 @@ from typing import Any, Optional
 
 from oem_knowledge.adapters.base import BaseAdapter
 from oem_knowledge.adapters.registry import register_adapter
+
+logger = logging.getLogger(__name__)
 
 
 CODEX_SKILL_CONTENT = """---
@@ -92,8 +95,8 @@ class CodexAppAdapter(BaseAdapter):
                     if 'name = "oem-mcp"' in content:
                         is_dev = True
                         break
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to read pyproject.toml at {pyproject_path}: {e}")
             workspace_root = workspace_root.parent
 
         if is_dev:
@@ -194,8 +197,8 @@ class CodexAppAdapter(BaseAdapter):
                 try:
                     with open(skills_file, "r", encoding="utf-8") as f:
                         existing_data = yaml.safe_load(f) or {}
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"Failed to parse existing codex skill file: {e}")
 
             adapters = existing_data.get("adapters", [])
             if not isinstance(adapters, list):
@@ -235,7 +238,8 @@ class CodexAppAdapter(BaseAdapter):
             with open(skills_file, "w", encoding="utf-8") as f:
                 yaml.safe_dump(updated_data, f, default_flow_style=False, sort_keys=False)
             return True
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Failed to install project skill: {e}", exc_info=True)
             return False
 
     def install_skill(self) -> bool:
@@ -244,7 +248,8 @@ class CodexAppAdapter(BaseAdapter):
             skill_path.parent.mkdir(parents=True, exist_ok=True)
             skill_path.write_text(CODEX_SKILL_CONTENT, encoding="utf-8")
             return True
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Failed to install skill: {e}", exc_info=True)
             return False
 
     def verify_mcp(self) -> bool:
@@ -256,7 +261,8 @@ class CodexAppAdapter(BaseAdapter):
                 server.get("command") == expected["command"]
                 and server.get("args") == expected["args"]
             )
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Failed to verify MCP: {e}", exc_info=True)
             return False
 
     def verify_health(self, probe_bridge: bool = True) -> tuple[bool, str]:
@@ -355,7 +361,8 @@ class CodexAppAdapter(BaseAdapter):
             )
             if proc.returncode == 0:
                 return proc.stdout.strip()
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to run wslpath: {e}")
             return None
         return None
 
@@ -383,7 +390,8 @@ class CodexAppAdapter(BaseAdapter):
                 return None
             value = proc.stdout.strip().splitlines()[0].strip() if proc.stdout.strip() else ""
             return value or None
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to detect Windows environment variable {name}: {e}")
             return None
 
     def _is_wsl(self) -> bool:
@@ -392,7 +400,8 @@ class CodexAppAdapter(BaseAdapter):
         try:
             release = Path("/proc/sys/kernel/osrelease")
             return release.exists() and "microsoft" in release.read_text(encoding="utf-8").lower()
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to check if WSL: {e}")
             return False
 
     def _distro_from_unc_path(self, path: Path) -> str | None:
