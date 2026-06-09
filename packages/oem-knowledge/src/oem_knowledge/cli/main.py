@@ -27,6 +27,9 @@ def main():
     ):
         from .commands.system import run_system_command
         run_system_command(args)
+    elif args.command == "clean":
+        from .commands.clean import run_clean_command
+        run_clean_command(args)
     elif args.command in (
         "run",
         "session-start",

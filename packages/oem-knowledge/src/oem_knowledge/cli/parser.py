@@ -2,6 +2,17 @@ from __future__ import annotations
 
 import argparse
 
+
+class _OEMArgumentParser(argparse.ArgumentParser):
+    def parse_args(self, args=None, namespace=None):
+        parsed = super().parse_args(args, namespace)
+        if getattr(parsed, "command", None) == "clean":
+            if getattr(parsed, "dry_run", False) and getattr(parsed, "apply", False):
+                self.error("--dry-run and --apply cannot be used together")
+            if getattr(parsed, "backup", None) is False and not getattr(parsed, "apply", False):
+                self.error("--no-backup is only valid with --apply")
+        return parsed
+
 try:
     from importlib.metadata import version as _pkg_version
     _VERSION = _pkg_version("oem-knowledge")
@@ -18,12 +29,20 @@ def _resolve_project(args) -> str | None:
 
 
 def _setup_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="OpenEmpiric (oem) CLI")
+    parser = _OEMArgumentParser(description="OpenEmpiric (oem) CLI")
     parser.add_argument("--version", action="version", version=f"oem {_VERSION}", help="Show version and exit")
     sub = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
 
     sub.add_parser("status", help=argparse.SUPPRESS)
     sub.add_parser("stats", help=argparse.SUPPRESS)
+
+    clean_p = sub.add_parser("clean", help="[User] Analyze or apply safe OEM cleanup actions")
+    clean_p.add_argument("--dry-run", action="store_true", help="Analyze only; do not mutate")
+    clean_p.add_argument("--apply", action="store_true", help="Apply safe cleanup actions")
+    clean_p.add_argument("--scope", choices=["self-ingestion", "duplicates", "structure", "all"], default="all")
+    clean_p.add_argument("--backup", dest="backup", action="store_true", default=None, help="Create a backup before applying cleanups")
+    clean_p.add_argument("--no-backup", dest="backup", action="store_false", help="Apply cleanups without creating a backup")
+    clean_p.add_argument("--project", type=str, default="")
 
     init_p = sub.add_parser("init", help=argparse.SUPPRESS)
     init_p.add_argument("project", type=str, nargs="?", default=".")
