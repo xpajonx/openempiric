@@ -556,6 +556,7 @@ class KnowledgeEngine:
             "links_updated": self.materialization.update_graph(project).get("links_updated", 0),
             "index_stats": idx_res,
             "explainability": explainability,
+            "warnings": res.get("warnings", []),
         }
 
     def record_outcome(

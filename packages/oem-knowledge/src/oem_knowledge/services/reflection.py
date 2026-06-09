@@ -78,6 +78,7 @@ class ReflectionService:
             session_id = f"session_{time.strftime('%Y%m%d_%H%M%S')}"
 
         knowledge_events = []
+        warnings_list = []
         file_observations_count = 0
         structured_events_found = 0
         fallback_extraction_used = False
@@ -209,7 +210,9 @@ class ReflectionService:
                         })
                         file_observations_count += 1
         except Exception as e:
+            import logging
             logging.warning("Failed to extract codebase modifications via git diff: %s", e)
+            warnings_list.append("Git diff extraction failed, so code modification evidence may be incomplete.")
 
 
 
@@ -422,4 +425,5 @@ project: {project or "default"}
             "knowledge_events": yaml_events,
             "canonical_events": canonical_events,
             "explainability": explainability,
+            "warnings": warnings_list,
         }

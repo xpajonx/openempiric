@@ -619,3 +619,37 @@ We discuss [[AI Safety]] here."""
             }
         )
         assert "Session ended successfully" in res2.content[0].text
+
+
+    def test_mcp_reflection_git_diff_failure_logging_graceful(self, tmp_proj):
+        """Verify that git diff errors are handled gracefully, logging is imported locally, and warning is returned."""
+        from unittest.mock import patch
+        import subprocess
+        _call("knowledge_init", {"project": tmp_proj})
+
+        def mock_run(*args, **kwargs):
+            raise subprocess.SubprocessError("Mock git failure")
+
+        with patch("subprocess.run", new=mock_run):
+            # Test knowledge_session_end
+            res_end = _call(
+                "knowledge_session_end",
+                {
+                    "project": tmp_proj,
+                    "conversation_text": "decision: First commit",
+                }
+            )
+            text_end = res_end.content[0].text
+            assert "Session ended successfully" in text_end
+            assert "Git diff extraction failed" in text_end
+
+            # Test knowledge_reflect
+            res_reflect = _call(
+                "knowledge_reflect",
+                {
+                    "project": tmp_proj,
+                    "conversation_text": "decision: First commit",
+                }
+            )
+            text_reflect = res_reflect.content[0].text
+            assert "Git diff extraction failed" in text_reflect

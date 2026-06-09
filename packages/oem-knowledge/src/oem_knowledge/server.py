@@ -97,6 +97,12 @@ def mount_tools(mcp: object) -> None:
             lines.append(f"  - [{ev.get('type', '').upper()}] {ev.get('concept', '')}")
         if not events:
             lines.append("  - None")
+        if res.get("warnings"):
+            lines.extend([
+                "",
+                "Warnings:",
+                *[f"  - ⚠ {w}" for w in res["warnings"]]
+            ])
         return render_panel("Session Reflection", lines, status="ok")
 
     @mcp.tool()
@@ -161,9 +167,17 @@ def mount_tools(mcp: object) -> None:
             "",
             "Session ended successfully / Session commit succeeded.",
             f"**Report**: {Path(res.get('report_path', '')).name}",
+        ]
+        if res.get("warnings"):
+            lines.extend([
+                "",
+                "### Warnings:",
+                *[f"- ⚠ {w}" for w in res["warnings"]]
+            ])
+        lines.extend([
             "",
             "### Extracted Knowledge Events:",
-        ]
+        ])
         if event_counts:
             for t, c in sorted(event_counts.items()):
                 lines.append(f"- **{t.title()}**: {c} events")
