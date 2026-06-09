@@ -41,17 +41,14 @@ def test_source_classifier_marks_project_file_as_ingestion_eligible():
     assert is_ingestion_eligible("src/package/module.py") is True
 
 
-<<<<<<< ours
-<<<<<<< ours
 def test_source_classifier_marks_clean_reports_as_not_ingestion_eligible():
     classification = classify_source(".oem/reports/clean-20260609-120000.md")
 
     assert classification.source_type == SourceType.OEM_SESSION_REPORT
     assert classification.ingestion_eligible is False
     assert is_ingestion_eligible(".oem/reports/clean-20260609-120000.md") is False
-=======
-=======
->>>>>>> theirs
+
+
 def test_reflection_excludes_oem_generated_files(engine, tmp_path):
     concepts_dir = engine._concepts_dir(str(tmp_path))
     old_time = time.time() - 3600
@@ -151,7 +148,3 @@ def test_materialization_skips_oem_generated_events(engine, tmp_path):
     assert res["skipped_oem_generated_event_details"][0]["classifier_source_type"] == "oem_wiki"
     assert engine.state._load_registry(str(tmp_path)) == {}
     assert list(engine._concepts_dir(str(tmp_path)).glob("concept_*.md")) == []
-<<<<<<< ours
->>>>>>> theirs
-=======
->>>>>>> theirs
