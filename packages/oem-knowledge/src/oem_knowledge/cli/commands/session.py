@@ -107,6 +107,7 @@ def _run_session_command_impl(args):
                 f"Structured Events:      {exp.get('structured_events_found', 0)}",
                 f"Fallback Extraction:    {'Yes' if exp.get('fallback_extraction_used') else 'No'}",
                 f"File Observations:      {exp.get('file_observations_count', 0)}",
+                f"Excluded OEM-generated files: {exp.get('excluded_oem_generated_files', 0)}",
             ]
             generated = exp.get("generated_concepts", [])
             if generated:
@@ -127,6 +128,7 @@ def _run_session_command_impl(args):
                 f"Structured Events:      {exp.get('structured_events_found', 0)}",
                 f"Fallback Extraction:    {'Yes' if exp.get('fallback_extraction_used') else 'No'}",
                 f"File Observations:      {exp.get('file_observations_count', 0)}",
+                f"Excluded OEM-generated files: {exp.get('excluded_oem_generated_files', 0)}",
             ]
             generated = exp.get("generated_concepts", [])
             file_obs = [
