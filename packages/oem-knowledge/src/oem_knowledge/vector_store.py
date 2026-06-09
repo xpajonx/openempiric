@@ -1,7 +1,10 @@
 from __future__ import annotations
 import json
+import logging
 import sqlite3
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 class VectorStore:
@@ -13,8 +16,8 @@ class VectorStore:
         try:
             self.conn.execute("PRAGMA journal_mode = WAL")
             self.conn.execute("PRAGMA synchronous = NORMAL")
-        except Exception:
-            pass
+        except sqlite3.Error as e:
+            logger.warning("Failed to set WAL journal mode or synchronous mode: %s", e)
         self._ensure_schema()
 
     def _ensure_schema(self):
@@ -32,8 +35,8 @@ class VectorStore:
                 self.conn.execute(
                     "CREATE INDEX IF NOT EXISTS idx_chunks_source ON chunks(json_extract(metadata, '$.source'))"
                 )
-            except Exception:
-                pass
+            except sqlite3.Error as e:
+                logger.warning("Failed to create index idx_chunks_source: %s", e)
 
     def upsert(self, doc_id: str, document: str, metadata: dict, embedding: list[float] | None):
         emb_json = json.dumps(embedding) if embedding is not None else None
@@ -57,7 +60,8 @@ class VectorStore:
                     "DELETE FROM chunks WHERE json_extract(metadata, '$.source') = ?",
                     (source_path,)
                 )
-        except Exception:
+        except sqlite3.Error as e:
+            logger.info("JSON1 delete failed, falling back to manual metadata check: %s", e)
             # Fallback for systems without JSON1 extension
             with self.conn:
                 cursor = self.conn.execute("SELECT id, metadata FROM chunks")
@@ -67,8 +71,8 @@ class VectorStore:
                         meta = json.loads(row["metadata"])
                         if meta.get("source") == source_path:
                             to_delete.append(row["id"])
-                    except Exception:
-                        pass
+                    except Exception as ex:
+                        logger.warning("Failed to parse metadata when searching for chunk deletion: %s", ex)
                 if to_delete:
                     self.delete_by_ids(to_delete)
 
@@ -80,7 +84,8 @@ class VectorStore:
                 (source_path,)
             )
             ids = [row[0] for row in cursor.fetchall()]
-        except Exception:
+        except sqlite3.Error as e:
+            logger.info("JSON1 get_by_source failed, falling back to manual metadata check: %s", e)
             # Fallback for systems without JSON1 extension
             cursor = self.conn.execute("SELECT id, metadata FROM chunks")
             for row in cursor:
@@ -88,8 +93,8 @@ class VectorStore:
                     meta = json.loads(row["metadata"])
                     if meta.get("source") == source_path:
                         ids.append(row["id"])
-                except Exception:
-                    pass
+                except Exception as ex:
+                    logger.warning("Failed to parse chunk metadata during fallback: %s", ex)
         return {"ids": ids}
 
     def count_chunks_by_source(self, source_path: str) -> int:
@@ -99,7 +104,8 @@ class VectorStore:
                 (source_path,)
             )
             return cursor.fetchone()[0]
-        except Exception:
+        except sqlite3.Error as e:
+            logger.info("JSON1 count_chunks_by_source failed, falling back to manual metadata check: %s", e)
             # Fallback for systems without JSON1 extension
             try:
                 cursor = self.conn.execute("SELECT metadata FROM chunks")
@@ -109,10 +115,11 @@ class VectorStore:
                         meta = json.loads(row["metadata"])
                         if meta.get("source") == source_path:
                             count += 1
-                    except Exception:
-                        pass
+                    except Exception as ex:
+                        logger.warning("Failed to parse chunk metadata during fallback count: %s", ex)
                 return count
-            except Exception:
+            except sqlite3.Error as ex2:
+                logger.warning("Failed to fetch metadata during fallback count: %s", ex2)
                 return 0
 
     def all_chunks(self) -> list[dict]:
@@ -121,11 +128,13 @@ class VectorStore:
         for row in cursor.fetchall():
             try:
                 embedding = json.loads(row["embedding"]) if row["embedding"] else None
-            except Exception:
+            except json.JSONDecodeError as e:
+                logger.warning("Failed to decode embedding JSON for chunk %s: %s", row["id"], e)
                 embedding = None
             try:
                 metadata = json.loads(row["metadata"])
-            except Exception:
+            except json.JSONDecodeError as e:
+                logger.warning("Failed to decode metadata JSON for chunk %s: %s", row["id"], e)
                 metadata = {}
             chunks.append({
                 "id": row["id"],
@@ -158,7 +167,8 @@ class VectorStore:
                     "DELETE FROM chunks WHERE json_extract(metadata, '$.source') = ?",
                     [(path,) for path in source_paths]
                 )
-        except Exception:
+        except sqlite3.Error as e:
+            logger.info("JSON1 delete_by_sources failed, falling back to manual metadata check: %s", e)
             # Fallback for systems without JSON1 extension
             with self.conn:
                 cursor = self.conn.execute("SELECT id, metadata FROM chunks")
@@ -169,8 +179,8 @@ class VectorStore:
                         meta = json.loads(row["metadata"])
                         if meta.get("source") in source_set:
                             to_delete.append(row["id"])
-                    except Exception:
-                        pass
+                    except Exception as ex:
+                        logger.warning("Failed to parse metadata when batch searching for chunk deletion: %s", ex)
                 if to_delete:
                     self.conn.executemany("DELETE FROM chunks WHERE id = ?", [(d,) for d in to_delete])
 
@@ -183,7 +193,8 @@ class VectorStore:
             for row in cursor.fetchall():
                 if row[0]:
                     counts[row[0]] = row[1]
-        except Exception:
+        except sqlite3.Error as e:
+            logger.info("JSON1 count_chunks_by_source_batch failed, falling back to manual metadata check: %s", e)
             # Fallback for systems without JSON1 extension
             try:
                 cursor = self.conn.execute("SELECT metadata FROM chunks")
@@ -193,10 +204,10 @@ class VectorStore:
                         source = meta.get("source")
                         if source:
                             counts[source] = counts.get(source, 0) + 1
-                    except Exception:
-                        pass
-            except Exception:
-                pass
+                    except Exception as ex:
+                        logger.warning("Failed to parse chunk metadata during fallback batch count: %s", ex)
+            except sqlite3.Error as ex2:
+                logger.warning("Failed to fetch metadata during fallback batch count: %s", ex2)
         return counts
 
     def count(self) -> int:

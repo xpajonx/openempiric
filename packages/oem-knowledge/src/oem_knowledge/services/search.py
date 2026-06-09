@@ -2,6 +2,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import logging
 import re
 import sys
 import time
@@ -13,6 +14,8 @@ from oem_knowledge.vector_store import VectorStore
 
 if TYPE_CHECKING:
     from oem_knowledge.engine import KnowledgeEngine
+
+logger = logging.getLogger(__name__)
 
 
 class SearchService:
@@ -36,16 +39,15 @@ class SearchService:
                 # Test query to ensure the DB is not corrupted
                 store.conn.execute("SELECT COUNT(*) FROM chunks")
                 self._vector_store = store
-            except Exception:
-                import logging
-                logging.warning(
-                    "[OEM] Local SQLite database is corrupted or incompatible. Recreating clean database..."
+            except Exception as e:
+                logger.warning(
+                    "[OEM] Local SQLite database is corrupted or incompatible (%s). Recreating clean database...", e
                 )
                 try:
                     if db_file.exists():
                         db_file.unlink()
-                except Exception:
-                    pass
+                except Exception as e2:
+                    logger.warning("[OEM] Failed to delete corrupted SQLite database: %s", e2)
                 self._vector_store = VectorStore(db_file)
         return self._vector_store
 
@@ -64,8 +66,8 @@ class SearchService:
                 try:
                     import shutil
                     shutil.move(str(item), str(backup_dir / item.name))
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("Failed to move ChromaDB file %s to backup: %s", item.name, e)
 
     def get_retrieval_mode(self) -> str:
         config_file = self.engine._resolve_harness() / "config.json"
@@ -73,8 +75,12 @@ class SearchService:
             try:
                 data = json.loads(config_file.read_text(encoding="utf-8"))
                 return data.get("retrieval_mode", "auto")
-            except Exception:
-                pass
+            except json.JSONDecodeError as e:
+                logger.warning("Corrupt configuration file %s: %s", config_file, e)
+            except OSError as e:
+                logger.warning("Failed to read configuration file %s: %s", config_file, e)
+            except Exception as e:
+                logger.warning("Unexpected error reading config file %s: %s", config_file, e)
         return "auto"
 
     def set_retrieval_mode(self, mode: str):
@@ -86,8 +92,12 @@ class SearchService:
         if config_file.exists():
             try:
                 data = json.loads(config_file.read_text(encoding="utf-8"))
-            except Exception:
-                pass
+            except json.JSONDecodeError as e:
+                logger.warning("Corrupt configuration file %s during write fallback: %s", config_file, e)
+            except OSError as e:
+                logger.warning("Failed to read configuration file %s during write: %s", config_file, e)
+            except Exception as e:
+                logger.warning("Unexpected error reading config file %s: %s", config_file, e)
         data["retrieval_mode"] = mode
         config_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
@@ -132,8 +142,12 @@ class SearchService:
     def chunk_markdown(self, filepath: Path, rel_path: str) -> list[dict]:
         try:
             content = filepath.read_text()
-        except Exception:
-            return []
+        except OSError as e:
+            logger.error("Failed to read file for chunking at %s: %s", filepath, e)
+            raise
+        except Exception as e:
+            logger.error("Unexpected error reading file for chunking at %s: %s", filepath, e)
+            raise
         if not content.strip():
             return []
 
@@ -214,6 +228,7 @@ class SearchService:
                 force = True
 
         stats = {
+            "status": "success",
             "scanned": len(md_files),
             "new": 0,
             "updated": 0,
@@ -223,6 +238,7 @@ class SearchService:
             "updated_chunks": 0,
             "unchanged_chunks": 0,
             "failed_chunks": 0,
+            "failed_files": [],
             "deletes": 0,
             "count_time_s": 0.0,
             "chunk_time_s": 0.0,
@@ -234,6 +250,7 @@ class SearchService:
         active_paths = set()
         new_registry = {}
         to_index = []
+        failed_files = []
 
         # 1. Count phase
         t0 = time.time()
@@ -241,10 +258,16 @@ class SearchService:
         store = None
         try:
             store = self.vector_store
-            if store is not None:
-                chunk_counts = store.count_chunks_by_source_batch()
-        except Exception:
-            pass
+            if store is None:
+                raise ValueError("Vector store failed to initialize")
+            chunk_counts = store.count_chunks_by_source_batch()
+        except Exception as e:
+            logger.error("Failed to initialize vector store or count chunks: %s", e)
+            stats["status"] = "error"
+            stats["error"] = f"Vector store initialization error: {e}"
+            stats["failed"] = len(md_files)
+            stats["failed_files"] = [str(fp.relative_to(harness.parent)) if fp.is_relative_to(harness.parent) else fp.name for fp in md_files]
+            return stats
         stats["count_time_s"] = time.time() - t0
 
         # 2. Chunk phase
@@ -266,8 +289,10 @@ class SearchService:
                 else:
                     stats["unchanged"] += 1
                     stats["unchanged_chunks"] += chunk_counts.get(path_str, 0)
-            except Exception:
+            except Exception as e:
+                logger.warning("Failed to scan/hash file %s: %s", path_str, e)
                 stats["failed"] += 1
+                failed_files.append(path_str)
                 if path_str in registry:
                     new_registry[path_str] = registry[path_str]
 
@@ -288,37 +313,43 @@ class SearchService:
                 if progress_callback is not None:
                     try:
                         progress_callback(idx + 1, len(to_index))
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning("Progress callback failed: %s", e)
 
                 try:
                     rel_path = str(fp.relative_to(harness.parent))
-                except Exception:
+                except Exception as e:
+                    logger.debug("Failed to calculate relative path for %s: %s", fp, e)
                     rel_path = fp.name
 
-                chunks = self.chunk_markdown(fp, rel_path)
-                if not chunks:
-                    continue
+                try:
+                    chunks = self.chunk_markdown(fp, rel_path)
+                    if not chunks:
+                        continue
 
-                mtime = os.path.getmtime(fp)
-                imp = self.derive_importance(rel_path)
+                    mtime = os.path.getmtime(fp)
+                    imp = self.derive_importance(rel_path)
 
-                for c in chunks:
-                    chunks_to_upsert.append({
-                        "chunk_id": c["chunk_id"],
-                        "text": c["text"],
-                        "meta": {
-                            "source": path_str,
-                            "rel_path": rel_path,
-                            "title": c["title"],
-                            "content_hash": cur_hash,
-                            "linked_concepts": ",".join(c["linked_concepts"]),
-                            "created_at": str(mtime),
-                            "updated_at": str(mtime),
-                            "importance": imp,
-                        },
-                        "old_hash": old_hash
-                    })
+                    for c in chunks:
+                        chunks_to_upsert.append({
+                            "chunk_id": c["chunk_id"],
+                            "text": c["text"],
+                            "meta": {
+                                "source": path_str,
+                                "rel_path": rel_path,
+                                "title": c["title"],
+                                "content_hash": cur_hash,
+                                "linked_concepts": ",".join(c["linked_concepts"]),
+                                "created_at": str(mtime),
+                                "updated_at": str(mtime),
+                                "importance": imp,
+                            },
+                            "old_hash": old_hash
+                        })
+                except Exception as e:
+                    logger.warning("Failed to chunk file %s: %s", path_str, e)
+                    failed_files.append(path_str)
+                    stats["failed"] += 1
         stats["chunk_time_s"] = time.time() - t_chunk_start
 
         # 3. Embedding phase
@@ -331,7 +362,7 @@ class SearchService:
                     texts = [c["text"] for c in chunks_to_upsert]
                     embeddings = self.embed(texts)
                 except Exception as e:
-                    print(f"Batch embedding generation error: {e}", file=sys.stderr)
+                    logger.warning("Batch embedding generation error: %s", e)
                     embeddings = [None] * len(chunks_to_upsert)
             else:
                 embeddings = [None] * len(chunks_to_upsert)
@@ -339,18 +370,20 @@ class SearchService:
 
         # 4. SQLite write phase
         t_write_start = time.time()
+        write_error = None
         if store is not None:
             # Batch delete
-            sources_to_delete = [path_str for _, path_str, old_hash, _ in to_index if old_hash is not None]
+            sources_to_delete = [path_str for _, path_str, old_hash, _ in to_index if old_hash is not None and path_str not in failed_files]
             if sources_to_delete:
                 try:
                     store.delete_by_sources(sources_to_delete)
                     stats["deletes"] += len(sources_to_delete)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.error("Failed to delete stale chunks from database: %s", e)
+                    write_error = e
 
             # Batch upsert
-            if chunks_to_upsert:
+            if chunks_to_upsert and not write_error:
                 batch_data = []
                 for idx, c in enumerate(chunks_to_upsert):
                     batch_data.append((
@@ -367,22 +400,30 @@ class SearchService:
                 try:
                     store.upsert_batch(batch_data)
                 except Exception as e:
-                    print(f"Batch upsert error: {e}", file=sys.stderr)
+                    logger.error("Batch upsert error: %s", e)
                     stats["failed_chunks"] += len(chunks_to_upsert)
+                    write_error = e
 
             # Handle deleted paths
             deleted_paths = set(registry.keys()) - active_paths
-            if deleted_paths:
+            if deleted_paths and not write_error:
                 try:
                     store.delete_by_sources(list(deleted_paths))
                     stats["deletes"] += len(deleted_paths)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.error("Failed to delete removed paths from database: %s", e)
+                    write_error = e
         stats["write_time_s"] = time.time() - t_write_start
 
-        reg_path.parent.mkdir(parents=True, exist_ok=True)
-        reg_path.write_text(json.dumps(new_registry, indent=2))
-        
+        # Only update registry if write succeeded
+        if not write_error:
+            try:
+                reg_path.parent.mkdir(parents=True, exist_ok=True)
+                reg_path.write_text(json.dumps(new_registry, indent=2))
+            except Exception as e:
+                logger.error("Failed to write search file registry: %s", e)
+                write_error = e
+
         total_time = time.time() - start_index_time
         stats["index_time_ms"] = int(total_time * 1000)
 
@@ -400,6 +441,16 @@ class SearchService:
         print(f"  Embedding phase:     {stats['embed_time_s']:.2f}s")
         print(f"  SQLite write phase:  {stats['write_time_s']:.2f}s")
         print(f"  Total:               {total_time:.2f}s")
+
+        if write_error:
+            stats["status"] = "error"
+            stats["error"] = str(write_error)
+            stats["failed_files"] = failed_files
+        elif failed_files:
+            stats["status"] = "partial"
+            stats["failed_files"] = failed_files
+        else:
+            stats["status"] = "success"
 
         return stats
 
@@ -488,7 +539,8 @@ class SearchService:
         """Fallback keyword search using the concept registry and wiki markdown files directly."""
         try:
             registry = self.engine.state._load_registry()
-        except Exception:
+        except Exception as e:
+            logger.warning("Registry search fallback failed because the registry could not be loaded: %s", e)
             return []
 
         query = query.lower().strip()
@@ -507,8 +559,8 @@ class SearchService:
             if wiki_path.exists():
                 try:
                     wiki_text = wiki_path.read_text(encoding="utf-8")
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("Failed to read concept wiki file %s: %s", wiki_path, e)
             
             # Compute score
             score = 0.0
@@ -541,7 +593,8 @@ class SearchService:
                 try:
                     h = self.engine._resolve_harness()
                     rel_path = str(wiki_path.relative_to(h.parent))
-                except Exception:
+                except Exception as e:
+                    logger.debug("Failed to calculate relative path for %s: %s", wiki_path, e)
                     rel_path = f".oem/wiki/{cid}.md"
 
                 imp = self.derive_importance(rel_path)
@@ -608,7 +661,8 @@ class SearchService:
         try:
             age_days = (time.time() - float(created_at_str)) / (3600 * 24)
             return math.exp(-0.05 * max(0.0, age_days))
-        except Exception:
+        except Exception as e:
+            logger.debug("Failed to calculate recency score for %s: %s", created_at_str, e)
             return 1.0
 
     def _importance_score(self, imp: str) -> float:
@@ -628,7 +682,8 @@ class SearchService:
         try:
             store = self.vector_store
             total_chunks = store.count()
-        except Exception:
+        except Exception as e:
+            logger.warning("Failed to count chunks for stats: %s", e)
             total_chunks = 0
         db_size = 0
         db_path = self.engine._resolve_harness() / ".local_vector_db"

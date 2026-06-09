@@ -522,15 +522,47 @@ class KnowledgeEngine:
         progress.update_step("materialization", "success")
 
         progress.update_step("index", "running")
-        idx_res = {"new": 0, "updated": 0, "scanned": 0, "unchanged": 0, "failed": 0}
+        idx_res = {
+            "status": "success",
+            "new": 0,
+            "updated": 0,
+            "scanned": 0,
+            "unchanged": 0,
+            "failed": 0,
+            "new_chunks": 0,
+            "updated_chunks": 0,
+            "unchanged_chunks": 0,
+            "failed_chunks": 0,
+            "failed_files": [],
+        }
+        index_failed_reason = None
         try:
             def index_progress(current, total):
                 mode_str = "embeddings" if self.search.resolve_retrieval_mode() == "hybrid" else "files"
                 progress.update_step("index", "running", detail=f"{current} / {total} {mode_str}")
             idx_res = self.search.index_all(progress_callback=index_progress)
-        except Exception:
-            pass
-        progress.update_step("index", "success")
+            if idx_res.get("status") in ("error", "partial"):
+                index_failed_reason = idx_res.get("error") or f"Some files failed to index: {', '.join(idx_res.get('failed_files', []))}"
+                progress.update_step("index", "failed")
+            else:
+                progress.update_step("index", "success")
+        except Exception as e:
+            index_failed_reason = str(e)
+            progress.update_step("index", "failed")
+            idx_res = {
+                "status": "error",
+                "new": 0,
+                "updated": 0,
+                "scanned": 0,
+                "unchanged": 0,
+                "failed": 0,
+                "new_chunks": 0,
+                "updated_chunks": 0,
+                "unchanged_chunks": 0,
+                "failed_chunks": 0,
+                "failed_files": [],
+                "error": str(e),
+            }
 
         progress.update_step("vault", "running")
         import os
@@ -548,15 +580,21 @@ class KnowledgeEngine:
         explainability = res.get("explainability", {})
         explainability["materialized"] = len(mat_log)
 
+        warnings = res.get("warnings", [])
+        ret_status = "success"
+        if index_failed_reason:
+            warnings.append(f"Session commit partial: reflection/materialization succeeded, indexing failed: {index_failed_reason}")
+            ret_status = "partial"
+
         return {
-            "status": "success",
+            "status": ret_status,
             "report_path": res["report_path"],
             "knowledge_events": res["knowledge_events"],
             "materialized_log": mat_log,
             "links_updated": self.materialization.update_graph(project).get("links_updated", 0),
             "index_stats": idx_res,
             "explainability": explainability,
-            "warnings": res.get("warnings", []),
+            "warnings": warnings,
         }
 
     def record_outcome(
