@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from oem_knowledge.clean import analyze_cleanliness, apply_cleanups
+from oem_knowledge.clean import analyze_cleanliness, analyze_project, apply_cleanups
 from oem_knowledge.cli.parser import _setup_parser
 
 
@@ -70,7 +70,9 @@ def test_clean_apply_creates_backup_by_default(tmp_path):
     assert applied["backup_dir"] is not None
     backup_dir = Path(applied["backup_dir"])
     assert backup_dir.is_dir()
-    assert (backup_dir / ".oem" / "events.jsonl").read_text(encoding="utf-8") == events.read_text(encoding="utf-8")
+    assert (backup_dir / ".oem" / "events.jsonl").read_text(
+        encoding="utf-8"
+    ) == events.read_text(encoding="utf-8")
 
 
 def test_clean_no_backup_only_valid_with_apply():
@@ -112,7 +114,9 @@ def test_clean_never_touches_adapter_config_paths(tmp_path, monkeypatch):
     before = {}
     for forbidden_path in forbidden_paths:
         forbidden_path.parent.mkdir(parents=True, exist_ok=True)
-        forbidden_path.write_text(f"do not touch: {forbidden_path.name}", encoding="utf-8")
+        forbidden_path.write_text(
+            f"do not touch: {forbidden_path.name}", encoding="utf-8"
+        )
         before[forbidden_path] = forbidden_path.read_text(encoding="utf-8")
 
     report = analyze_cleanliness(project, "all")
@@ -152,3 +156,62 @@ def test_clean_detects_self_ingestion_suspects(tmp_path):
     assert report["self_ingestion"]["suspect_events"] == 1
     assert report["self_ingestion"]["suspect_concepts"] == 1
     assert report["status"] == "issues_found"
+
+
+def test_clean_runtime_events_apply_deduplicates_and_audits(tmp_path):
+    oem = _init_oem(tmp_path)
+    legacy_events = oem / "events.jsonl"
+    legacy_events.unlink(missing_ok=True)
+    runtime_events = oem / "runtime_events.jsonl"
+    event = {
+        "event_id": "first",
+        "timestamp": "2026-01-01T00:00:00Z",
+        "event_type": "observation",
+        "summary": "same",
+        "evidence": "same",
+        "source": "chat",
+    }
+    runtime_events.write_text(
+        json.dumps(event) + "\n" + json.dumps(event | {"event_id": "second"}) + "\n",
+        encoding="utf-8",
+    )
+
+    report = analyze_cleanliness(tmp_path, "duplicates")
+    applied = apply_cleanups(tmp_path, report, backup=True)
+
+    assert applied["duplicates"]["duplicate_runtime_events"] == 0
+    assert runtime_events.read_text(encoding="utf-8") == json.dumps(event) + "\n"
+    audit_path = (
+        Path(applied["backup_dir"]) / "audit" / "removed_duplicate_runtime_events.jsonl"
+    )
+    assert audit_path.exists()
+    assert "second" in audit_path.read_text(encoding="utf-8")
+
+
+def test_analyze_project_flags_suspicious_system_and_registry_consistency(tmp_path):
+    oem = _init_oem(tmp_path)
+    (oem / "wiki" / "orphan.md").write_text("# Orphan\n", encoding="utf-8")
+    registry = {
+        "schema": {
+            "concept_id": "schema",
+            "canonical_name": "Schema",
+            "slug": "schema",
+            "source_path": ".oem/wiki/index.md",
+        },
+        "missing": {"concept_id": "missing", "canonical_name": "Missing"},
+        "dup_a": {"concept_id": "dup_a", "canonical_name": "Same Name", "slug": "same"},
+        "dup_b": {"concept_id": "dup_b", "canonical_name": "Same Name", "slug": "same"},
+    }
+    (oem / "concept_registry.json").write_text(json.dumps(registry), encoding="utf-8")
+
+    report = analyze_project(tmp_path, "all")
+
+    assert report["structure"]["wiki_without_registry"] == 1
+    assert report["structure"]["registry_without_wiki"] == 4
+    assert report["structure"]["duplicate_slugs"] == 1
+    assert report["structure"]["duplicate_canonical_names"] == 1
+    assert report["structure"]["suspicious_system_concepts"] == 1
+    assert report["structure"]["concept_sources_oem_artifacts"] == 1
+    assert any(
+        finding.code == "suspicious_system_concept" for finding in report.findings
+    )

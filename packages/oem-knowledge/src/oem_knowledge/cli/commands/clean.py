@@ -8,10 +8,22 @@ from oem_knowledge.ui import render_panel
 
 def run_clean_command(args) -> None:
     if getattr(args, "dry_run", False) and getattr(args, "apply", False):
-        print(render_panel("Clean Error", ["--dry-run and --apply cannot be used together."], status="error"))
+        print(
+            render_panel(
+                "Clean Error",
+                ["--dry-run and --apply cannot be used together."],
+                status="error",
+            )
+        )
         sys.exit(2)
     if getattr(args, "backup", None) is False and not getattr(args, "apply", False):
-        print(render_panel("Clean Error", ["--no-backup is only valid with --apply."], status="error"))
+        print(
+            render_panel(
+                "Clean Error",
+                ["--no-backup is only valid with --apply."],
+                status="error",
+            )
+        )
         sys.exit(2)
 
     from oem_knowledge.clean import analyze_cleanliness, apply_cleanups
@@ -47,6 +59,11 @@ def _render_clean_lines(report: dict) -> list[str]:
         f"  Orphan wiki files: {report.get('structure', {}).get('orphan_wiki_files', 0)}",
         f"  Missing wiki files: {report.get('structure', {}).get('missing_wiki_files', 0)}",
         f"  Duplicate slugs: {report.get('structure', {}).get('duplicate_slugs', 0)}",
+        f"  Duplicate canonical names: {report.get('structure', {}).get('duplicate_canonical_names', 0)}",
+        f"  Suspicious system concepts: {report.get('structure', {}).get('suspicious_system_concepts', 0)}",
+        f"  Concept sources pointing at OEM artifacts: {report.get('structure', {}).get('concept_sources_oem_artifacts', 0)}",
+        f"  Legacy harness artifacts: {report.get('structure', {}).get('legacy_harness_artifacts', 0)}",
+        f"  Unknown harness files: {report.get('structure', {}).get('unknown_harness_files', 0)}",
         f"Changed files: {len(report.get('changed_files', []))}",
     ]
     if report.get("changed_files"):
