@@ -7,7 +7,55 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from oem_knowledge.source_classifier import SourceType, classify_source
+
 logger = logging.getLogger(__name__)
+
+SYSTEM_GENERATED_SOURCE_TYPES = {
+    SourceType.OEM_WIKI,
+    SourceType.OEM_REGISTRY,
+    SourceType.OEM_RUNTIME_LOG,
+    SourceType.OEM_SESSION_REPORT,
+    SourceType.OEM_HANDOFF,
+    SourceType.OEM_CONFIG,
+    SourceType.GENERATED_SUMMARY,
+    "oem_generated",
+    "openempiric_generated",
+}
+
+SUSPICIOUS_CONCEPT_SLUGS = {
+    "index",
+    "log",
+    "inbox",
+    "schema",
+    "purpose",
+    "triggers",
+    "runtime-events",
+    "outcomes",
+    "session-report",
+}
+
+
+def _normalize_concept_slug(value: str | None) -> str:
+    if value is None:
+        return ""
+    slug = re.sub(r"[^a-z0-9]+", "-", str(value).strip().lower())
+    return slug.strip("-")
+
+
+def is_suspicious_concept_slug(value: str | None) -> bool:
+    slug = _normalize_concept_slug(value)
+    return slug in SUSPICIOUS_CONCEPT_SLUGS or bool(
+        re.fullmatch(r"concept-\d+", slug)
+    )
+
+
+def _is_explicit_oem_source_type(source_type: object) -> bool:
+    if source_type is None:
+        return False
+    normalized = str(source_type).strip().lower().replace("-", "_")
+    return normalized in SYSTEM_GENERATED_SOURCE_TYPES or normalized.startswith("oem_")
+
 
 if TYPE_CHECKING:
     from oem_knowledge.engine import KnowledgeEngine
@@ -163,6 +211,9 @@ class MaterializationService:
                 "status": "success",
                 "message": "No session reports found.",
                 "materialized": [],
+                "skipped_oem_generated_events": 0,
+                "skipped_oem_generated_event_details": [],
+                "suspicious_concepts": [],
             }
 
         concepts_dir = self.engine._concepts_dir(project)
@@ -174,11 +225,16 @@ class MaterializationService:
                 "status": "success",
                 "message": "No session reports found.",
                 "materialized": [],
+                "skipped_oem_generated_events": 0,
+                "skipped_oem_generated_event_details": [],
+                "suspicious_concepts": [],
             }
 
         registry = self.engine.state._load_registry(project)
         fitness_data = self.engine.fitness.calculate_fitness(project)
         materialized_log = []
+        skipped_oem_generated_event_details = []
+        suspicious_concepts = []
 
         # Derive already processed session IDs from the registry
         processed_sessions = set()
@@ -214,8 +270,78 @@ class MaterializationService:
                 concept = event.get("concept", "General Learning")
                 e_type = event.get("type", "observation").lower()
                 evidence = event.get("evidence", "")
+                source_path = event.get("source_path")
+                source = event.get("source")
+                source_type = event.get("source_type")
+                suspicious_slug = is_suspicious_concept_slug(concept)
+
+                skip_reason = None
+                classification = None
+                if _is_explicit_oem_source_type(source_type):
+                    skip_reason = f"source_type {source_type!r} is OpenEmpiric-generated"
+                elif source_path:
+                    classification = classify_source(source_path)
+                    if not classification.ingestion_eligible:
+                        skip_reason = classification.reason
+
+                if skip_reason:
+                    detail = {
+                        "session_id": session_id,
+                        "concept": concept,
+                        "source": source,
+                        "source_path": (
+                            str(source_path) if source_path is not None else None
+                        ),
+                        "source_type": source_type,
+                        "classifier_source_type": (
+                            classification.source_type if classification else source_type
+                        ),
+                        "reason": skip_reason,
+                        "action": "skipped",
+                    }
+                    skipped_oem_generated_event_details.append(detail)
+                    logger.warning(
+                        "Skipping OpenEmpiric-generated materialization event: "
+                        "session_id=%s concept=%r source=%r source_path=%r "
+                        "source_type=%r classifier_source_type=%r reason=%s",
+                        session_id,
+                        concept,
+                        source,
+                        source_path,
+                        source_type,
+                        detail["classifier_source_type"],
+                        skip_reason,
+                    )
+                    continue
+
+                if suspicious_slug:
+                    event["suspicious_concept"] = True
+                    suspicious_concepts.append(
+                        {
+                            "session_id": session_id,
+                            "concept": concept,
+                            "reason": "system-like slug",
+                            "source": source,
+                            "source_path": (
+                                str(source_path) if source_path is not None else None
+                            ),
+                            "source_type": source_type,
+                            "action": "flagged",
+                        }
+                    )
+                    logger.debug(
+                        "Flagging suspicious materialization concept without skipping: "
+                        "session_id=%s concept=%r source=%r source_path=%r source_type=%r",
+                        session_id,
+                        concept,
+                        source,
+                        source_path,
+                        source_type,
+                    )
 
                 cid, cdata = self.engine.state._resolve_concept(concept, registry)
+                if suspicious_slug:
+                    cdata.setdefault("diagnostics", {})["suspicious_concept_slug"] = True
 
                 if evidence:
                     cdata["evidence_count"] = cdata.get("evidence_count", 0) + 1
@@ -302,7 +428,13 @@ aliases: {json.dumps(cdata.get("aliases", []))}
         except Exception as e:
             logger.warning("Failed to emit materializations metrics: %s", e)
 
-        return {"status": "success", "materialized": materialized_log}
+        return {
+            "status": "success",
+            "materialized": materialized_log,
+            "skipped_oem_generated_events": len(skipped_oem_generated_event_details),
+            "skipped_oem_generated_event_details": skipped_oem_generated_event_details,
+            "suspicious_concepts": suspicious_concepts,
+        }
 
     def update_graph(self, project: str | None = None) -> dict:
         from oem_knowledge.fs import LockTimeoutError

@@ -267,3 +267,104 @@ def test_cli_exits_non_zero_on_lock_failure(temp_project):
         with pytest.raises(SystemExit) as exc:
             run_session_command(args)
         assert exc.value.code == 1
+
+
+def test_materialization_flags_suspicious_concept_without_source_path(temp_project):
+    engine = KnowledgeEngine(temp_project)
+    sessions_dir = engine._sessions_dir(str(temp_project))
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    report_file = sessions_dir / "session_schema_chat.md"
+    report_content = "```json\n" + json.dumps(
+        {
+            "knowledge_events": [
+                {
+                    "type": "observation",
+                    "concept": "schema",
+                    "evidence": "User-authored schema knowledge should still be materialized.",
+                    "source": "chat",
+                }
+            ]
+        }
+    ) + "\n```"
+    report_file.write_text(report_content)
+
+    registry = {
+        "concept_001": {
+            "concept_id": "concept_001",
+            "canonical_name": "schema",
+            "status": "validated",
+            "confidence": 3,
+            "evidence_count": 2,
+            "sessions": [],
+        }
+    }
+    engine.state._save_registry(registry, str(temp_project))
+
+    res = engine.materialization.materialize_concepts(str(temp_project))
+
+    assert res["status"] == "success"
+    assert res["skipped_oem_generated_events"] == 0
+    assert res["suspicious_concepts"] == [
+        {
+            "session_id": "session_schema_chat",
+            "concept": "schema",
+            "reason": "system-like slug",
+            "source": "chat",
+            "source_path": None,
+            "source_type": None,
+            "action": "flagged",
+        }
+    ]
+    assert any(
+        "concept_001 (schema) = validated" in item
+        for item in res["materialized"]
+    )
+    assert (engine._concepts_dir(str(temp_project)) / "concept_001.md").exists()
+    saved_registry = engine.state._load_registry(str(temp_project))
+    assert saved_registry["concept_001"]["diagnostics"]["suspicious_concept_slug"] is True
+
+
+def test_materialization_skips_oem_generated_events(temp_project, caplog):
+    engine = KnowledgeEngine(temp_project)
+    sessions_dir = engine._sessions_dir(str(temp_project))
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    report_file = sessions_dir / "session_oem_schema.md"
+    report_content = "```json\n" + json.dumps(
+        {
+            "knowledge_events": [
+                {
+                    "type": "observation",
+                    "concept": "schema",
+                    "evidence": "Generated wiki content should not become source evidence.",
+                    "source_path": ".oem/wiki/schema.md",
+                }
+            ]
+        }
+    ) + "\n```"
+    report_file.write_text(report_content)
+
+    with caplog.at_level(logging.WARNING):
+        res = engine.materialization.materialize_concepts(str(temp_project))
+
+    assert res["status"] == "success"
+    assert res["materialized"] == []
+    assert res["skipped_oem_generated_events"] == 1
+    assert res["skipped_oem_generated_event_details"] == [
+        {
+            "session_id": "session_oem_schema",
+            "concept": "schema",
+            "source": None,
+            "source_path": ".oem/wiki/schema.md",
+            "source_type": None,
+            "classifier_source_type": "oem_wiki",
+            "reason": ".oem/wiki files are materialized knowledge outputs",
+            "action": "skipped",
+        }
+    ]
+    assert res["suspicious_concepts"] == []
+    assert engine.state._load_registry(str(temp_project)) == {}
+    assert list(engine._concepts_dir(str(temp_project)).glob("concept_*.md")) == []
+    assert any(
+        "Skipping OpenEmpiric-generated materialization event" in r.message
+        for r in caplog.records
+    )
