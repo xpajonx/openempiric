@@ -90,16 +90,21 @@ For a lighter BM25-only install, you can omit `[semantic]`, but the default user
 
 ### 2. Setup Agent Integration
 
-Link and register the workstation-level OpenCode integration once on your machine:
+Register your preferred agent integration with OpenEmpiric.
 
+For terminal-based workstation environments (like OpenCode):
 ```bash
 oem setup opencode
 ```
 
+For desktop-based non-terminal environments (like Codex App):
+```bash
+oem setup codex-app
+```
+
 ### 3. Launch a Session
 
-From any project directory, launch OpenCode through OEM:
-
+From any project directory, launch a managed session:
 ```bash
 mkdir demo-project
 cd demo-project
@@ -108,10 +113,11 @@ oem run opencode
 
 `oem run opencode` bootstraps the project-local `.oem/` memory folder automatically and starts a managed session.
 
+*(Note: For Codex App, standard MCP tools are configured automatically. The agent uses the `knowledge_session_end` conversational tool to commit and persist learnings at the end of a session).*
+
 ### 4. Diagnose Problems
 
-Use `oem doctor` if the workstation integration or embedding cache needs attention:
-
+Verify your workspace integration and bridge health:
 ```bash
 oem doctor
 ```
@@ -122,8 +128,9 @@ oem doctor
 
 OpenEmpiric officially supports the following agent runtimes out-of-the-box:
 
-- **OpenCode** (workstation setup, native plugins, and session supervisor)
-- **Antigravity** (terminal co-pilot integration)
+- **OpenCode**: Workstation-level integration, native plugins, and session supervisor for terminal environments.
+- **Antigravity**: Terminal co-pilot and command-line companion integration.
+- **Codex App**: First-class MCP-based non-terminal desktop runtime, configured automatically via the WSL bridge architecture (`oem setup codex-app`).
 
 ### Extensibility: Write Your Own Adapter!
 You can easily extend OpenEmpiric to support other environments (such as Claude Code, Cursor, or your own proprietary CLI agent). All you need to do is subclass the base adapter:
@@ -151,15 +158,45 @@ Refer to the [Adapter Architecture Guide](docs/adapter-architecture.md) and [Ada
 
 | Command | Category | Description |
 |---|---|---|
-| `oem run <agent>` | **User** | Run a managed coding session with context injection. |
-| `oem doctor` | **User** | Verify workspace health, model warmup, and agent integrations. |
-| `oem search <query>` | **User** | Search the project knowledge base using automatic BM25/hybrid retrieval. |
-| `oem health` | **User** | Scan the workspace for stale, duplicate, or contradicting concepts. |
+| `oem run <agent>` | **User** | Run a managed coding agent session with context injection. |
+| `oem setup <target>` | **User** | Configure and register integrations (`opencode` or `codex-app`). |
+| `oem doctor` | **User** | Verify workspace health, plugin links, model warmup, and agent integrations. |
+| `oem search <query>` | **User** | Search the project knowledge base using automatic/BM25/hybrid retrieval. |
+| `oem health` | **User** | Scan the workspace for stale concepts, duplicates, and contradicting knowledge. |
+| `oem config retrieval <mode>` | **User** | View or set retrieval strategy to `auto`, `bm25`, or `hybrid`. |
 | `oem init` | **Admin** | Initialize the `.oem/` memory repository in the current workspace. |
-| `oem config retrieval <mode>` | **Admin** | Set retrieval strategy to `auto`, `bm25`, or `hybrid`. |
+| `oem migrate` | **Admin** | Migrate legacy `.harness/` directory to `.oem/` format. |
+| `oem mcp` | **Admin** | Start the background MCP tool server for non-terminal runtimes. |
 | `oem merge <id1> <id2>` | **Advanced** | Manually merge two overlapping or duplicate concepts. |
 | `oem rebuild` | **Advanced** | Replay the event store log to rebuild the entire concept registry. |
 | `oem reflect` | **Advanced** | Dry-run reflection and concept extraction from raw transcripts. |
+
+---
+
+## MCP Tool Reference
+
+When integrated as an MCP server, OpenEmpiric exposes the following tools to the AI agent to support context injection, memory retrieval, task tracking, and session commitment:
+
+### Core Retrieval & Exploration
+* **`knowledge_search(query: str, k: int, project: str)`**: Perform hybrid semantic and keyword search across concepts.
+* **`knowledge_explain_concept(concept_id: str, project: str)`**: Retrieve full markdown documentation, canonical name, and recent learnings/evidence for a concept.
+* **`knowledge_graph_query(concept_id: str, direction: str, project: str)`**: Query semantic relationships (incoming/outgoing/both) between concept nodes.
+* **`knowledge_stats(project: str)`**: View high-level statistics of the knowledge base and local vector database size.
+
+### Session Lifecycle & Telemetry
+* **`knowledge_session_end(project: str, conversation_text: str, session_id: str)`**: Ends the session, runs transcript analysis and git diff extraction to update concept records, and commits all changes. Returns a clean markdown summary report.
+* **`knowledge_usage_report(concepts_used: list[str], concepts_ignored: list[str], decisions: list[str], project: str)`**: Reports telemetry regarding concept usage and decision alignment during a session.
+* **`knowledge_health_check(stale_sessions: int, similarity_threshold: float, project: str)`**: Propose duplicate merges, find stale concepts, and detect contradictions.
+
+### Task / TODO Management
+* **`oem_todo_read(workdir: str)`**: View the active session task checklist from `.oem/state/todos.json`.
+* **`oem_todo_write(items: str, workdir: str)`**: Overwrite the todo list with a new JSON list of items.
+* **`oem_todo_advance(item_id: str, status: str, workdir: str)`**: Update a task's status (`pending`, `in_progress`, `completed`) and automatically cycle next items.
+
+### Concept Management & Verification
+* **`knowledge_consolidate(project: str)`**: Identify and merge duplicate and overlapping concept nodes automatically.
+* **`knowledge_merge_concepts(project: str, primary_id: str, secondary_id: str)`**: Manually merge a secondary concept into a primary concept.
+* **`knowledge_lint(project: str, max_parallel: int, fix: bool)`**: Find broken/orphan concept links and automatically heal matching aliases.
 
 ---
 
