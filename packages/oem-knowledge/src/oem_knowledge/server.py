@@ -159,6 +159,15 @@ def mount_tools(mcp: object) -> None:
         if res.get("status") == "error":
             failed_step = res.get("failed_step", "reflection/materialization")
             reason = res.get("message", "Unknown failure")
+            if "lock" in reason.lower() or "lock" in failed_step.lower():
+                return f"""# Session End Failed
+
+OEM could not acquire the project memory lock.
+
+Reason: {reason}
+
+Another OEM process may still be committing memory. Retry after it finishes."""
+            
             return f"""# Session End Failure
 
 Session reflection completed, but materialization/reflection failed.

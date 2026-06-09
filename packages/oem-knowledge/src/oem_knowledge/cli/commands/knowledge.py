@@ -8,6 +8,24 @@ from oem_knowledge.ui import render_panel
 
 
 def run_knowledge_command(args):
+    import sys
+    from oem_knowledge.fs import LockTimeoutError
+    try:
+        _run_knowledge_command_impl(args)
+    except LockTimeoutError as e:
+        from oem_knowledge.ui import render_panel
+        print(render_panel(
+            "Lock Acquisition Failure",
+            [
+                "OEM could not acquire the project memory lock.",
+                f"Reason: {e}",
+                "Another OEM process may still be committing memory. Please retry.",
+            ],
+            status="error"
+        ))
+        sys.exit(1)
+
+def _run_knowledge_command_impl(args):
     # Setup deferred logging Configuration
     import logging
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")

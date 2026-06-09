@@ -160,3 +160,110 @@ def test_opencode_exit_commit_truthful_result(temp_project):
         )
         assert res_fail["status"] == "error"
         assert res_fail["failed_step"] == "materialization"
+
+from oem_knowledge.fs import LockTimeoutError
+from oem_knowledge.services.state import StateService
+
+def test_materialization_lock_failure(temp_project):
+    engine = KnowledgeEngine(temp_project)
+    
+    # Pre-generate a session report so materialize_concepts proceeds
+    sessions_dir = engine._sessions_dir(str(temp_project))
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    report_file = sessions_dir / "session_1.md"
+    report_content = "```json\n" + json.dumps({
+        "knowledge_events": [
+            {"type": "observation", "concept": "ai-safety", "evidence": "Some evidence"}
+        ]
+    }) + "\n```"
+    report_file.write_text(report_content)
+    
+    # Use targeted patch on state load registry to raise LockTimeoutError only during materialize
+    with patch.object(StateService, "_load_registry", side_effect=LockTimeoutError("Registry locked")):
+        res = engine.materialization.materialize_concepts(str(temp_project))
+        assert res["status"] == "error"
+        assert res["failed_step"] == "materialization"
+        assert "Registry locked" in res["message"]
+
+def test_index_lock_failure(temp_project):
+    engine = KnowledgeEngine(temp_project)
+    
+    # Target only index_all database call to raise LockTimeoutError
+    with patch.object(engine.search.vector_store, "count_chunks_by_source_batch", side_effect=LockTimeoutError("DB locked")):
+        res = engine.search.index_all()
+        assert res["status"] == "error"
+        assert "DB locked" in res["error"]
+
+def test_session_commit_lock_failure(temp_project):
+    engine = KnowledgeEngine(temp_project)
+    
+    # Target reflection state call (_append_event) to trigger LockTimeoutError during session commit
+    with patch.object(StateService, "_append_event", side_effect=LockTimeoutError("State locked")):
+        res = engine.session_commit(
+            str(temp_project),
+            conversation_text="Hypothesis: test",
+            session_id="sess_1"
+        )
+        assert res["status"] == "error"
+        assert res["failed_step"] == "reflection"
+        assert "State locked" in res["message"]
+        # Result shape remains stable
+        for key in ["report_path", "knowledge_events", "materialized_log", "links_updated", "index_stats", "explainability", "warnings"]:
+            assert key in res
+
+def test_mcp_tools_lock_failure_clean_output(temp_project):
+    mcp = FastMCP("test_mcp")
+    mount_tools(mcp)
+    
+    mock_res = {
+        "status": "error",
+        "failed_step": "state",
+        "message": "Timed out acquiring lock: .oem/concept_registry.lock"
+    }
+    with patch.object(KnowledgeEngine, "session_commit", return_value=mock_res):
+        # 1. Test knowledge_session_end
+        result_end = asyncio.run(mcp.call_tool(
+            "knowledge_session_end",
+            {
+                "project": str(temp_project),
+                "conversation_text": "Hypothesis: test",
+                "session_id": "sess_1"
+            }
+        ))
+        out_end = result_end.content[0].text
+        assert "# Session End Failed" in out_end
+        assert "OEM could not acquire the project memory lock." in out_end
+        assert "Reason: Timed out acquiring lock: .oem/concept_registry.lock" in out_end
+        assert "Retry after it finishes." in out_end
+
+        # 2. Test legacy knowledge_session_commit
+        result_commit = asyncio.run(mcp.call_tool(
+            "knowledge_session_commit",
+            {
+                "project": str(temp_project),
+                "conversation_text": "Hypothesis: test",
+                "session_id": "sess_1"
+            }
+        ))
+        out_commit = result_commit.content[0].text
+        assert "# Session End Failed" in out_commit
+        assert "OEM could not acquire the project memory lock." in out_commit
+
+def test_cli_exits_non_zero_on_lock_failure(temp_project):
+    from oem_knowledge.cli.commands.session import run_session_command
+    
+    # Mock parser arguments
+    class MockArgs:
+        command = "session-end"
+        project = str(temp_project)
+        chat = "test chat"
+        session_id = "sess_1"
+        verbose = False
+        
+    args = MockArgs()
+    
+    # Mock session_commit to fail with LockTimeoutError
+    with patch.object(KnowledgeEngine, "session_commit", side_effect=LockTimeoutError("Locked")):
+        with pytest.raises(SystemExit) as exc:
+            run_session_command(args)
+        assert exc.value.code == 1

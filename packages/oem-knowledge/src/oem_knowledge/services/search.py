@@ -202,6 +202,18 @@ class SearchService:
         return "medium"
 
     def index_all(self, force: bool = False, progress_callback=None) -> dict:
+        from oem_knowledge.fs import LockTimeoutError
+        try:
+            return self._index_all_impl(force, progress_callback)
+        except LockTimeoutError as e:
+            logger.error("Lock acquisition failure during indexing: %s", e)
+            return {
+                "status": "error",
+                "error": f"Lock acquisition failure during indexing: {e}",
+                "failed_files": [],
+            }
+
+    def _index_all_impl(self, force: bool = False, progress_callback=None) -> dict:
         harness = self.engine._resolve_harness()
         wiki_dir = harness / "wiki"
         

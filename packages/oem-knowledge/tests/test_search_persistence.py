@@ -65,7 +65,20 @@ def test_search_fallback_logs_warning_on_primary_retrieval_failure(temp_project,
             warnings = [r.message for r in caplog.records if r.levelname == "WARNING"]
             assert any("Vector database search failed, falling back to registry-only" in w for w in warnings)
 
-def test_session_commit_reports_partial_if_index_update_fails(temp_project):
+def test_session_commit_reports_partial_if_index_update_partial(temp_project):
+    engine = KnowledgeEngine(temp_project)
+    
+    # Mock index_all to return partial status
+    with patch.object(engine.search, "index_all", return_value={"status": "partial", "error": "Mock partial error"}):
+        res = engine.session_commit(
+            str(temp_project),
+            conversation_text="Hypothesis: AI safety is important",
+            session_id="session_test_1"
+        )
+        assert res["status"] == "partial"
+        assert any("indexing failed: Mock partial error" in w for w in res["warnings"])
+
+def test_session_commit_reports_error_if_index_update_fails(temp_project):
     engine = KnowledgeEngine(temp_project)
     
     # Mock index_all to return error status
@@ -73,10 +86,11 @@ def test_session_commit_reports_partial_if_index_update_fails(temp_project):
         res = engine.session_commit(
             str(temp_project),
             conversation_text="Hypothesis: AI safety is important",
-            session_id="session_test_1"
+            session_id="session_test_2"
         )
-        assert res["status"] == "partial"
-        assert any("indexing failed: Mock DB error" in w for w in res["warnings"])
+        assert res["status"] == "error"
+        assert res["failed_step"] == "indexing"
+        assert "Mock DB error" in res["message"]
 
 def test_failed_files_and_chunks_counted_in_index_stats(temp_project, caplog):
     engine = KnowledgeEngine(temp_project)

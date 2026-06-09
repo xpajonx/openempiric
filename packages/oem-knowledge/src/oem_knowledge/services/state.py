@@ -5,7 +5,7 @@ import re
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
-from oem_knowledge.fs import FileLock, SecureFileSystem
+from oem_knowledge.fs import FileLock, SecureFileSystem, LockTimeoutError
 from oem_knowledge.models import ConceptData, KnowledgeEvent
 
 if TYPE_CHECKING:
@@ -29,64 +29,80 @@ class StateService:
     def _load_registry(self, project: str | None = None) -> dict:
         p = self.engine._registry_path(project)
         sfs = self._sfs(project)
-        with FileLock(p.with_suffix(".lock")):
-            if sfs.exists(p):
-                try:
-                    return json.loads(sfs.read_text(p))
-                except json.JSONDecodeError as e:
-                    logger.error("Corrupt concept registry JSON at %s: %s", p, e)
-                    raise StateCorruptionError(f"Corrupt concept registry JSON at {p}: {e}") from e
-                except OSError as e:
-                    logger.error("Failed to read concept registry at %s: %s", p, e)
-                    raise
-            return {}
+        try:
+            with FileLock(p.with_suffix(".lock")):
+                if sfs.exists(p):
+                    try:
+                        return json.loads(sfs.read_text(p))
+                    except json.JSONDecodeError as e:
+                        logger.error("Corrupt concept registry JSON at %s: %s", p, e)
+                        raise StateCorruptionError(f"Corrupt concept registry JSON at {p}: {e}") from e
+                    except OSError as e:
+                        logger.error("Failed to read concept registry at %s: %s", p, e)
+                        raise
+                return {}
+        except LockTimeoutError:
+            logger.error("Timed out acquiring state lock for %s", p)
+            raise
 
     def _save_registry(self, registry: dict, project: str | None = None):
         p = self.engine._registry_path(project)
         sfs = self._sfs(project)
-        with FileLock(p.with_suffix(".lock")):
-            try:
-                sfs.write_text(p, json.dumps(registry, indent=2))
-            except OSError as e:
-                logger.error("Failed to save concept registry at %s: %s", p, e)
-                raise
+        try:
+            with FileLock(p.with_suffix(".lock")):
+                try:
+                    sfs.write_text(p, json.dumps(registry, indent=2))
+                except OSError as e:
+                    logger.error("Failed to save concept registry at %s: %s", p, e)
+                    raise
+        except LockTimeoutError:
+            logger.error("Timed out acquiring state lock for %s", p)
+            raise
 
     def _load_events(self, project: str | None = None) -> list[dict]:
         p = self.engine._events_path(project)
         sfs = self._sfs(project)
-        with FileLock(p.with_suffix(".lock")):
-            if not sfs.exists(p):
-                return []
-            events = []
-            try:
-                content = sfs.read_text(p)
-            except OSError as e:
-                logger.error("Failed to read events file at %s: %s", p, e)
-                raise
-
-            for line_idx, line in enumerate(content.splitlines(), start=1):
-                line = line.strip()
-                if not line:
-                    continue
+        try:
+            with FileLock(p.with_suffix(".lock")):
+                if not sfs.exists(p):
+                    return []
+                events = []
                 try:
-                    ev_dict = json.loads(line)
-                    events.append(self.engine.event_migrator.upcast(ev_dict))
-                except json.JSONDecodeError as e:
-                    logger.warning("Skipping corrupt event line %d in %s: %s", line_idx, p, e)
-                    continue
-            return events
+                    content = sfs.read_text(p)
+                except OSError as e:
+                    logger.error("Failed to read events file at %s: %s", p, e)
+                    raise
+
+                for line_idx, line in enumerate(content.splitlines(), start=1):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        ev_dict = json.loads(line)
+                        events.append(self.engine.event_migrator.upcast(ev_dict))
+                    except json.JSONDecodeError as e:
+                        logger.warning("Skipping corrupt event line %d in %s: %s", line_idx, p, e)
+                        continue
+                return events
+        except LockTimeoutError:
+            logger.error("Timed out acquiring state lock for %s", p)
+            raise
 
     def _append_event(self, event: dict | KnowledgeEvent, project: str | None = None):
         if isinstance(event, dict):
             event = KnowledgeEvent(**event)
         p = self.engine._events_path(project)
         sfs = self._sfs(project)
-        with FileLock(p.with_suffix(".lock")):
-            try:
-                sfs.append_text(p, event.model_dump_json() + "\n")
-            except OSError as e:
-                logger.error("Failed to append event to %s: %s", p, e)
-                raise
+        try:
+            with FileLock(p.with_suffix(".lock")):
+                try:
+                    sfs.append_text(p, event.model_dump_json() + "\n")
+                except OSError as e:
+                    logger.error("Failed to append event to %s: %s", p, e)
+                    raise
+        except LockTimeoutError:
+            logger.error("Timed out acquiring state lock for %s", p)
+            raise
 
     def _resolve_concept(self, term: str, registry: dict) -> tuple[str, dict]:
         import difflib

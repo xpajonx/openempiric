@@ -9,6 +9,24 @@ from oem_knowledge.ui import render_panel
 
 
 def run_session_command(args):
+    import sys
+    from oem_knowledge.fs import LockTimeoutError
+    try:
+        _run_session_command_impl(args)
+    except LockTimeoutError as e:
+        from oem_knowledge.ui import render_panel
+        print(render_panel(
+            "Lock Acquisition Failure",
+            [
+                "OEM could not acquire the project memory lock.",
+                f"Reason: {e}",
+                "Another OEM process may still be committing memory. Please retry.",
+            ],
+            status="error"
+        ))
+        sys.exit(1)
+
+def _run_session_command_impl(args):
     # Setup deferred logging Configuration
     import logging
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
@@ -51,6 +69,16 @@ def run_session_command(args):
             args.session_id,
             session_started_at=session_started_at
         )
+        if res.get("status") == "error":
+            print(render_panel(
+                "Session End Failure",
+                [
+                    f"Failed step: {res.get('failed_step', 'unknown')}",
+                    f"Reason: {res.get('message', 'Unknown error')}",
+                ],
+                status="error"
+            ))
+            sys.exit(1)
         commit_duration = time.time() - commit_start
 
         from oem_knowledge.runtime.supervisor import render_commit_complete_panel

@@ -144,6 +144,18 @@ class MaterializationService:
         sfs.append_text(log_file, entry)
 
     def materialize_concepts(self, project: str | None = None) -> dict:
+        from oem_knowledge.fs import LockTimeoutError
+        try:
+            return self._materialize_concepts_impl(project)
+        except LockTimeoutError as e:
+            logger.error("Lock acquisition failure during materialization: %s", e)
+            return {
+                "status": "error",
+                "failed_step": "materialization",
+                "message": f"Lock acquisition failure during materialization: {e}",
+            }
+
+    def _materialize_concepts_impl(self, project: str | None = None) -> dict:
         self.engine._resolve_harness(project)
         sessions_dir = self.engine._sessions_dir(project)
         if not sessions_dir.exists():
@@ -293,6 +305,18 @@ aliases: {json.dumps(cdata.get("aliases", []))}
         return {"status": "success", "materialized": materialized_log}
 
     def update_graph(self, project: str | None = None) -> dict:
+        from oem_knowledge.fs import LockTimeoutError
+        try:
+            return self._update_graph_impl(project)
+        except LockTimeoutError as e:
+            logger.error("Lock acquisition failure during graph update: %s", e)
+            return {
+                "status": "error",
+                "failed_step": "materialization",
+                "message": f"Lock acquisition failure during graph update: {e}",
+            }
+
+    def _update_graph_impl(self, project: str | None = None) -> dict:
         concepts_dir = self.engine._concepts_dir(project)
         if not concepts_dir.exists():
             return {
