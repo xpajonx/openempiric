@@ -1,8 +1,7 @@
 import pytest
-import sqlite3
 from pathlib import Path
 from unittest.mock import MagicMock
-from oem_knowledge.vector_store import VectorStore
+from oem_knowledge.vector_store import VectorStore, VectorStoreClosedError
 from oem_knowledge.services.search import SearchService
 from oem_knowledge.engine import KnowledgeEngine
 
@@ -14,36 +13,30 @@ def make_vector_store(tmp_path: Path) -> VectorStore:
     return VectorStore(db_path)
 
 def assert_store_closed(store: VectorStore):
-    """Assert that operations on a closed store raise an error."""
-    # Any public method should fail after close
-    # Current implementation raises sqlite3.ProgrammingError, not RuntimeError
-    with pytest.raises((RuntimeError, sqlite3.ProgrammingError)):
+    """Assert that operations on a closed store raise VectorStoreClosedError."""
+    with pytest.raises(VectorStoreClosedError):
         store.upsert("id", "doc", {}, None)
-    with pytest.raises((RuntimeError, sqlite3.ProgrammingError)):
+    with pytest.raises(VectorStoreClosedError):
         store.all_chunks()
-    with pytest.raises((RuntimeError, sqlite3.ProgrammingError)):
+    with pytest.raises(VectorStoreClosedError):
         store.count()
 
 # ========== Test 1: VectorStore close disallows future use ==========
 
 def test_vector_store_close_disallows_future_use(tmp_path):
-    """After close(), all public operations should raise an error."""
+    """After close(), all public operations should raise VectorStoreClosedError."""
     store = make_vector_store(tmp_path)
     store.upsert("id1", "doc", {"meta": "data"}, [0.1, 0.2])
     store.close()
     
     assert_store_closed(store)
     
-    # Verify the actual error type is sqlite3.ProgrammingError (current implementation)
-    with pytest.raises(sqlite3.ProgrammingError):
+    # Verify the error type is VectorStoreClosedError, not sqlite3.ProgrammingError
+    with pytest.raises(VectorStoreClosedError):
         store.upsert("id2", "doc2", {}, None)
 
 # ========== Test 2: VectorStore context manager ==========
 
-@pytest.mark.xfail(
-    reason="CRIT-05: VectorStore does not implement context manager protocol (__enter__/__exit__)",
-    strict=True,
-)
 def test_vector_store_context_manager_closes_connection(tmp_path):
     """VectorStore should be usable as a context manager."""
     with make_vector_store(tmp_path) as store:
@@ -56,22 +49,15 @@ def test_vector_store_context_manager_closes_connection(tmp_path):
 
 # ========== Test 3: Idempotent close ==========
 
-@pytest.mark.xfail(
-    reason="CRIT-05: VectorStore.close() is not idempotent (sqlite3 raises on double-close)",
-    strict=False,
-)
 def test_vector_store_close_is_idempotent(tmp_path):
     """Calling close() multiple times should not crash."""
     store = make_vector_store(tmp_path)
     store.close()
     store.close()  # Should not raise
     
-    # Verify that subsequent operations also fail gracefully
-    with pytest.raises((RuntimeError, sqlite3.ProgrammingError)):
+    # Verify that subsequent operations fail with clear error
+    with pytest.raises(VectorStoreClosedError, match="VectorStore is closed"):
         store.upsert("id", "doc", {}, None)
-    
-    # Note: Current implementation appears to be idempotent already
-    # This test may XPASS if sqlite3.close() is idempotent
 
 # ========== Test 4: SearchService.close() closes cached VectorStore ==========
 

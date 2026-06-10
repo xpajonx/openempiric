@@ -7,6 +7,11 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+class VectorStoreClosedError(RuntimeError):
+    """Raised when operating on a closed VectorStore."""
+    pass
+
+
 class VectorStore:
     def __init__(self, db_path: Path):
         self.db_path = db_path
@@ -19,6 +24,17 @@ class VectorStore:
         except sqlite3.Error as e:
             logger.warning("Failed to set WAL journal mode or synchronous mode: %s", e)
         self._ensure_schema()
+
+    def _ensure_open(self) -> None:
+        if self.conn is None:
+            raise VectorStoreClosedError("VectorStore is closed")
+
+    def __enter__(self) -> "VectorStore":
+        self._ensure_open()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
 
     def _ensure_schema(self):
         with self.conn:
@@ -39,6 +55,7 @@ class VectorStore:
                 logger.warning("Failed to create index idx_chunks_source: %s", e)
 
     def upsert(self, doc_id: str, document: str, metadata: dict, embedding: list[float] | None):
+        self._ensure_open()
         emb_json = json.dumps(embedding) if embedding is not None else None
         meta_json = json.dumps(metadata)
         with self.conn:
@@ -48,12 +65,14 @@ class VectorStore:
             )
 
     def delete_by_ids(self, doc_ids: list[str]):
+        self._ensure_open()
         if not doc_ids:
             return
         with self.conn:
             self.conn.executemany("DELETE FROM chunks WHERE id = ?", [(d,) for d in doc_ids])
 
     def delete_by_source(self, source_path: str):
+        self._ensure_open()
         try:
             with self.conn:
                 self.conn.execute(
@@ -77,6 +96,7 @@ class VectorStore:
                     self.delete_by_ids(to_delete)
 
     def get_by_source(self, source_path: str) -> dict:
+        self._ensure_open()
         ids = []
         try:
             cursor = self.conn.execute(
@@ -98,6 +118,7 @@ class VectorStore:
         return {"ids": ids}
 
     def count_chunks_by_source(self, source_path: str) -> int:
+        self._ensure_open()
         try:
             cursor = self.conn.execute(
                 "SELECT COUNT(*) FROM chunks WHERE json_extract(metadata, '$.source') = ?",
@@ -123,6 +144,7 @@ class VectorStore:
                 return 0
 
     def all_chunks(self) -> list[dict]:
+        self._ensure_open()
         cursor = self.conn.execute("SELECT id, document, metadata, embedding FROM chunks")
         chunks = []
         for row in cursor.fetchall():
@@ -145,6 +167,7 @@ class VectorStore:
         return chunks
 
     def upsert_batch(self, chunks: list[tuple[str, str, dict, list[float] | None]]):
+        self._ensure_open()
         if not chunks:
             return
         data = []
@@ -159,6 +182,7 @@ class VectorStore:
             )
 
     def delete_by_sources(self, source_paths: list[str]):
+        self._ensure_open()
         if not source_paths:
             return
         try:
@@ -185,6 +209,7 @@ class VectorStore:
                     self.conn.executemany("DELETE FROM chunks WHERE id = ?", [(d,) for d in to_delete])
 
     def count_chunks_by_source_batch(self) -> dict[str, int]:
+        self._ensure_open()
         counts = {}
         try:
             cursor = self.conn.execute(
@@ -211,8 +236,12 @@ class VectorStore:
         return counts
 
     def count(self) -> int:
+        self._ensure_open()
         cursor = self.conn.execute("SELECT COUNT(*) FROM chunks")
         return cursor.fetchone()[0]
 
-    def close(self):
+    def close(self) -> None:
+        if self.conn is None:
+            return
         self.conn.close()
+        self.conn = None
