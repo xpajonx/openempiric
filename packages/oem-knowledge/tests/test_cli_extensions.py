@@ -87,3 +87,36 @@ def test_metrics_report_cli(tmp_path):
     assert metrics_data["knowledge_usage"]["concepts_referenced"] == 1
     assert metrics_data["knowledge_usage"]["concepts_ignored"] == 1
     assert metrics_data["knowledge_usage"]["agent_decisions_aligned"] == 1
+
+
+def test_cli_engine_lifecycle_repetition(tmp_path):
+    """CLI-style engine creation/usage/close repeated 10 times should not leak."""
+    engine = KnowledgeEngine(project_path=tmp_path)
+    engine.init_project("test-cli-lifecycle")
+    wiki_dir = engine._concepts_dir(str(tmp_path))
+    wiki_dir.mkdir(parents=True, exist_ok=True)
+    (wiki_dir / "cli_test.md").write_text("# CLI Test\n\nBody")
+    engine.search.index_all(force=True)
+    engine.close()
+
+    for i in range(10):
+        eng = KnowledgeEngine(tmp_path)
+        try:
+            results = eng.search.search("test", k=3)
+            assert isinstance(results, list)
+        finally:
+            eng.close()
+
+    # DB remains usable after repeated CLI-style open/close
+    eng = KnowledgeEngine(tmp_path)
+    try:
+        chunks = eng.search.vector_store.all_chunks()
+        assert len(chunks) > 0
+        eng.search.vector_store.upsert(
+            "cli-after-repeat",
+            "CLI repetition test",
+            {"source": "cli"},
+            [0.5],
+        )
+    finally:
+        eng.close()
