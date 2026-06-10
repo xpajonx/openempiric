@@ -170,10 +170,12 @@ Refer to the [Adapter Architecture Guide](docs/adapter-architecture.md) and [Ada
 | `oem doctor`                  | **User**     | Verify workspace health, plugin links, model warmup, and agent integrations.    |
 | `oem search <query>`          | **User**     | Search the project knowledge base using automatic/BM25/hybrid retrieval.        |
 | `oem health`                  | **User**     | Scan the workspace for stale concepts, duplicates, and contradicting knowledge. |
-| `oem config retrieval <mode>` | **User**     | View or set retrieval strategy to`auto`, `bm25`, or `hybrid`.                   |
-| `oem init`                    | **Admin**    | Initialize the`.oem/` memory repository in the current workspace.               |
-| `oem migrate`                 | **Admin**    | Migrate legacy`.harness/` directory to `.oem/` format.                          |
+| `oem clean`                   | **User**     | Analyze or apply safe OEM cleanup actions.                                      |
+| `oem config retrieval <mode>` | **User**     | View or set retrieval strategy to `auto`, `bm25`, or `hybrid`.                  |
+| `oem init`                    | **Admin**    | Initialize the `.oem/` memory repository in the current workspace.               |
+| `oem migrate`                 | **Admin**    | Migrate legacy `.harness/` directory to `.oem/` format.                          |
 | `oem mcp`                     | **Admin**    | Start the background MCP tool server for non-terminal runtimes.                 |
+| `oem index`                   | **Advanced** | Rebuild derived search index for the project.                                   |
 | `oem merge <id1> <id2>`       | **Advanced** | Manually merge two overlapping or duplicate concepts.                           |
 | `oem rebuild`                 | **Advanced** | Replay the event store log to rebuild the entire concept registry.              |
 | `oem reflect`                 | **Advanced** | Dry-run reflection and concept extraction from raw transcripts.                 |
@@ -190,9 +192,16 @@ When integrated as an MCP server, OpenEmpiric exposes the following tools to the
 * **`knowledge_explain_concept(concept_id: str, project: str)`**: Retrieve full markdown documentation, canonical name, and recent learnings/evidence for a concept.
 * **`knowledge_graph_query(concept_id: str, direction: str, project: str)`**: Query semantic relationships (incoming/outgoing/both) between concept nodes.
 * **`knowledge_stats(project: str)`**: View high-level statistics of the knowledge base and local vector database size.
+* **`knowledge_get_events(project: str, concept: str, event_type: str, session_id: str)`**: Query knowledge events filtered by concept, event type, or session ID.
+* **`knowledge_get_event(project: str, event_id: str)`**: Retrieve a single knowledge event details by its UUID.
 
 ### Session Lifecycle & Telemetry
 
+* **`knowledge_init(project: str)`**: Bootstrap the `.oem/` memory framework in a project directory.
+* **`knowledge_index(force: bool, project: str)`**: Re-index all markdown files in the project's concept tree.
+* **`knowledge_reflect(project: str, conversation_text: str, session_id: str)`**: Extract candidate knowledge events from conversation transcript text.
+* **`knowledge_materialize(project: str)`**: Promote emerging concepts to canonical status and write markdown nodes in `.oem/wiki/`.
+* **`knowledge_update_graph(project: str)`**: Update bidirectional wikilinks between materialized concept markdown nodes.
 * **`knowledge_session_end(project: str, conversation_text: str, session_id: str)`**: Ends the session, runs transcript analysis and git diff extraction to update concept records, and commits all changes. Returns a clean markdown summary report.
 * **`knowledge_usage_report(concepts_used: list[str], concepts_ignored: list[str], decisions: list[str], project: str)`**: Reports telemetry regarding concept usage and decision alignment during a session.
 * **`knowledge_health_check(stale_sessions: int, similarity_threshold: float, project: str)`**: Propose duplicate merges, find stale concepts, and detect contradictions.
