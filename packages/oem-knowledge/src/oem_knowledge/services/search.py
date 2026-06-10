@@ -131,6 +131,11 @@ class SearchService:
             return 0.0
         return dot / (norm_a * norm_b)
 
+    def close(self) -> None:
+        if self._vector_store is not None:
+            self._vector_store.close()
+            self._vector_store = None
+
     def calculate_sha256(self, filepath: Path) -> str:
         import hashlib
         sha = hashlib.sha256()

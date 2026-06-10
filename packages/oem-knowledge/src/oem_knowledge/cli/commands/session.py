@@ -40,6 +40,7 @@ def _run_session_command_impl(args):
     from oem_knowledge.runtime import SessionState, cmd_recover, run_agent
 
     eng = KnowledgeEngine(project)
+    import atexit; atexit.register(eng.close)
 
     if args.command == "session-start":
         res = eng.restore_session_state(project)

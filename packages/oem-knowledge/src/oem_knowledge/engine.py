@@ -147,6 +147,17 @@ class KnowledgeEngine:
         self.event_migrator = EventMigrator(self)
         self.fitness = FitnessService(self)
 
+    def close(self) -> None:
+        for service in (getattr(self, "search", None),):
+            close = getattr(service, "close", None)
+            if callable(close):
+                close()
+
+    def __enter__(self) -> "KnowledgeEngine":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
 
     def _sfs(self, project: str | Path | None = None) -> SecureFileSystem:
         p = Path(project or self.project_path or ".").resolve()

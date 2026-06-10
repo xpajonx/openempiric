@@ -15,6 +15,7 @@ def mount_tools(mcp: object) -> None:
         return
 
     engine = KnowledgeEngine()
+    # Module-level engine is used only for lightweight init metadata and must not touch search/vector resources.
 
     from oem_knowledge.tools import todos, metrics
     todos.register(mcp)
@@ -50,10 +51,10 @@ def mount_tools(mcp: object) -> None:
             force: If True, re-index everything. If False, only new/changed files.
             project: Project directory path. Defaults to current directory.
         """
-        eng = KnowledgeEngine(project or None)
         start = time.time()
         try:
-            s = eng.search.index_all(force=force)
+            with KnowledgeEngine(project or None) as eng:
+                s = eng.search.index_all(force=force)
         except Exception as e:
             return render_panel("Index Failure", [f"Error: {e}"], status="error")
 
@@ -81,9 +82,9 @@ def mount_tools(mcp: object) -> None:
             conversation_text: Raw conversation text or structured knowledge events.
             session_id: Optional session ID for correlation.
         """
-        eng = KnowledgeEngine(project or None)
         try:
-            res = eng.reflection.reflect_session(project or None, conversation_text, session_id)
+            with KnowledgeEngine(project or None) as eng:
+                res = eng.reflection.reflect_session(project or None, conversation_text, session_id)
         except Exception as e:
             return render_panel("Reflection Failure", [f"Error: {e}"], status="error")
 
@@ -112,9 +113,9 @@ def mount_tools(mcp: object) -> None:
         Args:
             project: Project directory path. Defaults to current directory.
         """
-        eng = KnowledgeEngine(project or None)
         try:
-            res = eng.materialization.materialize_concepts(project or None)
+            with KnowledgeEngine(project or None) as eng:
+                res = eng.materialization.materialize_concepts(project or None)
         except Exception as e:
             return render_panel(
                 "Materialization Failure", [f"Error: {e}"], status="error"
@@ -135,9 +136,9 @@ def mount_tools(mcp: object) -> None:
         Args:
             project: Project directory path. Defaults to current directory.
         """
-        eng = KnowledgeEngine(project or None)
         try:
-            res = eng.materialization.update_graph(project or None)
+            with KnowledgeEngine(project or None) as eng:
+                res = eng.materialization.update_graph(project or None)
         except Exception as e:
             return render_panel("Graph Update Failure", [f"Error: {e}"], status="error")
 
@@ -238,8 +239,11 @@ Your conversation was not fully committed to OEM memory. Please retry session en
             conversation_text: Raw conversation text for knowledge extraction.
             session_id: Optional session ID for correlation.
         """
-        eng = KnowledgeEngine(project or None)
-        return _commit_session_from_tool(eng, project, conversation_text, session_id)
+        try:
+            with KnowledgeEngine(project or None) as eng:
+                return _commit_session_from_tool(eng, project, conversation_text, session_id)
+        except Exception as e:
+            return f"# Session Commit Failure\n\nError: {e}"
 
     @mcp.tool()
     def knowledge_session_end(
@@ -252,8 +256,11 @@ Your conversation was not fully committed to OEM memory. Please retry session en
             conversation_text: Raw conversation text or history for knowledge extraction.
             session_id: Optional session ID.
         """
-        eng = KnowledgeEngine(project or None)
-        return _commit_session_from_tool(eng, project, conversation_text, session_id)
+        try:
+            with KnowledgeEngine(project or None) as eng:
+                return _commit_session_from_tool(eng, project, conversation_text, session_id)
+        except Exception as e:
+            return f"# Session End Failure\n\nError: {e}"
 
     @mcp.tool()
     def knowledge_consolidate(project: str = "") -> str:
@@ -262,9 +269,9 @@ Your conversation was not fully committed to OEM memory. Please retry session en
         Args:
             project: Project directory path. Defaults to current directory.
         """
-        eng = KnowledgeEngine(project or None)
         try:
-            res = eng.state.consolidate(project or None)
+            with KnowledgeEngine(project or None) as eng:
+                res = eng.state.consolidate(project or None)
         except Exception as e:
             return render_panel(
                 "Consolidation Failure", [f"Error: {e}"], status="error"
@@ -289,14 +296,14 @@ Your conversation was not fully committed to OEM memory. Please retry session en
             event_type: Filter by event type (hypothesis, experiment, etc.)
             session_id: Filter by session ID
         """
-        eng = KnowledgeEngine(project or None)
         try:
-            events = eng.state.get_events(
-                project or None,
-                concept=concept,
-                event_type=event_type,
-                session_id=session_id,
-            )
+            with KnowledgeEngine(project or None) as eng:
+                events = eng.state.get_events(
+                    project or None,
+                    concept=concept,
+                    event_type=event_type,
+                    session_id=session_id,
+                )
         except Exception as e:
             return render_panel("Get Events Failure", [f"Error: {e}"], status="error")
 
@@ -320,9 +327,9 @@ Your conversation was not fully committed to OEM memory. Please retry session en
             project: Project directory path. Defaults to current directory.
             event_id: The event UUID
         """
-        eng = KnowledgeEngine(project or None)
         try:
-            ev = eng.state.get_event(project or None, event_id)
+            with KnowledgeEngine(project or None) as eng:
+                ev = eng.state.get_event(project or None, event_id)
         except KeyError as e:
             return render_panel("Event Not Found", [str(e)], status="error")
         except Exception as e:
@@ -351,9 +358,9 @@ Your conversation was not fully committed to OEM memory. Please retry session en
             primary_id: The UUID of the concept to keep
             secondary_id: The UUID of the concept to merge and remove
         """
-        eng = KnowledgeEngine(project or None)
         try:
-            res = eng.state.merge_concepts(project or None, primary_id, secondary_id)
+            with KnowledgeEngine(project or None) as eng:
+                res = eng.state.merge_concepts(project or None, primary_id, secondary_id)
         except Exception as e:
             return render_panel("Merge Failure", [f"Error: {e}"], status="error")
 
@@ -444,9 +451,9 @@ Your conversation was not fully committed to OEM memory. Please retry session en
             k: Number of results to return. Defaults to 3.
             project: Project directory path. Defaults to current directory.
         """
-        eng = KnowledgeEngine(project or None)
         try:
-            results = eng.search.search(query, k=k)
+            with KnowledgeEngine(project or None) as eng:
+                results = eng.search.search(query, k=k)
         except Exception as e:
             return render_panel("Search Failure", [f"Error: {e}"], status="error")
 
@@ -486,11 +493,11 @@ Your conversation was not fully committed to OEM memory. Please retry session en
             similarity_threshold: Similarity threshold to propose merges. Defaults to 0.85.
             project: Project directory path. Defaults to current directory.
         """
-        eng = KnowledgeEngine(project or None)
         try:
-            stale = eng.state.detect_stale_concepts(stale_sessions, project or None)
-            merges = eng.propose_merges(similarity_threshold, project or None)
-            conflicts = eng.detect_contradictions(project or None)
+            with KnowledgeEngine(project or None) as eng:
+                stale = eng.state.detect_stale_concepts(stale_sessions, project or None)
+                merges = eng.propose_merges(similarity_threshold, project or None)
+                conflicts = eng.detect_contradictions(project or None)
         except Exception as e:
             return render_panel("Health Check Failure", [f"Error: {e}"], status="error")
 
@@ -533,27 +540,27 @@ Your conversation was not fully committed to OEM memory. Please retry session en
         Args:
             project: Project directory path. Defaults to current directory.
         """
-        eng = KnowledgeEngine(project or None)
         try:
-            registry = eng.state._load_registry(project or None)
-            harness = eng._resolve_harness(project or None)
-            db_path = harness / ".local_vector_db"
-            db_size = 0
-            if db_path.exists():
-                def get_files_size(p: Path) -> int:
-                    if p.is_file():
-                        return p.stat().st_size
-                    elif p.is_dir():
-                        return sum(get_files_size(f) for f in p.iterdir())
-                    return 0
-                db_size = get_files_size(db_path)
+            with KnowledgeEngine(project or None) as eng:
+                registry = eng.state._load_registry(project or None)
+                harness = eng._resolve_harness(project or None)
+                db_path = harness / ".local_vector_db"
+                db_size = 0
+                if db_path.exists():
+                    def get_files_size(p: Path) -> int:
+                        if p.is_file():
+                            return p.stat().st_size
+                        elif p.is_dir():
+                            return sum(get_files_size(f) for f in p.iterdir())
+                        return 0
+                    db_size = get_files_size(db_path)
 
-            lines = [
-                f"Total Concepts:       {len(registry)}",
-                f"Vector DB Size:       {(db_size / (1024 * 1024)):.2f} MB",
-                f"OEM Path:             {harness}"
-            ]
-            return render_panel("Knowledge Stats", lines, status="stats")
+                lines = [
+                    f"Total Concepts:       {len(registry)}",
+                    f"Vector DB Size:       {(db_size / (1024 * 1024)):.2f} MB",
+                    f"OEM Path:             {harness}"
+                ]
+                return render_panel("Knowledge Stats", lines, status="stats")
         except Exception as e:
             return render_panel("Stats Failure", [f"Error: {e}"], status="error")
 
@@ -565,41 +572,41 @@ Your conversation was not fully committed to OEM memory. Please retry session en
             concept_id: Concept ID (e.g. concept_001)
             project: Project directory path. Defaults to current directory.
         """
-        eng = KnowledgeEngine(project or None)
         try:
-            registry = eng.state._load_registry(project or None)
-            cdata = registry.get(concept_id)
-            if not cdata:
-                return render_panel("Concept Not Found", [f"Concept {concept_id} not in registry."], status="error")
+            with KnowledgeEngine(project or None) as eng:
+                registry = eng.state._load_registry(project or None)
+                cdata = registry.get(concept_id)
+                if not cdata:
+                    return render_panel("Concept Not Found", [f"Concept {concept_id} not in registry."], status="error")
 
-            harness = eng._resolve_harness(project or None)
-            wiki_file = harness / "wiki" / f"{concept_id}.md"
-            recent_evidence = []
-            if wiki_file.exists():
-                content = wiki_file.read_text(encoding="utf-8")
-                import re
-                ev_match = re.search(r"## Learnings.*?\n([\s\S]*)", content)
-                if ev_match and ev_match.group(1):
-                    recent_evidence = [
-                        line.strip().lstrip("-").strip()
-                        for line in ev_match.group(1).split("\n")
-                        if line.strip().startswith("-")
-                    ]
+                harness = eng._resolve_harness(project or None)
+                wiki_file = harness / "wiki" / f"{concept_id}.md"
+                recent_evidence = []
+                if wiki_file.exists():
+                    content = wiki_file.read_text(encoding="utf-8")
+                    import re
+                    ev_match = re.search(r"## Learnings.*?\n([\s\S]*)", content)
+                    if ev_match and ev_match.group(1):
+                        recent_evidence = [
+                            line.strip().lstrip("-").strip()
+                            for line in ev_match.group(1).split("\n")
+                            if line.strip().startswith("-")
+                        ]
 
-            lines = [
-                f"Concept: {cdata.get('canonical_name', '').replace('-', ' ').upper()} ({concept_id})",
-                f"Status: {cdata.get('status', '').upper()}",
-                f"Confidence: {cdata.get('confidence', 1)}/5",
-                f"Aliases: {', '.join(cdata.get('aliases', []))}",
-                "",
-                "Recent Evidence:"
-            ]
-            if recent_evidence:
-                lines.extend(f"  - {e}" for e in recent_evidence)
-            else:
-                lines.append("  - None")
+                lines = [
+                    f"Concept: {cdata.get('canonical_name', '').replace('-', ' ').upper()} ({concept_id})",
+                    f"Status: {cdata.get('status', '').upper()}",
+                    f"Confidence: {cdata.get('confidence', 1)}/5",
+                    f"Aliases: {', '.join(cdata.get('aliases', []))}",
+                    "",
+                    "Recent Evidence:"
+                ]
+                if recent_evidence:
+                    lines.extend(f"  - {e}" for e in recent_evidence)
+                else:
+                    lines.append("  - None")
 
-            return render_panel("Concept Explanation", lines, status="ok")
+                return render_panel("Concept Explanation", lines, status="ok")
         except Exception as e:
             return render_panel("Explanation Failure", [f"Error: {e}"], status="error")
 
@@ -612,44 +619,44 @@ Your conversation was not fully committed to OEM memory. Please retry session en
             direction: incoming, outgoing, or both. Defaults to both.
             project: Project directory path. Defaults to current directory.
         """
-        eng = KnowledgeEngine(project or None)
         try:
-            registry = eng.state._load_registry(project or None)
-            cdata = registry.get(concept_id)
-            if not cdata:
-                return render_panel("Query Error", [f"Concept {concept_id} not found."], status="error")
+            with KnowledgeEngine(project or None) as eng:
+                registry = eng.state._load_registry(project or None)
+                cdata = registry.get(concept_id)
+                if not cdata:
+                    return render_panel("Query Error", [f"Concept {concept_id} not found."], status="error")
 
-            lines = [
-                f"Concept: {cdata.get('canonical_name', '').replace('-', ' ').upper()} ({concept_id})",
-                ""
-            ]
+                lines = [
+                    f"Concept: {cdata.get('canonical_name', '').replace('-', ' ').upper()} ({concept_id})",
+                    ""
+                ]
 
-            if direction in ("outgoing", "both"):
-                lines.append("Outgoing Relationships:")
-                relationships = cdata.get("relationships", [])
-                for r in relationships:
-                    target_id = r.get("target")
-                    target_name = registry.get(target_id, {}).get("canonical_name") or target_id
-                    lines.append(f"  - [{r.get('type')}] -> {target_name} ({target_id})")
-                if not relationships:
-                    lines.append("  - None")
-                lines.append("")
-
-            if direction in ("incoming", "both"):
-                lines.append("Incoming Relationships:")
-                incoming_count = 0
-                for cid, data in registry.items():
-                    if cid == concept_id:
-                        continue
-                    relationships = data.get("relationships", [])
+                if direction in ("outgoing", "both"):
+                    lines.append("Outgoing Relationships:")
+                    relationships = cdata.get("relationships", [])
                     for r in relationships:
-                        if r.get("target") == concept_id:
-                            lines.append(f"  - {data.get('canonical_name')} ({cid}) -> [{r.get('type')}]")
-                            incoming_count += 1
-                if incoming_count == 0:
-                    lines.append("  - None")
+                        target_id = r.get("target")
+                        target_name = registry.get(target_id, {}).get("canonical_name") or target_id
+                        lines.append(f"  - [{r.get('type')}] -> {target_name} ({target_id})")
+                    if not relationships:
+                        lines.append("  - None")
+                    lines.append("")
 
-            return render_panel("Graph Query Results", lines, status="ok")
+                if direction in ("incoming", "both"):
+                    lines.append("Incoming Relationships:")
+                    incoming_count = 0
+                    for cid, data in registry.items():
+                        if cid == concept_id:
+                            continue
+                        relationships = data.get("relationships", [])
+                        for r in relationships:
+                            if r.get("target") == concept_id:
+                                lines.append(f"  - {data.get('canonical_name')} ({cid}) -> [{r.get('type')}]")
+                                incoming_count += 1
+                    if incoming_count == 0:
+                        lines.append("  - None")
+
+                return render_panel("Graph Query Results", lines, status="ok")
         except Exception as e:
             return render_panel("Query Failure", [f"Error: {e}"], status="error")
 

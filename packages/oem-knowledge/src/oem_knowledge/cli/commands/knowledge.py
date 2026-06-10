@@ -38,6 +38,7 @@ def _run_knowledge_command_impl(args):
     from oem_knowledge.engine import KnowledgeEngine
 
     eng = KnowledgeEngine(project)
+    import atexit; atexit.register(eng.close)
 
     if args.command in ("status", "stats"):
         s = eng.search.stats()

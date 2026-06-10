@@ -332,6 +332,7 @@ def run_system_command(args):
     # Lazy-load KnowledgeEngine to avoid Pydantic imports on help/setup
     from oem_knowledge.engine import KnowledgeEngine
     eng = KnowledgeEngine(project)
+    import atexit; atexit.register(eng.close)
 
     if args.command == "setup":
         if args.setup_target == "opencode":

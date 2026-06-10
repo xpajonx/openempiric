@@ -61,10 +61,6 @@ def test_vector_store_close_is_idempotent(tmp_path):
 
 # ========== Test 4: SearchService.close() closes cached VectorStore ==========
 
-@pytest.mark.xfail(
-    reason="CRIT-05: SearchService has no close() method to release its cached VectorStore",
-    strict=True,
-)
 def test_search_service_close_closes_cached_vector_store(tmp_path):
     """SearchService.close() should close its cached VectorStore."""
     engine = KnowledgeEngine(tmp_path)
@@ -90,10 +86,6 @@ def test_search_service_close_closes_cached_vector_store(tmp_path):
 
 # ========== Test 5: Engine.close() closes owned VectorStore ==========
 
-@pytest.mark.xfail(
-    reason="CRIT-05: KnowledgeEngine has no close() method to release owned resources",
-    strict=True,
-)
 def test_engine_close_closes_owned_vector_store(tmp_path):
     """KnowledgeEngine.close() should delegate to SearchService.close()."""
     engine = KnowledgeEngine(tmp_path)
@@ -155,25 +147,171 @@ def test_close_releases_sqlite_lock(tmp_path):
     assert len(chunks) == 2
     store2.close()
 
-# ========== Test 8: Server MCP handler leaks (documentation) ==========
+# ========== Test 8: Server MCP handler closes engine resources ==========
 
-@pytest.mark.xfail(
-    reason="CRIT-05C: MCP/server handlers create KnowledgeEngine per tool call without closing owned VectorStore resources",
-    strict=True,
-)
-def test_server_mcp_handler_closes_engine_resources(tmp_path):
+def test_server_mcp_handler_closes_engine_resources(tmp_path, monkeypatch):
     """MCP tool handlers should close KnowledgeEngine after each tool call."""
-    # This documents the current leak in server.py:
-    # mount_tools() creates engine = KnowledgeEngine() at module level
-    # Each @mcp.tool() creates new KnowledgeEngine(project or None) without close()
-    # 
-    # CRIT-05C will fix by:
-    # - Adding engine.close() call in each tool handler
-    # - Or using a shared engine with explicit lifecycle management
-    
-    # For now, characterize by verifying the leak pattern exists
-    from oem_knowledge.server import knowledge_index, knowledge_search
-    
-    # These create engines internally but don't close them
-    # (Can't easily test without running full MCP, so this is documentation)
-    pass
+    from fastmcp import FastMCP
+    import oem_knowledge.server as server_module
+
+    closed = []
+
+    class FakeEngine:
+        def __init__(self, *args, **kwargs):
+            self.search = MagicMock()
+            self.search.search.return_value = []
+            self.search.stats.return_value = {"total_chunks": 0, "db_size_mb": 0, "harness_path": ""}
+            self.state = MagicMock()
+            self.state.consolidate.return_value = {"message": "", "merged": []}
+            self.state._load_registry.return_value = {}
+            self.state.get_events.return_value = []
+            self.state.get_event.side_effect = KeyError("not found")
+            self.state.merge_concepts.return_value = {"status": "error", "message": ""}
+            self.state.detect_stale_concepts.return_value = []
+            self.materialization = MagicMock()
+            self.materialization.materialize_concepts.return_value = {"message": "", "materialized": []}
+            self.materialization.update_graph.return_value = {"message": "", "links_updated": 0}
+            self.reflection = MagicMock()
+            self.reflection.reflect_session.return_value = {"status": "success", "knowledge_events": [], "report_path": ""}
+            self.fitness = MagicMock()
+            self.fitness.calculate_fitness.return_value = {}
+            self.event_migrator = MagicMock()
+            self.event_migrator.get_schema_status.return_value = {"status": "up_to_date", "message": ""}
+            self._resolve_harness = MagicMock(return_value=tmp_path / ".oem")
+            self.init_project = MagicMock(return_value={"status": "success"})
+
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            self.close()
+        def close(self):
+            closed.append(True)
+        def propose_merges(self, *args, **kwargs):
+            return []
+        def detect_contradictions(self, *args, **kwargs):
+            return []
+        def embedding_cache_ready(self):
+            return True
+        def _ensure_open(self):
+            pass
+
+    monkeypatch.setattr(server_module, "KnowledgeEngine", FakeEngine)
+
+    registered_tools = {}
+
+    class MockMCP(FastMCP):
+        def __init__(self):
+            super().__init__("test")
+        def tool(self, name=None):
+            def decorator(f):
+                registered_tools[name or f.__name__] = f
+                return f
+            return decorator
+
+    server_module.mount_tools(MockMCP())
+
+    # Test success path - knowledge_search
+    closed.clear()
+    result = registered_tools['knowledge_search'](query="test", project="")
+    assert len(closed) == 1, "knowledge_search should close its engine on success"
+    assert "error" not in result.lower()
+
+    # Test success path - knowledge_consolidate
+    closed.clear()
+    result = registered_tools['knowledge_consolidate'](project="")
+    assert len(closed) == 1, "knowledge_consolidate should close its engine on success"
+    assert "error" not in result.lower()
+
+    # Test success path - knowledge_get_events
+    closed.clear()
+    result = registered_tools['knowledge_get_events'](project="")
+    assert len(closed) == 1, "knowledge_get_events should close its engine on success"
+    assert "error" not in result.lower()
+
+    # Test error path - set up a fake that raises
+    failing_closed = []
+
+    class FailingFakeEngine(FakeEngine):
+        def close(self):
+            failing_closed.append(True)
+        def __exit__(self, *args):
+            self.close()
+
+    monkeypatch.setattr(server_module, "KnowledgeEngine", FailingFakeEngine)
+
+    # Re-register tools with failing engine
+    registered_tools2 = {}
+    class MockMCP2(FastMCP):
+        def __init__(self):
+            super().__init__("test2")
+        def tool(self, name=None):
+            def decorator(f):
+                registered_tools2[name or f.__name__] = f
+                return f
+            return decorator
+    server_module.mount_tools(MockMCP2())
+
+    failing_closed.clear()
+    result = registered_tools2['knowledge_get_event'](project="", event_id="nonexistent")
+    assert len(failing_closed) >= 1, "knowledge_get_event should close its engine even on KeyError"
+    # The tool catches KeyError and returns a "not found" panel, not an unhandled exception
+    assert "not found" in result.lower() or "error" in result.lower()
+
+
+# ========== Test 9: SearchService.close() is idempotent ==========
+
+def test_search_service_close_is_idempotent(tmp_path):
+    """Calling SearchService.close() multiple times should not crash."""
+    engine = KnowledgeEngine(tmp_path)
+    engine.init_project("test")
+    store = engine.search.vector_store
+    store.upsert("id1", "doc", {"source": "test"}, [0.1])
+
+    engine.search.close()
+    engine.search.close()  # Second call should be a no-op
+    assert engine.search._vector_store is None
+
+
+# ========== Test 10: SearchService lazily recreates store after close ==========
+
+def test_search_service_reuses_after_close(tmp_path):
+    """SearchService should lazily create a fresh VectorStore after close()."""
+    engine = KnowledgeEngine(tmp_path)
+    engine.init_project("test")
+
+    store1 = engine.search.vector_store
+    store1.upsert("id1", "doc1", {"source": "test"}, [0.1])
+
+    engine.search.close()
+    assert engine.search._vector_store is None
+
+    # Accessing vector_store again should create a new one
+    store2 = engine.search.vector_store
+    assert store2 is not None
+    assert store2 is not store1
+    assert engine.search._vector_store is store2
+    store2.upsert("id2", "doc2", {"source": "test"}, [0.2])
+    chunks = store2.all_chunks()
+    assert len(chunks) == 2  # Both old and new chunks should be readable
+
+
+# ========== Test 11: KnowledgeEngine context manager ==========
+
+def test_knowledge_engine_context_manager(tmp_path):
+    """KnowledgeEngine should be usable as a context manager."""
+    engine = KnowledgeEngine(tmp_path)
+    engine.init_project("test")
+    store = engine.search.vector_store
+    store.upsert("id1", "doc", {"source": "test"}, [0.1])
+
+    close_called = []
+    original_close = store.close
+    def tracking_close():
+        close_called.append(True)
+        original_close()
+    store.close = tracking_close
+
+    with engine:
+        pass
+
+    assert close_called, "Engine.__exit__ should call SearchService.close()"
