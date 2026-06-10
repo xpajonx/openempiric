@@ -9,9 +9,23 @@ import time
 import warnings
 from collections import Counter
 from pathlib import Path
+def build_embedding_runtime_env(base_env: dict[str, str] | None = None) -> dict[str, str]:
+    """Builds a runtime environment mapping for embeddings and model execution,
+    setting defaults for CUDA_VISIBLE_DEVICES and TOKENIZERS_PARALLELISM if not already set,
+    without mutating the global os.environ.
+    """
+    env = dict(base_env or os.environ)
+    env.setdefault("CUDA_VISIBLE_DEVICES", "")
+    env.setdefault("TOKENIZERS_PARALLELISM", "false")
+    return env
 
-os.environ["CUDA_VISIBLE_DEVICES"] = ""
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+def apply_oem_process_env_defaults() -> None:
+    """Explicitly mutates os.environ to set safe defaults for openempiric-knowledge execution.
+    Only call this from explicit process entrypoints (like CLI main or MCP server startup).
+    """
+    os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+    os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 from oem_knowledge.fs import FileLock, SecureFileSystem
 from oem_knowledge.project_layout import ProjectLayout

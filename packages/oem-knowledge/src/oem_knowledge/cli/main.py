@@ -4,6 +4,9 @@ import sys
 
 
 def main():
+    from oem_knowledge.engine import apply_oem_process_env_defaults
+    apply_oem_process_env_defaults()
+
     # 1. Parse arguments using the fast stdlib-only parser
     from .parser import _setup_parser
     parser = _setup_parser()

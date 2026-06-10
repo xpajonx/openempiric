@@ -655,6 +655,9 @@ Your conversation was not fully committed to OEM memory. Please retry session en
 
 
 def main() -> None:
+    from oem_knowledge.engine import apply_oem_process_env_defaults
+    apply_oem_process_env_defaults()
+
     from fastmcp import FastMCP
     mcp = FastMCP("openempiric")
     mount_tools(mcp)

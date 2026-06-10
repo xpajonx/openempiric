@@ -77,20 +77,12 @@ def test_import_vector_store_does_not_mutate_sensitive_env(controlled_sensitive_
     assert_sensitive_env_unchanged(controlled_sensitive_env)
 
 
-@pytest.mark.xfail(
-    reason="CRIT-04: engine/server import mutates sensitive environment variables at import time",
-    strict=True,
-)
 def test_import_engine_does_not_mutate_sensitive_env(controlled_sensitive_env):
     """Import engine in an isolated subprocess and verify it does not mutate env."""
     result = run_import_check_in_subprocess("oem_knowledge.engine", controlled_sensitive_env)
     assert result.returncode == 0, f"Subprocess output:\nStdout: {result.stdout}\nStderr: {result.stderr}"
 
 
-@pytest.mark.xfail(
-    reason="CRIT-04: engine/server import mutates sensitive environment variables at import time",
-    strict=True,
-)
 def test_import_server_does_not_mutate_sensitive_env(controlled_sensitive_env):
     """Import server in an isolated subprocess and verify it does not mutate env."""
     result = run_import_check_in_subprocess("oem_knowledge.server", controlled_sensitive_env)
@@ -102,3 +94,51 @@ def test_reload_search_related_module_does_not_mutate_sensitive_env(controlled_s
     import oem_knowledge.services.search as search_module
     importlib.reload(search_module)
     assert_sensitive_env_unchanged(controlled_sensitive_env)
+
+
+def test_build_embedding_runtime_env_does_not_mutate_os_environ(monkeypatch):
+    """Verify build_embedding_runtime_env does not mutate global os.environ."""
+    from oem_knowledge.engine import build_embedding_runtime_env
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0")
+    before = os.environ.get("CUDA_VISIBLE_DEVICES")
+
+    env = build_embedding_runtime_env()
+
+    assert os.environ.get("CUDA_VISIBLE_DEVICES") == before
+    assert env is not os.environ
+
+
+def test_build_embedding_runtime_env_returns_expected_defaults(monkeypatch):
+    """Verify build_embedding_runtime_env provides correct fallback defaults."""
+    from oem_knowledge.engine import build_embedding_runtime_env
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    monkeypatch.delenv("TOKENIZERS_PARALLELISM", raising=False)
+
+    env = build_embedding_runtime_env()
+
+    assert env.get("CUDA_VISIBLE_DEVICES") == ""
+    assert env.get("TOKENIZERS_PARALLELISM") == "false"
+
+
+def test_build_embedding_runtime_env_preserves_existing_user_values(monkeypatch):
+    """Verify build_embedding_runtime_env preserves pre-existing environment values."""
+    from oem_knowledge.engine import build_embedding_runtime_env
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0")
+    monkeypatch.setenv("TOKENIZERS_PARALLELISM", "true")
+
+    env = build_embedding_runtime_env()
+
+    assert env.get("CUDA_VISIBLE_DEVICES") == "0"
+    assert env.get("TOKENIZERS_PARALLELISM") == "true"
+
+
+def test_apply_oem_process_env_defaults_preserves_existing_user_values(monkeypatch):
+    """Verify apply_oem_process_env_defaults does not overwrite pre-existing user environment values."""
+    from oem_knowledge.engine import apply_oem_process_env_defaults
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "2")
+    monkeypatch.setenv("TOKENIZERS_PARALLELISM", "true")
+
+    apply_oem_process_env_defaults()
+
+    assert os.environ.get("CUDA_VISIBLE_DEVICES") == "2"
+    assert os.environ.get("TOKENIZERS_PARALLELISM") == "true"
