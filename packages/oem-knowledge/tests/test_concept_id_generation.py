@@ -59,7 +59,6 @@ def temp_project(tmp_path):
     engine.init_project(str(project_dir))
     return project_dir, engine
 
-@pytest.mark.xfail(strict=True, reason="CRIT-03: current concept ID generation can reuse IDs of deleted registry entries")
 def test_deleted_registry_entry_does_not_reuse_id(temp_project):
     """1. Deleted registry entry must not allow ID reuse."""
     project_dir, engine = temp_project
@@ -105,7 +104,6 @@ def test_deleted_registry_entry_does_not_reuse_id(temp_project):
     assert new_cid != "concept_003"
     assert new_cid != "concept_001"
 
-@pytest.mark.xfail(strict=True, reason="CRIT-03: current concept ID generation can overwrite orphan wiki files")
 def test_orphan_wiki_file_blocks_id_reuse(temp_project):
     """2. Orphan wiki file must block ID reuse and must not be overwritten."""
     project_dir, engine = temp_project
@@ -147,7 +145,6 @@ def test_orphan_wiki_file_blocks_id_reuse(temp_project):
     assert beta_cid != "concept_002"
     assert orphan_file.read_text(encoding="utf-8") == "SENTINEL: DO NOT OVERWRITE"
 
-@pytest.mark.xfail(strict=True, reason="CRIT-03: registry gap causes collision on subsequent allocations")
 def test_registry_gap_does_not_cause_collision(temp_project):
     """3. Registry gap must not cause collision."""
     project_dir, engine = temp_project
@@ -294,7 +291,6 @@ def test_concurrent_materialization_does_not_duplicate_ids(temp_project):
     assert gamma_cid is not None
     assert beta_cid != gamma_cid, f"Duplicate IDs generated concurrently: {beta_cid}"
 
-@pytest.mark.xfail(strict=True, reason="CRIT-03: current logic overwrites existing wiki files when allocating IDs")
 def test_existing_wiki_file_content_not_overwritten(temp_project):
     """6. Existing wiki file content must not be overwritten."""
     project_dir, engine = temp_project

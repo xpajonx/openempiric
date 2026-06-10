@@ -1,6 +1,10 @@
 from pathlib import Path
 import re
 
+class ConceptIdCollisionError(RuntimeError):
+    """Raised when allocating a concept ID would result in overwriting an existing wiki file."""
+    pass
+
 def allocate_concept_id(
     registry: dict,
     wiki_dir: Path | None = None,

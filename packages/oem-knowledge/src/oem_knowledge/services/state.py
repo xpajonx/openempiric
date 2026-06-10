@@ -104,19 +104,29 @@ class StateService:
             logger.error("Timed out acquiring state lock for %s", p)
             raise
 
-    def _resolve_concept(self, term: str, registry: dict) -> tuple[str, dict]:
+    def _resolve_concept(
+        self,
+        term: str,
+        registry: dict,
+        project: str | None = None,
+        reserved_ids: set[str] | None = None,
+    ) -> tuple[str, dict]:
         import difflib
         term_clean = re.sub(r"[^\w\s-]", "", term).strip().lower()
         if not term_clean:
             term_clean = term.strip().lower()
 
         for cid, data in registry.items():
+            if not isinstance(data, dict) or not cid.startswith("concept_"):
+                continue
             canon = data.get("canonical_name", "").lower()
             aliases = [a.lower() for a in data.get("aliases", [])]
             if term_clean == canon or term_clean in aliases:
                 return cid, data
 
         for cid, data in registry.items():
+            if not isinstance(data, dict) or not cid.startswith("concept_"):
+                continue
             canon = data.get("canonical_name", "").lower()
             aliases = [a.lower() for a in data.get("aliases", [])]
             candidates = [canon] + aliases
@@ -126,11 +136,18 @@ class StateService:
                         data.setdefault("aliases", []).append(term)
                     return cid, data
 
-        next_num = len(registry) + 1
-        new_id = f"concept_{next_num:03d}"
+        from oem_knowledge.concept_id import allocate_concept_id
+        wiki_dir = self.engine._concepts_dir(project)
+        new_id = allocate_concept_id(registry, wiki_dir, reserved_ids)
+        if reserved_ids is not None:
+            reserved_ids.add(new_id)
+
+        match = re.match(r"^concept_(\d+)$", new_id)
+        allocated_num = int(match.group(1)) if match else 1
+
         canon_name = (
             re.sub(r"[^a-zA-Z0-9\s-]", "", term).strip().replace(" ", "-").lower()
-            or f"concept-{next_num}"
+            or f"concept-{allocated_num}"
         )
         new_data = ConceptData(
             concept_id=new_id, canonical_name=canon_name, aliases=[term]
@@ -353,6 +370,7 @@ class StateService:
         sfs = self.engine._sfs(project)
 
         temp_registry = {}
+        reserved_ids = set()
         if sfs.exists(concepts_dir):
             for f in concepts_dir.glob("concept_*.md"):
                 try:
@@ -372,7 +390,7 @@ class StateService:
                 else event.get("concept", "General")
             )
 
-            cid, cdata = self._resolve_concept(primary_term, temp_registry)
+            cid, cdata = self._resolve_concept(primary_term, temp_registry, project, reserved_ids)
 
             if event.get("evidence"):
                 cdata["evidence_count"] = cdata.get("evidence_count", 0) + 1

@@ -231,17 +231,20 @@ class MaterializationService:
             }
 
         registry = self.engine.state._load_registry(project)
+        initial_registry_keys = set(registry.keys())
         fitness_data = self.engine.fitness.calculate_fitness(project)
         materialized_log = []
         skipped_oem_generated_event_details = []
         suspicious_concepts = []
 
-        # Derive already processed session IDs from the registry
+        # Derive already processed session IDs from the registry, skipping metadata/non-concept keys
         processed_sessions = set()
-        for cdata in registry.values():
-            processed_sessions.update(cdata.get("sessions", []))
+        for cid, cdata in registry.items():
+            if isinstance(cdata, dict) and cid.startswith("concept_"):
+                processed_sessions.update(cdata.get("sessions", []))
 
         registry_updated = False
+        reserved_ids = set()
 
         for session_file in session_files:
             session_id = session_file.stem
@@ -339,7 +342,7 @@ class MaterializationService:
                         source_type,
                     )
 
-                cid, cdata = self.engine.state._resolve_concept(concept, registry)
+                cid, cdata = self.engine.state._resolve_concept(concept, registry, project, reserved_ids)
                 if suspicious_slug:
                     cdata.setdefault("diagnostics", {})["suspicious_concept_slug"] = True
 
@@ -355,8 +358,14 @@ class MaterializationService:
                 try:
                     if new_status in ("validated", "canonical", "needs_review"):
                         existing_body = ""
-                        is_new = not concept_file.exists()
-                        if not is_new:
+                        is_new_concept = cid not in initial_registry_keys
+                        if is_new_concept and concept_file.exists():
+                            from oem_knowledge.concept_id import ConceptIdCollisionError
+                            raise ConceptIdCollisionError(
+                                f"Concept ID collision: wiki file {concept_file} already exists for new concept {cid}"
+                            )
+                        is_new_file = not concept_file.exists()
+                        if not is_new_file:
                             try:
                                 text = concept_file.read_text(encoding="utf-8")
                                 fm = re.match(r"^---\s*\n.*?\n---\s*\n(.*)$", text, re.DOTALL)
@@ -365,7 +374,7 @@ class MaterializationService:
                                 logger.warning("Failed to read existing concept file %s: %s", concept_file, e)
 
                         learning = f"- **{e_type.title()}**: {evidence}" if evidence else ""
-                        if is_new:
+                        if is_new_file:
                             if new_status == "needs_review":
                                 body = f"# {cdata['canonical_name'].replace('-', ' ').title()}\n\nThis concept requires review due to repeated session failures.\n\n## Learnings\n{learning}\n"
                             else:
