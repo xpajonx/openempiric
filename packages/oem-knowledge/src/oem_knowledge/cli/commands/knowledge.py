@@ -84,6 +84,22 @@ def _run_knowledge_command_impl(args):
             )
         )
 
+    elif args.command == "index":
+        res = eng.search.index_all(force=True)
+        if res.get("status") == "error":
+            print(render_panel(
+                "Indexing Failure",
+                [res.get("error", "Unknown error")],
+                status="error"
+            ))
+            sys.exit(1)
+        else:
+            print(render_panel(
+                "Indexing Complete",
+                ["Search index rebuilt successfully."],
+                status="ok"
+            ))
+
     elif args.command == "events":
         events = eng.state.get_events(
             project,

@@ -207,10 +207,10 @@ class SearchService:
             return "high"
         return "medium"
 
-    def index_all(self, force: bool = False, progress_callback=None) -> dict:
+    def index_all(self, force: bool = False, progress_callback=None, budget_seconds: float | None = None) -> dict:
         from oem_knowledge.fs import LockTimeoutError
         try:
-            return self._index_all_impl(force, progress_callback)
+            return self._index_all_impl(force, progress_callback, budget_seconds)
         except LockTimeoutError as e:
             logger.error("Lock acquisition failure during indexing: %s", e)
             return {
@@ -219,7 +219,7 @@ class SearchService:
                 "failed_files": [],
             }
 
-    def _index_all_impl(self, force: bool = False, progress_callback=None) -> dict:
+    def _index_all_impl(self, force: bool = False, progress_callback=None, budget_seconds: float | None = None) -> dict:
         harness = self.engine._resolve_harness()
         wiki_dir = harness / "wiki"
         
@@ -291,6 +291,10 @@ class SearchService:
         # 2. Chunk phase
         t_chunk_start = time.time()
         for fp in md_files:
+            if budget_seconds is not None and (time.time() - start_index_time) >= budget_seconds:
+                stats["status"] = "partial"
+                stats["error"] = "Indexing budget exceeded"
+                return stats
             try:
                 rel_path = str(fp.relative_to(harness.parent))
             except Exception:
@@ -328,6 +332,10 @@ class SearchService:
                     )
 
             for idx, (fp, path_str, old_hash, cur_hash) in enumerate(to_index):
+                if budget_seconds is not None and (time.time() - start_index_time) >= budget_seconds:
+                    stats["status"] = "partial"
+                    stats["error"] = "Indexing budget exceeded"
+                    return stats
                 if progress_callback is not None:
                     try:
                         progress_callback(idx + 1, len(to_index))
@@ -379,6 +387,10 @@ class SearchService:
         t_embed_start = time.time()
         embeddings = []
         if chunks_to_upsert and store is not None:
+            if budget_seconds is not None and (time.time() - start_index_time) >= budget_seconds:
+                stats["status"] = "partial"
+                stats["error"] = "Indexing budget exceeded"
+                return stats
             retrieval_mode = self.resolve_retrieval_mode()
             if retrieval_mode == "hybrid":
                 try:
@@ -395,6 +407,10 @@ class SearchService:
         t_write_start = time.time()
         write_error = None
         if store is not None:
+            if budget_seconds is not None and (time.time() - start_index_time) >= budget_seconds:
+                stats["status"] = "partial"
+                stats["error"] = "Indexing budget exceeded"
+                return stats
             # Batch delete
             sources_to_delete = [path_str for _, path_str, old_hash, _ in to_index if old_hash is not None and path_str not in failed_files]
             if sources_to_delete:

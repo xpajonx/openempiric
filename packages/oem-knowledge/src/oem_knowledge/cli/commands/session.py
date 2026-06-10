@@ -63,13 +63,59 @@ def _run_session_command_impl(args):
         except Exception as e:
             logging.debug(f"Could not load active session state: {e}")
 
+        no_index = getattr(args, "no_index", False)
+        index_budget = getattr(args, "index_budget_seconds", None)
+
+        if no_index and index_budget is not None:
+            print(render_panel(
+                "Invalid Arguments",
+                ["Cannot specify both --no-index and --index-budget-seconds."],
+                status="error"
+            ))
+            sys.exit(1)
+
+        if index_budget is not None and index_budget < 0:
+            print(render_panel(
+                "Invalid Arguments",
+                ["--index-budget-seconds must be non-negative."],
+                status="error"
+            ))
+            sys.exit(1)
+
+        final_budget = 10.0
+        if no_index:
+            final_budget = 0.0
+        elif index_budget is not None:
+            final_budget = index_budget
+
+        def progress_callback(phase_name: str):
+            if getattr(args, "verbose", False):
+                print(f"[session] {phase_name}...")
+                sys.stdout.flush()
+
         commit_start = time.time()
         res = eng.session_commit(
             project,
             args.chat,
             args.session_id,
-            session_started_at=session_started_at
+            session_started_at=session_started_at,
+            update_index=not no_index,
+            index_budget_seconds=final_budget,
+            progress_callback=progress_callback
         )
+        commit_duration = time.time() - commit_start
+
+        if getattr(args, "verbose", False):
+            if no_index:
+                print(f"[session] search_index skipped after 0.00s budget")
+            elif res.get("status") == "partial" and res.get("failed_step") == "search_index":
+                print(f"[session] search_index skipped after {final_budget:.2f}s budget")
+            timing_total = res.get("phase_timings", {}).get("total", commit_duration)
+            print(f"[session] done in {timing_total:.2f}s")
+            if res.get("status") == "partial" and res.get("failed_step") == "search_index":
+                print(f"[session] partial success: canonical memory saved; search index needs rebuild")
+            sys.stdout.flush()
+
         if res.get("status") == "error":
             print(render_panel(
                 "Session End Failure",
@@ -80,7 +126,17 @@ def _run_session_command_impl(args):
                 status="error"
             ))
             sys.exit(1)
-        commit_duration = time.time() - commit_start
+
+        if res.get("status") == "partial" and not getattr(args, "verbose", False):
+            print("Session end: partial success")
+            print("Canonical memory saved.")
+            if res.get("failed_step") == "search_index":
+                print("Search indexing skipped after budget.")
+                proj_path = project or "."
+                print(f"Run `oem index --project {proj_path}`.")
+            else:
+                for w in res.get("warnings", []):
+                    print(f"Warning: {w}")
 
         from oem_knowledge.runtime.supervisor import render_commit_complete_panel
         report_name = Path(res['report_path']).name

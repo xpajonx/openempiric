@@ -76,9 +76,11 @@ class ReflectionService:
         session_id: str = "",
         telemetry: dict | None = None,
         session_started_at: float | None = None,
+        progress_callback = None,
     ) -> dict:
         import time
         import uuid
+        start_t = time.perf_counter()
         if not session_id:
             session_id = f"session_{time.strftime('%Y%m%d_%H%M%S')}"
 
@@ -88,6 +90,7 @@ class ReflectionService:
         structured_events_found = 0
         fallback_extraction_used = False
         fallback_extractions_count = 0
+
         excluded_oem_generated_paths: set[str] = set()
 
         def _track_excluded_file(path: Path | str) -> None:
@@ -344,6 +347,14 @@ class ReflectionService:
                     fallback_extraction_used = True
                     fallback_extractions_count = len(fallback_events)
 
+        reflection_time = time.perf_counter() - start_t
+        if progress_callback is not None:
+            try:
+                progress_callback("append_events")
+            except Exception:
+                pass
+        t_append_start = time.perf_counter()
+
         seen = set()
         canonical_events = []
         for ev in knowledge_events:
@@ -372,6 +383,14 @@ class ReflectionService:
             }
             canonical_events.append(canonical_event)
             self.engine.state._append_event(canonical_event, project)
+
+        append_events_time = time.perf_counter() - t_append_start
+        if progress_callback is not None:
+            try:
+                progress_callback("write_report")
+            except Exception:
+                pass
+        t_write_start = time.perf_counter()
 
         # Prioritize events: chat-derived first, then orchestrator, then file observations
         canonical_events.sort(key=lambda e: _SOURCE_PRIORITY.get(e.get("source", ""), 99))
@@ -412,6 +431,8 @@ project: {project or "default"}
         except OSError as e:
             logger.error("Failed to write session learning report to %s: %s", report_file, e)
             return {"status": "error", "failed_step": "reflection", "message": f"Failed to write session learning report: {e}"}
+
+        write_report_time = time.perf_counter() - t_write_start
 
         source_counts = {}
         for ev in canonical_events:
@@ -474,4 +495,9 @@ project: {project or "default"}
             "canonical_events": canonical_events,
             "explainability": explainability,
             "warnings": warnings_list,
+            "phase_timings": {
+                "reflection": reflection_time,
+                "append_events": append_events_time,
+                "write_report": write_report_time,
+            }
         }

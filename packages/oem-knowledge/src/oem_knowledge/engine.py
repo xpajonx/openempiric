@@ -29,8 +29,32 @@ def apply_oem_process_env_defaults() -> None:
 
 from oem_knowledge.fs import FileLock, SecureFileSystem
 from oem_knowledge.project_layout import ProjectLayout
+from contextlib import contextmanager
+from typing import Callable
 
+class PhaseTimer:
+    def __init__(self):
+        self.timings = {}
+        self.current_phase = None
+        self.failed_phase = None
 
+    @contextmanager
+    def phase(self, name: str, callback: Callable[[str], None] | None = None):
+        if callback is not None:
+            try:
+                callback(name)
+            except Exception:
+                pass
+        self.current_phase = name
+        start = time.perf_counter()
+        try:
+            yield
+        except Exception:
+            self.failed_phase = name
+            raise
+        finally:
+            self.timings[name] = time.perf_counter() - start
+            self.current_phase = None
 
 OEM_DIR = ".oem"
 DEFAULT_DIRS = [
@@ -523,57 +547,111 @@ class KnowledgeEngine:
         session_id: str = "",
         telemetry: dict | None = None,
         session_started_at: float | None = None,
+        update_index: bool = True,
+        index_budget_seconds: float | None = 10.0,
+        progress_callback = None,
     ) -> dict:
         from oem_knowledge.fs import LockTimeoutError
-        # Core Orchestration flow using extracted services
         from oem_knowledge.runtime.supervisor import CommitProgressSupervisor
+        
+        timer = PhaseTimer()
+        start_time = time.perf_counter()
+        
         progress = CommitProgressSupervisor()
         progress.start()
+        
+        warnings = []
+        res = {"report_path": None, "knowledge_events": [], "explainability": {}}
+        mat_log = []
+        idx_res = {}
+        links_updated = 0
+        failed_step = None
+        status = "success"
+        message = ""
 
         try:
             progress.update_step("transcript", "running")
+            with timer.phase("load_state", progress_callback):
+                if not session_id:
+                    session_id = f"session_{time.strftime('%Y%m%d_%H%M%S')}"
             progress.update_step("transcript", "success")
 
             progress.update_step("reflection", "running")
-            res = self.reflection.reflect_session(
-                project, conversation_text, session_id=session_id, telemetry=telemetry, session_started_at=session_started_at
-            )
-            if res["status"] == "error":
-                progress.update_step("reflection", "failed")
-                return {
-                    "status": "error",
-                    "failed_step": res.get("failed_step", "reflection"),
-                    "message": res.get("message", "Reflection failed"),
-                    "report_path": res.get("report_path"),
-                    "knowledge_events": res.get("knowledge_events", []),
-                    "materialized_log": [],
-                    "links_updated": 0,
-                    "index_stats": {},
-                    "explainability": res.get("explainability", {}),
-                    "warnings": res.get("warnings", []),
-                }
+            with timer.phase("reflection", progress_callback):
+                res = self.reflection.reflect_session(
+                    project,
+                    conversation_text,
+                    session_id=session_id,
+                    telemetry=telemetry,
+                    session_started_at=session_started_at,
+                    progress_callback=progress_callback,
+                )
+                if "phase_timings" in res:
+                    timer.timings.update(res["phase_timings"])
+
+                if res.get("status") == "error":
+                    progress.update_step("reflection", "failed")
+                    timer.timings["total"] = time.perf_counter() - start_time
+                    p_timings = {
+                        "load_state": timer.timings.get("load_state", 0.0),
+                        "reflection": timer.timings.get("reflection", 0.0),
+                        "append_events": timer.timings.get("append_events", 0.0),
+                        "materialization": 0.0,
+                        "search_index": 0.0,
+                        "write_report": timer.timings.get("write_report", 0.0),
+                        "cleanup": 0.0,
+                        "total": timer.timings["total"],
+                    }
+                    return {
+                        "status": "error",
+                        "failed_step": "reflection",
+                        "message": res.get("message", "Reflection failed"),
+                        "report_path": res.get("report_path"),
+                        "knowledge_events": res.get("knowledge_events", []),
+                        "materialized_log": [],
+                        "links_updated": 0,
+                        "index_stats": {},
+                        "explainability": res.get("explainability", {}),
+                        "warnings": res.get("warnings", []),
+                        "phase_timings": p_timings,
+                    }
             progress.update_step("reflection", "success")
 
             progress.update_step("materialization", "running")
-            mat_res = self.materialization.materialize_concepts(project)
-            if mat_res.get("status") == "error":
-                progress.update_step("materialization", "failed")
-                return {
-                    "status": "error",
-                    "failed_step": mat_res.get("failed_step", "materialization"),
-                    "message": mat_res.get("message", "Materialization failed"),
-                    "report_path": res.get("report_path"),
-                    "knowledge_events": res.get("knowledge_events", []),
-                    "materialized_log": [],
-                    "links_updated": 0,
-                    "index_stats": {},
-                    "explainability": res.get("explainability", {}),
-                    "warnings": res.get("warnings", []),
-                }
-            mat_log = mat_res.get("materialized", [])
+            with timer.phase("materialization", progress_callback):
+                mat_res = self.materialization.materialize_concepts(project)
+                if mat_res.get("status") == "error":
+                    progress.update_step("materialization", "failed")
+                    timer.timings["total"] = time.perf_counter() - start_time
+                    p_timings = {
+                        "load_state": timer.timings.get("load_state", 0.0),
+                        "reflection": timer.timings.get("reflection", 0.0),
+                        "append_events": timer.timings.get("append_events", 0.0),
+                        "materialization": timer.timings.get("materialization", 0.0),
+                        "search_index": 0.0,
+                        "write_report": timer.timings.get("write_report", 0.0),
+                        "cleanup": 0.0,
+                        "total": timer.timings["total"],
+                    }
+                    return {
+                        "status": "error",
+                        "failed_step": "materialization",
+                        "message": mat_res.get("message", "Materialization failed"),
+                        "report_path": res.get("report_path"),
+                        "knowledge_events": res.get("knowledge_events", []),
+                        "materialized_log": [],
+                        "links_updated": 0,
+                        "index_stats": {},
+                        "explainability": res.get("explainability", {}),
+                        "warnings": warnings + mat_res.get("warnings", []),
+                        "phase_timings": p_timings,
+                    }
+                mat_log = mat_res.get("materialized", [])
+                warnings.extend(mat_res.get("warnings", []))
             progress.update_step("materialization", "success")
 
-            progress.update_step("index", "running")
+            links_updated = self.materialization.update_graph(project).get("links_updated", 0)
+
             idx_res = {
                 "status": "success",
                 "new": 0,
@@ -588,76 +666,105 @@ class KnowledgeEngine:
                 "failed_files": [],
             }
             index_failed_reason = None
-            try:
-                def index_progress(current, total):
-                    mode_str = "embeddings" if self.search.resolve_retrieval_mode() == "hybrid" else "files"
-                    progress.update_step("index", "running", detail=f"{current} / {total} {mode_str}")
-                idx_res = self.search.index_all(progress_callback=index_progress)
-                if idx_res.get("status") == "error":
-                    progress.update_step("index", "failed")
-                    return {
-                        "status": "error",
-                        "failed_step": "indexing",
-                        "message": idx_res.get("error", "Indexing failed"),
-                        "report_path": res.get("report_path"),
-                        "knowledge_events": res.get("knowledge_events", []),
-                        "materialized_log": mat_log,
-                        "links_updated": 0,
-                        "index_stats": idx_res,
-                        "explainability": res.get("explainability", {}),
-                        "warnings": res.get("warnings", []) + [f"Indexing failed: {idx_res.get('error')}"],
-                    }
-                elif idx_res.get("status") == "partial":
-                    index_failed_reason = idx_res.get("error") or f"Some files failed to index: {', '.join(idx_res.get('failed_files', []))}"
-                    progress.update_step("index", "failed")
-                else:
-                    progress.update_step("index", "success")
-            except Exception as e:
-                index_failed_reason = str(e)
-                progress.update_step("index", "failed")
-                idx_res = {
-                    "status": "error",
-                    "new": 0,
-                    "updated": 0,
-                    "scanned": 0,
-                    "unchanged": 0,
-                    "failed": 0,
-                    "new_chunks": 0,
-                    "updated_chunks": 0,
-                    "unchanged_chunks": 0,
-                    "failed_chunks": 0,
-                    "failed_files": [],
-                    "error": str(e),
-                }
+            
+            progress.update_step("index", "running")
+            if not update_index or index_budget_seconds == 0:
+                progress.update_step("index", "success")
+                warnings.append("Search indexing skipped after budget; run `oem index --project ...` to rebuild derived search index.")
+            else:
+                with timer.phase("search_index", progress_callback):
+                    try:
+                        def index_progress(current, total):
+                            mode_str = "embeddings" if self.search.resolve_retrieval_mode() == "hybrid" else "files"
+                            progress.update_step("index", "running", detail=f"{current} / {total} {mode_str}")
+                        
+                        idx_res = self.search.index_all(
+                            progress_callback=index_progress,
+                            budget_seconds=index_budget_seconds
+                        )
+                        
+                        if idx_res.get("status") == "error":
+                            progress.update_step("index", "failed")
+                            timer.timings["total"] = time.perf_counter() - start_time
+                            p_timings = {
+                                "load_state": timer.timings.get("load_state", 0.0),
+                                "reflection": timer.timings.get("reflection", 0.0),
+                                "append_events": timer.timings.get("append_events", 0.0),
+                                "materialization": timer.timings.get("materialization", 0.0),
+                                "search_index": timer.timings.get("search_index", 0.0),
+                                "write_report": timer.timings.get("write_report", 0.0),
+                                "cleanup": 0.0,
+                                "total": timer.timings["total"],
+                            }
+                            return {
+                                "status": "error",
+                                "failed_step": "indexing",
+                                "message": idx_res.get("error", "Indexing failed"),
+                                "report_path": res.get("report_path"),
+                                "knowledge_events": res.get("knowledge_events", []),
+                                "materialized_log": mat_log,
+                                "links_updated": links_updated,
+                                "index_stats": idx_res,
+                                "explainability": res.get("explainability", {}),
+                                "warnings": warnings + [f"indexing failed: {idx_res.get('error')}"],
+                                "phase_timings": p_timings,
+                            }
+                        elif idx_res.get("status") == "partial" and idx_res.get("error") == "Indexing budget exceeded":
+                            index_failed_reason = "Indexing budget exceeded"
+                            failed_step = "indexing"
+                            status = "partial"
+                            warnings.append("Search indexing skipped after timeout budget; run `oem index --project ...` to rebuild derived search index.")
+                            progress.update_step("index", "failed")
+                        elif idx_res.get("status") == "partial":
+                            index_failed_reason = idx_res.get("error") or f"Some files failed to index: {', '.join(idx_res.get('failed_files', []))}"
+                            failed_step = "indexing"
+                            status = "partial"
+                            progress.update_step("index", "failed")
+                        else:
+                            progress.update_step("index", "success")
+                    except Exception as e:
+                        index_failed_reason = str(e)
+                        progress.update_step("index", "failed")
+                        failed_step = "indexing"
+                        status = "partial"
+                        idx_res = {
+                            "status": "error",
+                            "new": 0, "updated": 0, "scanned": 0, "unchanged": 0, "failed": 0,
+                            "new_chunks": 0, "updated_chunks": 0, "unchanged_chunks": 0, "failed_chunks": 0,
+                            "failed_files": [],
+                            "error": str(e),
+                        }
+                        warnings.append(f"Indexing error: {e}")
 
             progress.update_step("vault", "running")
-            import os
-            if os.environ.get("OEM_VAULT_SYNC") == "1":
-                try:
-                    from .vault import GlobalVault
-                    vault = GlobalVault()
-                    local_reg = self.state._load_registry(project)
-                    concepts_dir = self._concepts_dir(project)
-                    vault.sync_from_registry(local_reg, concepts_dir)
-                except Exception:
-                    pass
+            with timer.phase("cleanup", progress_callback):
+                import os
+                if os.environ.get("OEM_VAULT_SYNC") == "1":
+                    try:
+                        from .vault import GlobalVault
+                        vault = GlobalVault()
+                        local_reg = self.state._load_registry(project)
+                        concepts_dir = self._concepts_dir(project)
+                        vault.sync_from_registry(local_reg, concepts_dir)
+                    except Exception:
+                        pass
             progress.update_step("vault", "success")
-        except LockTimeoutError as e:
-            failed_step = "state"
-            step_status = {s["id"]: s["status"] for s in progress.steps}
-            if step_status.get("index") == "running":
-                failed_step = "indexing"
-                progress.update_step("index", "failed")
-            elif step_status.get("materialization") == "running":
-                failed_step = "materialization"
-                progress.update_step("materialization", "failed")
-            elif step_status.get("reflection") == "running":
-                failed_step = "reflection"
-                progress.update_step("reflection", "failed")
 
+        except LockTimeoutError as e:
+            timer.timings["total"] = time.perf_counter() - start_time
+            p_timings = {
+                "load_state": timer.timings.get("load_state", 0.0),
+                "reflection": timer.timings.get("reflection", 0.0),
+                "append_events": timer.timings.get("append_events", 0.0),
+                "materialization": timer.timings.get("materialization", 0.0),
+                "search_index": timer.timings.get("search_index", 0.0),
+                "write_report": timer.timings.get("write_report", 0.0),
+                "cleanup": timer.timings.get("cleanup", 0.0),
+                "total": timer.timings["total"],
+            }
             return {
                 "status": "error",
-                "failed_step": failed_step,
+                "failed_step": timer.failed_phase or timer.current_phase or "state",
                 "message": f"Lock acquisition timeout: {e}",
                 "report_path": None,
                 "knowledge_events": [],
@@ -665,27 +772,41 @@ class KnowledgeEngine:
                 "links_updated": 0,
                 "index_stats": {},
                 "explainability": {},
-                "warnings": [f"Lock failure: {e}"],
+                "warnings": [f"Lock failure: Registry/state/runtime_events lock contention on file. {e}"],
+                "phase_timings": p_timings,
             }
 
+        timer.timings["total"] = time.perf_counter() - start_time
         explainability = res.get("explainability", {})
         explainability["materialized"] = len(mat_log)
+        
+        p_timings = {
+            "load_state": timer.timings.get("load_state", 0.0),
+            "reflection": timer.timings.get("reflection", 0.0),
+            "append_events": timer.timings.get("append_events", 0.0),
+            "materialization": timer.timings.get("materialization", 0.0),
+            "search_index": timer.timings.get("search_index", 0.0),
+            "write_report": timer.timings.get("write_report", 0.0),
+            "cleanup": timer.timings.get("cleanup", 0.0),
+            "total": timer.timings["total"],
+        }
 
-        warnings = res.get("warnings", [])
-        ret_status = "success"
+        ret_status = status
         if index_failed_reason:
             warnings.append(f"Session commit partial: reflection/materialization succeeded, indexing failed: {index_failed_reason}")
             ret_status = "partial"
 
         return {
             "status": ret_status,
-            "report_path": res["report_path"],
-            "knowledge_events": res["knowledge_events"],
+            "failed_step": failed_step,
+            "report_path": res.get("report_path"),
+            "knowledge_events": res.get("knowledge_events", []),
             "materialized_log": mat_log,
-            "links_updated": self.materialization.update_graph(project).get("links_updated", 0),
+            "links_updated": links_updated,
             "index_stats": idx_res,
             "explainability": explainability,
-            "warnings": warnings,
+            "warnings": warnings + res.get("warnings", []),
+            "phase_timings": p_timings,
         }
 
     def record_outcome(

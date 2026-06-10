@@ -157,35 +157,47 @@ def mount_tools(mcp: object) -> None:
         except Exception as e:
             return f"# Session End Failure\n\nError: {e}"
 
-        if res.get("status") == "error":
+        status = res.get("status", "success")
+        failed_step = res.get("failed_step")
+        warnings = res.get("warnings", [])
+        timings = res.get("phase_timings", {})
+
+        if status == "error":
             failed_step = res.get("failed_step", "reflection/materialization")
             reason = res.get("message", "Unknown failure")
             if "lock" in reason.lower() or "lock" in failed_step.lower():
-                return f"""# Session End Failed
-
-OEM could not acquire the project memory lock.
-
-Reason: {reason}
-
-Another OEM process may still be committing memory. Retry after it finishes."""
+                header = "# Session End Failed"
+                body = f"OEM could not acquire the project memory lock.\n\nReason: {reason}\n\nAnother OEM process may still be committing memory. Retry after it finishes."
+            else:
+                header = "# Session End Failure"
+                body = f"Session reflection completed, but materialization/reflection failed.\n\nFailed step: {failed_step}  \nReason: {reason}\n\nYour conversation was not fully committed to OEM memory. Please retry session end after fixing the issue."
             
-            return f"""# Session End Failure
+            lines = [header, "", body]
+            if warnings:
+                lines.append("\n### Warnings:")
+                for w in warnings:
+                    lines.append(f"- ⚠ {w}")
+            if timings:
+                lines.append("\n### Timing:")
+                for k, v in timings.items():
+                    if k == "total":
+                        continue
+                    if k == "search_index" and (v == 0.0 or failed_step == "indexing"):
+                        lines.append(f"- {k}: skipped")
+                    else:
+                        lines.append(f"- {k}: {v:.1f}s")
+                if "total" in timings:
+                    lines.append(f"- total: {timings['total']:.1f}s")
+            return "\n".join(lines)
 
-Session reflection completed, but materialization/reflection failed.
-
-Failed step: {failed_step}  
-Reason: {reason}
-
-Your conversation was not fully committed to OEM memory. Please retry session end after fixing the issue."""
-
+        from pathlib import Path
         events = res.get("knowledge_events", [])
         event_counts: dict[str, int] = {}
         for ev in events:
             t = ev.get("type", "observation")
             event_counts[t] = event_counts.get(t, 0) + 1
 
-        res_status = res.get("status", "success")
-        if res_status == "partial":
+        if status == "partial":
             status_line = "Session commit completed partially. Some steps succeeded, but others had failures (see warnings below)."
         else:
             status_line = "Session ended successfully / Session commit succeeded."
@@ -198,12 +210,13 @@ Your conversation was not fully committed to OEM memory. Please retry session en
         if res.get("report_path"):
             lines.append(f"**Report**: {Path(res.get('report_path')).name}")
             
-        if res.get("warnings"):
+        if warnings:
             lines.extend([
                 "",
                 "### Warnings:",
-                *[f"- ⚠ {w}" for w in res["warnings"]]
+                *[f"- ⚠ {w}" for w in warnings]
             ])
+            
         lines.extend([
             "",
             "### Extracted Knowledge Events:",
@@ -223,6 +236,19 @@ Your conversation was not fully committed to OEM memory. Please retry session en
                 f"- **Index**: {res.get('index_stats', {}).get('new', 0)} new, {res.get('index_stats', {}).get('updated', 0)} updated",
             ]
         )
+
+        if timings:
+            lines.append("\n### Timing:")
+            for k, v in timings.items():
+                if k == "total":
+                    continue
+                if k == "search_index" and (v == 0.0 or failed_step == "indexing"):
+                    lines.append(f"- {k}: skipped")
+                else:
+                    lines.append(f"- {k}: {v:.1f}s")
+            if "total" in timings:
+                lines.append(f"- total: {timings['total']:.1f}s")
+
         return "\n".join(lines)
 
     @mcp.tool()

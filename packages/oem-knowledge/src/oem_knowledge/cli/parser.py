@@ -89,6 +89,9 @@ def _setup_parser() -> argparse.ArgumentParser:
     search_p.add_argument("--k", type=int, default=3)
     search_p.add_argument("--project", type=str, default="")
 
+    index_p = sub.add_parser("index", help="[Advanced] Rebuild derived search index for the project")
+    index_p.add_argument("--project", type=str, default="")
+
     rebuild_p = sub.add_parser(
         "rebuild",
         help="[Advanced] Replay the event store to rebuild the concept registry",
@@ -172,6 +175,15 @@ def _setup_parser() -> argparse.ArgumentParser:
     session_end_p.add_argument("--session-id", type=str, default="")
     session_end_p.add_argument(
         "--verbose", action="store_true", help="Show detailed reflection analysis"
+    )
+    session_end_p.add_argument(
+        "--no-index", action="store_true", help="Skip search indexing during session-end"
+    )
+    session_end_p.add_argument(
+        "--index-budget-seconds",
+        type=float,
+        default=None,
+        help="Search indexing time budget in seconds (0 to skip)",
     )
 
     session_status_p = sub.add_parser("session-status", help=argparse.SUPPRESS)
