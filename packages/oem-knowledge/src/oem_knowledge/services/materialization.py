@@ -230,161 +230,166 @@ class MaterializationService:
                 "suspicious_concepts": [],
             }
 
-        registry = self.engine.state._load_registry(project)
-        initial_registry_keys = set(registry.keys())
-        fitness_data = self.engine.fitness.calculate_fitness(project)
-        materialized_log = []
-        skipped_oem_generated_event_details = []
-        suspicious_concepts = []
+        from oem_knowledge.fs import FileLock
+        registry_path = self.engine._registry_path(project)
+        lock_path = registry_path.with_suffix(".lock")
 
-        # Derive already processed session IDs from the registry, skipping metadata/non-concept keys
-        processed_sessions = set()
-        for cid, cdata in registry.items():
-            if isinstance(cdata, dict) and cid.startswith("concept_"):
-                processed_sessions.update(cdata.get("sessions", []))
+        with FileLock(lock_path):
+            registry = self.engine.state._load_registry(project, lock=False)
+            initial_registry_keys = set(registry.keys())
+            fitness_data = self.engine.fitness.calculate_fitness(project, lock=False)
+            materialized_log = []
+            skipped_oem_generated_event_details = []
+            suspicious_concepts = []
 
-        registry_updated = False
-        reserved_ids = set()
+            # Derive already processed session IDs from the registry, skipping metadata/non-concept keys
+            processed_sessions = set()
+            for cid, cdata in registry.items():
+                if isinstance(cdata, dict) and cid.startswith("concept_"):
+                    processed_sessions.update(cdata.get("sessions", []))
 
-        for session_file in session_files:
-            session_id = session_file.stem
-            if session_id in processed_sessions:
-                continue
+            registry_updated = False
+            reserved_ids = set()
 
-            content = session_file.read_text(encoding="utf-8")
-            knowledge_events = []
-            json_match = re.search(r"```json\n(.*?)\n```", content, re.DOTALL)
-            if json_match:
-                try:
-                    data = json.loads(json_match.group(1))
-                    if "knowledge_events" in data:
-                        knowledge_events = data["knowledge_events"]
-                except json.JSONDecodeError as e:
-                    logger.warning("Corrupt JSON in session file %s: %s", session_file, e)
-                except Exception as e:
-                    logger.warning("Unexpected error parsing JSON in session file %s: %s", session_file, e)
-
-            if not knowledge_events:
-                continue
-
-            registry_updated = True
-
-            for event in knowledge_events:
-                concept = event.get("concept", "General Learning")
-                e_type = event.get("type", "observation").lower()
-                evidence = event.get("evidence", "")
-                source_path = event.get("source_path")
-                source = event.get("source")
-                source_type = event.get("source_type")
-                suspicious_slug = is_suspicious_concept_slug(concept)
-
-                skip_reason = None
-                classification = None
-                if _is_explicit_oem_source_type(source_type):
-                    skip_reason = f"source_type {source_type!r} is OpenEmpiric-generated"
-                elif source_path:
-                    classification = classify_source(source_path)
-                    if not classification.ingestion_eligible:
-                        skip_reason = classification.reason
-
-                if skip_reason:
-                    detail = {
-                        "session_id": session_id,
-                        "concept": concept,
-                        "source": source,
-                        "source_path": (
-                            str(source_path) if source_path is not None else None
-                        ),
-                        "source_type": source_type,
-                        "classifier_source_type": (
-                            classification.source_type if classification else source_type
-                        ),
-                        "reason": skip_reason,
-                        "action": "skipped",
-                    }
-                    skipped_oem_generated_event_details.append(detail)
-                    logger.warning(
-                        "Skipping OpenEmpiric-generated materialization event: "
-                        "session_id=%s concept=%r source=%r source_path=%r "
-                        "source_type=%r classifier_source_type=%r reason=%s",
-                        session_id,
-                        concept,
-                        source,
-                        source_path,
-                        source_type,
-                        detail["classifier_source_type"],
-                        skip_reason,
-                    )
+            for session_file in session_files:
+                session_id = session_file.stem
+                if session_id in processed_sessions:
                     continue
 
-                if suspicious_slug:
-                    event["suspicious_concept"] = True
-                    suspicious_concepts.append(
-                        {
+                content = session_file.read_text(encoding="utf-8")
+                knowledge_events = []
+                json_match = re.search(r"```json\n(.*?)\n```", content, re.DOTALL)
+                if json_match:
+                    try:
+                        data = json.loads(json_match.group(1))
+                        if "knowledge_events" in data:
+                            knowledge_events = data["knowledge_events"]
+                    except json.JSONDecodeError as e:
+                        logger.warning("Corrupt JSON in session file %s: %s", session_file, e)
+                    except Exception as e:
+                        logger.warning("Unexpected error parsing JSON in session file %s: %s", session_file, e)
+
+                if not knowledge_events:
+                    continue
+
+                registry_updated = True
+
+                for event in knowledge_events:
+                    concept = event.get("concept", "General Learning")
+                    e_type = event.get("type", "observation").lower()
+                    evidence = event.get("evidence", "")
+                    source_path = event.get("source_path")
+                    source = event.get("source")
+                    source_type = event.get("source_type")
+                    suspicious_slug = is_suspicious_concept_slug(concept)
+
+                    skip_reason = None
+                    classification = None
+                    if _is_explicit_oem_source_type(source_type):
+                        skip_reason = f"source_type {source_type!r} is OpenEmpiric-generated"
+                    elif source_path:
+                        classification = classify_source(source_path)
+                        if not classification.ingestion_eligible:
+                            skip_reason = classification.reason
+
+                    if skip_reason:
+                        detail = {
                             "session_id": session_id,
                             "concept": concept,
-                            "reason": "system-like slug",
                             "source": source,
                             "source_path": (
                                 str(source_path) if source_path is not None else None
                             ),
                             "source_type": source_type,
-                            "action": "flagged",
+                            "classifier_source_type": (
+                                classification.source_type if classification else source_type
+                            ),
+                            "reason": skip_reason,
+                            "action": "skipped",
                         }
-                    )
-                    logger.debug(
-                        "Flagging suspicious materialization concept without skipping: "
-                        "session_id=%s concept=%r source=%r source_path=%r source_type=%r",
-                        session_id,
-                        concept,
-                        source,
-                        source_path,
-                        source_type,
-                    )
+                        skipped_oem_generated_event_details.append(detail)
+                        logger.warning(
+                            "Skipping OpenEmpiric-generated materialization event: "
+                            "session_id=%s concept=%r source=%r source_path=%r "
+                            "source_type=%r classifier_source_type=%r reason=%s",
+                            session_id,
+                            concept,
+                            source,
+                            source_path,
+                            source_type,
+                            detail["classifier_source_type"],
+                            skip_reason,
+                        )
+                        continue
 
-                cid, cdata = self.engine.state._resolve_concept(concept, registry, project, reserved_ids)
-                if suspicious_slug:
-                    cdata.setdefault("diagnostics", {})["suspicious_concept_slug"] = True
+                    if suspicious_slug:
+                        event["suspicious_concept"] = True
+                        suspicious_concepts.append(
+                            {
+                                "session_id": session_id,
+                                "concept": concept,
+                                "reason": "system-like slug",
+                                "source": source,
+                                "source_path": (
+                                    str(source_path) if source_path is not None else None
+                                ),
+                                "source_type": source_type,
+                                "action": "flagged",
+                            }
+                        )
+                        logger.debug(
+                            "Flagging suspicious materialization concept without skipping: "
+                            "session_id=%s concept=%r source=%r source_path=%r source_type=%r",
+                            session_id,
+                            concept,
+                            source,
+                            source_path,
+                            source_type,
+                        )
 
-                if evidence:
-                    cdata["evidence_count"] = cdata.get("evidence_count", 0) + 1
+                    cid, cdata = self.engine.state._resolve_concept(concept, registry, project, reserved_ids)
+                    if suspicious_slug:
+                        cdata.setdefault("diagnostics", {})["suspicious_concept_slug"] = True
 
-                cdata = self.engine.state.evaluate_concept_status(cdata, e_type, session_id=session_id, fitness_data=fitness_data)
-                new_status = cdata["status"]
-                registry[cid] = cdata
+                    if evidence:
+                        cdata["evidence_count"] = cdata.get("evidence_count", 0) + 1
 
-                concept_file = concepts_dir / f"{cid}.md"
+                    cdata = self.engine.state.evaluate_concept_status(cdata, e_type, session_id=session_id, fitness_data=fitness_data)
+                    new_status = cdata["status"]
+                    registry[cid] = cdata
 
-                try:
-                    if new_status in ("validated", "canonical", "needs_review"):
-                        existing_body = ""
-                        is_new_concept = cid not in initial_registry_keys
-                        if is_new_concept and concept_file.exists():
-                            from oem_knowledge.concept_id import ConceptIdCollisionError
-                            raise ConceptIdCollisionError(
-                                f"Concept ID collision: wiki file {concept_file} already exists for new concept {cid}"
-                            )
-                        is_new_file = not concept_file.exists()
-                        if not is_new_file:
-                            try:
-                                text = concept_file.read_text(encoding="utf-8")
-                                fm = re.match(r"^---\s*\n.*?\n---\s*\n(.*)$", text, re.DOTALL)
-                                existing_body = fm.group(1).strip() if fm else text.strip()
-                            except Exception as e:
-                                logger.warning("Failed to read existing concept file %s: %s", concept_file, e)
+                    concept_file = concepts_dir / f"{cid}.md"
 
-                        learning = f"- **{e_type.title()}**: {evidence}" if evidence else ""
-                        if is_new_file:
-                            if new_status == "needs_review":
-                                body = f"# {cdata['canonical_name'].replace('-', ' ').title()}\n\nThis concept requires review due to repeated session failures.\n\n## Learnings\n{learning}\n"
+                    try:
+                        if new_status in ("validated", "canonical", "needs_review"):
+                            existing_body = ""
+                            is_new_concept = cid not in initial_registry_keys
+                            if is_new_concept and concept_file.exists():
+                                from oem_knowledge.concept_id import ConceptIdCollisionError
+                                raise ConceptIdCollisionError(
+                                    f"Concept ID collision: wiki file {concept_file} already exists for new concept {cid}"
+                                )
+                            is_new_file = not concept_file.exists()
+                            if not is_new_file:
+                                try:
+                                    text = concept_file.read_text(encoding="utf-8")
+                                    fm = re.match(r"^---\s*\n.*?\n---\s*\n(.*)$", text, re.DOTALL)
+                                    existing_body = fm.group(1).strip() if fm else text.strip()
+                                except Exception as e:
+                                    logger.warning("Failed to read existing concept file %s: %s", concept_file, e)
+
+                            learning = f"- **{e_type.title()}**: {evidence}" if evidence else ""
+                            if is_new_file:
+                                if new_status == "needs_review":
+                                    body = f"# {cdata['canonical_name'].replace('-', ' ').title()}\n\nThis concept requires review due to repeated session failures.\n\n## Learnings\n{learning}\n"
+                                else:
+                                    body = f"# {cdata['canonical_name'].replace('-', ' ').title()}\n\nThis concept is a validated organizational knowledge node.\n\n## Learnings\n{learning}\n"
                             else:
-                                body = f"# {cdata['canonical_name'].replace('-', ' ').title()}\n\nThis concept is a validated organizational knowledge node.\n\n## Learnings\n{learning}\n"
-                        else:
-                            body = existing_body
-                            if learning:
-                                body += f"\n\n## Learnings ({time.strftime('%Y-%m-%d')})\n{learning}\n"
+                                body = existing_body
+                                if learning:
+                                    body += f"\n\n## Learnings ({time.strftime('%Y-%m-%d')})\n{learning}\n"
 
-                        concept_content = f"""---
+                            concept_content = f"""---
 concept_id: {cid}
 canonical_name: {cdata["canonical_name"]}
 status: {new_status}
@@ -395,35 +400,35 @@ aliases: {json.dumps(cdata.get("aliases", []))}
 ---
 {body}"""
 
-                        self._safe_write_concept_file(concept_file, concept_content, project)
-                        self._log_action(
-                            f"Ingest | Materialized concept {cid} ({cdata['canonical_name']}) as {new_status}",
-                            project,
-                        )
-                        self._sync_index(cdata["canonical_name"], cid, project)
-                        materialized_log.append(
-                            f"{cid} ({cdata['canonical_name']}) = {new_status}"
-                        )
-
-                    elif new_status == "deprecated":
-                        if concept_file.exists():
-                            concept_file.unlink()
+                            self._safe_write_concept_file(concept_file, concept_content, project)
                             self._log_action(
-                                f"Delete | Deprecated concept {cid} ({cdata['canonical_name']})",
+                                f"Ingest | Materialized concept {cid} ({cdata['canonical_name']}) as {new_status}",
                                 project,
                             )
-                        materialized_log.append(f"Deprecated: {cid}")
+                            self._sync_index(cdata["canonical_name"], cid, project)
+                            materialized_log.append(
+                                f"{cid} ({cdata['canonical_name']}) = {new_status}"
+                            )
 
-                    else:
-                        materialized_log.append(
-                            f"{cid} ({cdata['canonical_name']}) = {new_status} (not materialized)"
-                        )
-                except Exception as e:
-                    logger.error("Failed to materialize/write concept file %s: %s", concept_file, e)
-                    return {"status": "error", "failed_step": "materialization", "message": f"Failed to write concept file {concept_file.name}: {e}"}
+                        elif new_status == "deprecated":
+                            if concept_file.exists():
+                                concept_file.unlink()
+                                self._log_action(
+                                    f"Delete | Deprecated concept {cid} ({cdata['canonical_name']})",
+                                    project,
+                                )
+                            materialized_log.append(f"Deprecated: {cid}")
 
-        if registry_updated:
-            self.engine.state._save_registry(registry, project)
+                        else:
+                            materialized_log.append(
+                                f"{cid} ({cdata['canonical_name']}) = {new_status} (not materialized)"
+                            )
+                    except Exception as e:
+                        logger.error("Failed to materialize/write concept file %s: %s", concept_file, e)
+                        return {"status": "error", "failed_step": "materialization", "message": f"Failed to write concept file {concept_file.name}: {e}"}
+
+            if registry_updated:
+                self.engine.state._save_registry(registry, project, lock=False)
 
         # Emit materializations metric
         try:

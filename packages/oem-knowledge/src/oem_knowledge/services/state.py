@@ -26,9 +26,22 @@ class StateService:
     def _sfs(self, project: str | None = None) -> SecureFileSystem:
         return SecureFileSystem(self.engine._resolve_harness(project))
 
-    def _load_registry(self, project: str | None = None) -> dict:
+    def _load_registry(self, project: str | None = None, lock: bool = True) -> dict:
+        # lock=False is only valid when caller already holds registry_path.with_suffix(".lock")
         p = self.engine._registry_path(project)
         sfs = self._sfs(project)
+        if not lock:
+            if sfs.exists(p):
+                try:
+                    return json.loads(sfs.read_text(p))
+                except json.JSONDecodeError as e:
+                    logger.error("Corrupt concept registry JSON at %s: %s", p, e)
+                    raise StateCorruptionError(f"Corrupt concept registry JSON at {p}: {e}") from e
+                except OSError as e:
+                    logger.error("Failed to read concept registry at %s: %s", p, e)
+                    raise
+            return {}
+
         try:
             with FileLock(p.with_suffix(".lock")):
                 if sfs.exists(p):
@@ -45,9 +58,18 @@ class StateService:
             logger.error("Timed out acquiring state lock for %s", p)
             raise
 
-    def _save_registry(self, registry: dict, project: str | None = None):
+    def _save_registry(self, registry: dict, project: str | None = None, lock: bool = True):
+        # lock=False is only valid when caller already holds registry_path.with_suffix(".lock")
         p = self.engine._registry_path(project)
         sfs = self._sfs(project)
+        if not lock:
+            try:
+                sfs.write_text(p, json.dumps(registry, indent=2))
+            except OSError as e:
+                logger.error("Failed to save concept registry at %s: %s", p, e)
+                raise
+            return
+
         try:
             with FileLock(p.with_suffix(".lock")):
                 try:

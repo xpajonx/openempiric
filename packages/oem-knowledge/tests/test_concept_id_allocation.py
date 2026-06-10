@@ -230,3 +230,200 @@ def test_materialization_no_len_registry_id_generation(temp_project):
             
     # Max is 4, so next allocated ID must be concept_005 (not concept_003 which len(registry)+1 would generate)
     assert beta_cid == "concept_005"
+
+
+def test_two_processes_concurrent_materialization(temp_project):
+    """Verify that concurrent processes materializing concepts on the same project serialize correctly and do not duplicate IDs."""
+    project_dir, engine = temp_project
+    
+    # Pre-populate registry with concept_001
+    initial_reg = {
+        "concept_001": {
+            "concept_id": "concept_001",
+            "canonical_name": "alpha",
+            "aliases": ["alpha"],
+            "status": "validated",
+            "confidence": 3,
+            "sessions": ["sess_0"]
+        }
+    }
+    engine.state._save_registry(initial_reg, str(project_dir))
+    
+    # Create two sessions with new concepts to materialize
+    sessions_dir = engine._sessions_dir(str(project_dir))
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Session 1: beta
+    (sessions_dir / "sess_1.md").write_text("```json\n" + json.dumps({
+        "knowledge_events": [
+            {"type": "observation", "concept": "beta", "evidence": "e1"},
+            {"type": "observation", "concept": "beta", "evidence": "e2"},
+            {"type": "observation", "concept": "beta", "evidence": "e3"}
+        ]
+    }) + "\n```", encoding="utf-8")
+    
+    # Session 2: gamma
+    (sessions_dir / "sess_2.md").write_text("```json\n" + json.dumps({
+        "knowledge_events": [
+            {"type": "observation", "concept": "gamma", "evidence": "e1"},
+            {"type": "observation", "concept": "gamma", "evidence": "e2"},
+            {"type": "observation", "concept": "gamma", "evidence": "e3"}
+        ]
+    }) + "\n```", encoding="utf-8")
+    
+    import sys
+    import subprocess
+    import threading
+    import queue
+    
+    cmd = [
+        sys.executable,
+        "-c",
+        "import sys; from oem_knowledge.engine import KnowledgeEngine; engine = KnowledgeEngine(sys.argv[1]); engine.materialization.materialize_concepts(sys.argv[1])",
+        str(project_dir)
+    ]
+    
+    results = queue.Queue()
+    
+    def run_proc():
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            results.put((res.stdout, res.stderr, None))
+        except Exception as e:
+            results.put((None, None, e))
+            
+    # Start two subprocesses concurrently
+    t1 = threading.Thread(target=run_proc)
+    t2 = threading.Thread(target=run_proc)
+    
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+    
+    # Verify no unexpected exceptions
+    while not results.empty():
+        out, err, exc = results.get()
+        assert exc is None, f"Subprocess run failed: {exc}\nStderr: {err}"
+        
+    # Verify registry remains valid JSON and concepts have distinct IDs
+    reg = engine.state._load_registry(str(project_dir))
+    assert isinstance(reg, dict)
+    
+    beta_cid = None
+    gamma_cid = None
+    for cid, data in reg.items():
+        if data.get("canonical_name") == "beta":
+            beta_cid = cid
+        elif data.get("canonical_name") == "gamma":
+            gamma_cid = cid
+            
+    assert beta_cid is not None, "beta was not materialized"
+    assert gamma_cid is not None, "gamma was not materialized"
+    assert beta_cid != gamma_cid, f"Duplicate IDs generated concurrently across processes: {beta_cid}"
+
+
+def test_existing_project_with_gaps_still_works(temp_project):
+    """Verify that legacy projects with registry gaps allocate max + 1 safely."""
+    project_dir, engine = temp_project
+    
+    initial_reg = {
+        "concept_001": {
+            "concept_id": "concept_001",
+            "canonical_name": "alpha",
+            "aliases": ["alpha"],
+            "status": "validated",
+            "confidence": 3,
+            "sessions": ["sess_0"]
+        },
+        "concept_003": {
+            "concept_id": "concept_003",
+            "canonical_name": "gamma",
+            "aliases": ["gamma"],
+            "status": "validated",
+            "confidence": 3,
+            "sessions": ["sess_0"]
+        },
+        "concept_010": {
+            "concept_id": "concept_010",
+            "canonical_name": "omega",
+            "aliases": ["omega"],
+            "status": "validated",
+            "confidence": 3,
+            "sessions": ["sess_0"]
+        }
+    }
+    engine.state._save_registry(initial_reg, str(project_dir))
+    
+    # Materialize new concept (beta)
+    sessions_dir = engine._sessions_dir(str(project_dir))
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    report_file = sessions_dir / "sess_1.md"
+    report_content = "```json\n" + json.dumps({
+        "knowledge_events": [
+            {"type": "observation", "concept": "beta", "evidence": "e1"},
+            {"type": "observation", "concept": "beta", "evidence": "e2"},
+            {"type": "observation", "concept": "beta", "evidence": "e3"}
+        ]
+    }) + "\n```"
+    report_file.write_text(report_content, encoding="utf-8")
+    
+    engine.materialization.materialize_concepts(str(project_dir))
+    
+    reg = engine.state._load_registry(str(project_dir))
+    beta_cid = None
+    for cid, data in reg.items():
+        if data.get("canonical_name") == "beta":
+            beta_cid = cid
+            break
+            
+    assert beta_cid == "concept_011"
+
+
+def test_existing_orphan_wiki_files_still_block_reuse(temp_project):
+    """Verify that orphan wiki files are not overwritten and block their IDs from reuse."""
+    project_dir, engine = temp_project
+    
+    initial_reg = {
+        "concept_001": {
+            "concept_id": "concept_001",
+            "canonical_name": "alpha",
+            "aliases": ["alpha"],
+            "status": "validated",
+            "confidence": 3,
+            "sessions": ["sess_0"]
+        }
+    }
+    engine.state._save_registry(initial_reg, str(project_dir))
+    
+    # Create an orphan wiki file concept_002.md (missing from registry) with sentinel content
+    wiki_dir = engine._concepts_dir(str(project_dir))
+    wiki_dir.mkdir(parents=True, exist_ok=True)
+    orphan_file = wiki_dir / "concept_002.md"
+    orphan_file.write_text("SENTINEL: DO NOT OVERWRITE", encoding="utf-8")
+    
+    # Materialize new concept (beta)
+    sessions_dir = engine._sessions_dir(str(project_dir))
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    report_file = sessions_dir / "sess_1.md"
+    report_content = "```json\n" + json.dumps({
+        "knowledge_events": [
+            {"type": "observation", "concept": "beta", "evidence": "e1"},
+            {"type": "observation", "concept": "beta", "evidence": "e2"},
+            {"type": "observation", "concept": "beta", "evidence": "e3"}
+        ]
+    }) + "\n```"
+    report_file.write_text(report_content, encoding="utf-8")
+    
+    engine.materialization.materialize_concepts(str(project_dir))
+    
+    reg = engine.state._load_registry(str(project_dir))
+    beta_cid = None
+    for cid, data in reg.items():
+        if data.get("canonical_name") == "beta":
+            beta_cid = cid
+            break
+            
+    # concept_002 is blocked by the orphan file, so it must allocate concept_003
+    assert beta_cid == "concept_003"
+    assert orphan_file.read_text(encoding="utf-8") == "SENTINEL: DO NOT OVERWRITE"
