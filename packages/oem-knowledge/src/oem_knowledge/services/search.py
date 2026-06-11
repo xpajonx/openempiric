@@ -224,6 +224,10 @@ class SearchService:
         wiki_dir = harness / "wiki"
         
         md_files = list(wiki_dir.rglob("*.md")) if wiki_dir.exists() else []
+        for folder in ["skills", "skill_candidates"]:
+            folder_dir = harness / folder
+            if folder_dir.exists():
+                md_files.extend(folder_dir.rglob("*.md"))
         for f in harness.glob("*.md"):
             if f.is_file():
                 md_files.append(f)

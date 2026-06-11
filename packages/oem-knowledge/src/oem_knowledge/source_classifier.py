@@ -22,6 +22,8 @@ class SourceType:
     OEM_SESSION_REPORT = "oem_session_report"
     OEM_HANDOFF = "oem_handoff"
     OEM_CONFIG = "oem_config"
+    OEM_SKILL = "oem_skill"
+    OEM_SKILL_CANDIDATE = "oem_skill_candidate"
     GENERATED_SUMMARY = "generated_summary"
     UNKNOWN = "unknown"
 
@@ -65,6 +67,8 @@ def _has_oem_metadata(content: str | None) -> bool:
         for marker in (
             "generated_by: openempiric",
             "source_type: oem_generated",
+            "source_type: oem_skill_candidate",
+            "source_type: oem_skill",
             "<!-- generated_by: openempiric -->",
         )
     )
@@ -105,13 +109,6 @@ def classify_source(
             source_path,
         )
 
-    if _has_oem_metadata(content):
-        return _classification(
-            SourceType.GENERATED_SUMMARY,
-            False,
-            "content metadata marks this source as OpenEmpiric generated",
-            source_path,
-        )
 
     if len(parts) >= 2 and parts[-2:] == ("directives", "session-handoff.md"):
         return _classification(
@@ -136,6 +133,30 @@ def classify_source(
                 SourceType.OEM_WIKI,
                 False,
                 ".oem/wiki files are materialized knowledge outputs",
+                source_path,
+            )
+
+        if oem_parts[0] == "skills":
+            return _classification(
+                SourceType.OEM_SKILL,
+                False,
+                ".oem/skills files are approved project skills",
+                source_path,
+            )
+
+        if oem_parts[0] == "skill_candidates":
+            return _classification(
+                SourceType.OEM_SKILL_CANDIDATE,
+                False,
+                ".oem/skill_candidates files are proposed project skills",
+                source_path,
+            )
+
+        if oem_parts == ("skill_promotions.jsonl",):
+            return _classification(
+                SourceType.OEM_CONFIG,
+                False,
+                "OpenEmpiric skill promotions log is an operational artifact",
                 source_path,
             )
 
@@ -178,6 +199,14 @@ def classify_source(
                 "OpenEmpiric concept registry is generated knowledge state",
                 source_path,
             )
+
+    if _has_oem_metadata(content):
+        return _classification(
+            SourceType.GENERATED_SUMMARY,
+            False,
+            "content metadata marks this source as OpenEmpiric generated",
+            source_path,
+        )
 
     return _classification(
         SourceType.PROJECT_FILE,

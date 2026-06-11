@@ -51,6 +51,18 @@ class ProjectLayout:
     def graph_dir(self) -> Path:
         return self.root / "graph"
 
+    @property
+    def skills_dir(self) -> Path:
+        return self.root / "skills"
+
+    @property
+    def skill_candidates_dir(self) -> Path:
+        return self.root / "skill_candidates"
+
+    @property
+    def skill_promotions_path(self) -> Path:
+        return self.root / "skill_promotions.jsonl"
+
     def wiki_paths(self) -> dict:
         return {
             "inbox": self.concepts_dir / "inbox.md",

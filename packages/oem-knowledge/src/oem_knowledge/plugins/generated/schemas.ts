@@ -127,3 +127,29 @@ export interface ConceptFitness {
   evidence_count: number;
   fitness_score: number;
 }
+
+export interface SkillCandidate {
+  candidate_id: string;
+  slug: string;
+  title: string;
+  status: "proposed" | "approved" | "rejected" | "deferred" | "superseded";
+  confidence: "low" | "medium" | "high";
+  trigger: string;
+  recommended_behavior: string;
+  evidence: string[];
+  rationale: string;
+  created_at: string;
+  updated_at: string;
+  source_event_ids: string[];
+  source_concept_ids: string[];
+}
+
+export interface SkillPromotionEvent {
+  timestamp: string;
+  candidate_id: string;
+  slug: string;
+  event_type: "proposed" | "approved" | "rejected" | "deferred" | "edited";
+  previous_status?: string | null;
+  new_status: string;
+  notes?: string | null;
+}

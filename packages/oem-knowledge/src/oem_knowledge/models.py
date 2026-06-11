@@ -145,3 +145,30 @@ class ConceptFitness(BaseModel):
     evidence_count: int = 0
     fitness_score: float = 0.0
 
+
+class SkillCandidate(BaseModel):
+    candidate_id: str = Field(description="Unique candidate identifier")
+    slug: str = Field(description="Slug identifier of the candidate skill")
+    title: str = Field(description="Title of the candidate skill")
+    status: Literal["proposed", "approved", "rejected", "deferred", "superseded"] = "proposed"
+    confidence: Literal["low", "medium", "high"] = "medium"
+    trigger: str = Field(description="Under what conditions the skill should trigger")
+    recommended_behavior: str = Field(description="The behavior guideline recommendation")
+    evidence: list[str] = Field(default_factory=list, description="Associated evidence items")
+    rationale: str = Field(description="Why this candidate should become a skill")
+    created_at: str = Field(description="ISO 8601 UTC timestamp format")
+    updated_at: str = Field(description="ISO 8601 UTC timestamp format")
+    source_event_ids: list[str] = Field(default_factory=list, description="IDs of source events")
+    source_concept_ids: list[str] = Field(default_factory=list, description="IDs of source concepts")
+
+
+class SkillPromotionEvent(BaseModel):
+    timestamp: str = Field(description="ISO 8601 UTC timestamp format")
+    candidate_id: str = Field(description="Unique candidate identifier")
+    slug: str = Field(description="Slug identifier of the candidate skill")
+    event_type: Literal["proposed", "approved", "rejected", "deferred", "edited"]
+    previous_status: str | None = None
+    new_status: str
+    notes: str | None = None
+
+

@@ -63,6 +63,7 @@ DEFAULT_DIRS = [
     "state",
     "graph",
     "skills",
+    "skill_candidates",
 ]
 
 def migrate_harness_to_oem(project_dir: Path):
@@ -163,6 +164,7 @@ class KnowledgeEngine:
         from oem_knowledge.services.state import StateService
         from oem_knowledge.services.event_migration import EventMigrator
         from oem_knowledge.services.fitness import FitnessService
+        from oem_knowledge.services.skills import SkillService
 
         self.search = SearchService(self)
         self.materialization = MaterializationService(self)
@@ -170,6 +172,7 @@ class KnowledgeEngine:
         self.state = StateService(self)
         self.event_migrator = EventMigrator(self)
         self.fitness = FitnessService(self)
+        self.skills = SkillService(self)
 
     def close(self) -> None:
         for service in (getattr(self, "search", None),):

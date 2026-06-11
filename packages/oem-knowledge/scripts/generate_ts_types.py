@@ -58,6 +58,8 @@ def generate_ts() -> str:
         models.OutcomeMetrics,
         models.OutcomeRecord,
         models.ConceptFitness,
+        models.SkillCandidate,
+        models.SkillPromotionEvent,
     ]
 
     lines = [
