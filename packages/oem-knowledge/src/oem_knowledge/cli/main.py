@@ -54,10 +54,8 @@ def main():
         "events",
         "event",
         "explain",
-        "vault",
         "identity",
         "contradictions",
-        "lint",
         "health",
     ):
         from .commands.knowledge import run_knowledge_command

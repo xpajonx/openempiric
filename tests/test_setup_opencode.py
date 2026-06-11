@@ -303,7 +303,6 @@ def test_setup_opencode_tool_enumeration():
     tool_names = [t.name for t in tools]
     assert "knowledge_search" in tool_names
     assert "knowledge_explain_concept" in tool_names
-    assert "knowledge_graph_query" in tool_names
     assert "knowledge_health_check" in tool_names
     assert "knowledge_stats" in tool_names
     assert "oem_todo_read" in tool_names

@@ -144,14 +144,6 @@ def find_harness_root(path: str | Path) -> Path | None:
     return None
 
 
-def find_all_projects(base_dir: str | Path | None = None) -> list[Path]:
-    """Find all projects with .oem/ or .harness/ directories."""
-    if base_dir is None:
-        base_dir = Path.home() / "projects"
-    base = Path(base_dir)
-    if not base.is_dir():
-        return []
-    return [d for d in base.iterdir() if d.is_dir() and ((d / ".oem").is_dir() or (d / ".harness").is_dir())]
 
 
 class KnowledgeEngine:
@@ -287,38 +279,6 @@ class KnowledgeEngine:
         return self.layout(project).wiki_paths()
 
 
-
-    # --- Internal State Management helper methods ---
-    # Deprecated: StateService now owns registry/events I/O directly via oem_knowledge.fs.
-    # These stubs remain temporarily for any external callers; they will be removed in a future cleanup.
-
-    def _load_registry_before_extraction(self, project: str | None = None) -> dict:
-        warnings.warn(
-            "engine._load_registry_before_extraction() is deprecated. Use engine.state._load_registry() directly.",
-            DeprecationWarning, stacklevel=2
-        )
-        return self.state._load_registry(project)
-
-    def _save_registry_before_extraction(self, registry: dict, project: str | None = None):
-        warnings.warn(
-            "engine._save_registry_before_extraction() is deprecated. Use engine.state._save_registry() directly.",
-            DeprecationWarning, stacklevel=2
-        )
-        self.state._save_registry(registry, project)
-
-    def _load_events_before_extraction(self, project: str | None = None) -> list[dict]:
-        warnings.warn(
-            "engine._load_events_before_extraction() is deprecated. Use engine.state._load_events() directly.",
-            DeprecationWarning, stacklevel=2
-        )
-        return self.state._load_events(project)
-
-    def _append_event_before_extraction(self, event: dict | KnowledgeEvent, project: str | None = None):
-        warnings.warn(
-            "engine._append_event_before_extraction() is deprecated. Use engine.state._append_event() directly.",
-            DeprecationWarning, stacklevel=2
-        )
-        self.state._append_event(event, project)
 
 
     # --- Orchestrator Level Methods kept on engine ---
@@ -509,12 +469,6 @@ class KnowledgeEngine:
                 pass
 
         global_concepts = []
-        try:
-            from .vault import GlobalVault
-            vault = GlobalVault()
-            global_concepts = vault.get_global_context()
-        except Exception:
-            pass
 
         return {
             "status": "success",
@@ -527,25 +481,6 @@ class KnowledgeEngine:
         }
 
 
-    def get_events(
-        self,
-        project: str | None = None,
-        concept: str = "",
-        event_type: str = "",
-        session_id: str = "",
-    ) -> list[dict]:
-        warnings.warn(
-            "engine.get_events() is deprecated. Use engine.state.get_events() directly.",
-            DeprecationWarning, stacklevel=2
-        )
-        return self.state.get_events(project, concept, event_type, session_id)
-
-    def get_event(self, project: str | None = None, event_id: str = "") -> dict:
-        warnings.warn(
-            "engine.get_event() is deprecated. Use engine.state.get_event() directly.",
-            DeprecationWarning, stacklevel=2
-        )
-        return self.state.get_event(project, event_id)
 
 
     def session_commit(
@@ -773,19 +708,7 @@ class KnowledgeEngine:
                         }
                         warnings.append(f"Indexing error: {e}")
 
-            progress.update_step("vault", "running")
-            with timer.phase("cleanup", progress_callback):
-                import os
-                if os.environ.get("OEM_VAULT_SYNC") == "1":
-                    try:
-                        from .vault import GlobalVault
-                        vault = GlobalVault()
-                        local_reg = self.state._load_registry(project)
-                        concepts_dir = self._concepts_dir(project)
-                        vault.sync_from_registry(local_reg, concepts_dir)
-                    except Exception:
-                        pass
-            progress.update_step("vault", "success")
+
 
         except LockTimeoutError as e:
             timer.timings["total"] = time.perf_counter() - start_time
@@ -899,36 +822,7 @@ class KnowledgeEngine:
             "notification": notification,
         }
 
-    def record_outcome(
-        self,
-        outcome: str,
-        referenced_concepts: list[str] | None = None,
-        reason: str | None = None,
-        session_id: str | None = None,
-        project: str | None = None,
-        goal_satisfaction: float | None = None,
-    ) -> dict:
-        warnings.warn(
-            "engine.record_outcome() is deprecated. Use engine.state.record_outcome() directly.",
-            DeprecationWarning, stacklevel=2
-        )
-        return self.state.record_outcome(
-            outcome, referenced_concepts, reason, session_id, project, goal_satisfaction
-        )
 
-    def calculate_fitness(self, project: str | None = None) -> dict[str, ConceptFitness]:
-        warnings.warn(
-            "engine.calculate_fitness() is deprecated. Use engine.fitness.calculate_fitness() directly.",
-            DeprecationWarning, stacklevel=2
-        )
-        return self.fitness.calculate_fitness(project)
-
-    def detect_stale_concepts(self, n_sessions: int = 5, project: str | None = None) -> list[dict]:
-        warnings.warn(
-            "engine.detect_stale_concepts() is deprecated. Use engine.state.detect_stale_concepts() directly.",
-            DeprecationWarning, stacklevel=2
-        )
-        return self.state.detect_stale_concepts(n_sessions, project)
 
     def propose_merges(self, similarity_threshold: float = 0.85, project: str | None = None) -> list[dict]:
         from oem_knowledge.evolution import ConceptEvolutionEngine

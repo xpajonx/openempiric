@@ -168,25 +168,7 @@ def mount_tools(mcp: object) -> None:
             lines.append("  No new or modified concepts.")
         return render_panel("Concept Materialization", lines, status="ok")
 
-    @mcp.tool()
-    def knowledge_update_graph(project: str = "") -> str:
-        """Update bidirectional [[concept_id|Name]] wikilinks between materialized concept nodes.
 
-        Args:
-            project: Project directory path. Defaults to current directory.
-        """
-        try:
-            with KnowledgeEngine(project or None) as eng:
-                res = eng.materialization.update_graph(project or None)
-        except Exception as e:
-            return render_panel("Graph Update Failure", [f"Error: {e}"], status="error")
-
-        lines = [
-            res.get("message", "Graph updated."),
-            f"Links added/updated: {res.get('links_updated', 0)}",
-            f"Files scanned: {res.get('files_scanned', 0)}",
-        ]
-        return render_panel("Knowledge Graph", lines, status="organize")
 
     def _commit_session_from_tool(
         eng: KnowledgeEngine,
@@ -419,27 +401,7 @@ def mount_tools(mcp: object) -> None:
         except Exception as e:
             return f"# Session End Failure\n\nError: {e}"
 
-    @mcp.tool()
-    def knowledge_consolidate(project: str = "") -> str:
-        """Deduplicate and merge overlapping concept markdown files.
 
-        Args:
-            project: Project directory path. Defaults to current directory.
-        """
-        try:
-            with KnowledgeEngine(project or None) as eng:
-                res = eng.state.consolidate(project or None)
-        except Exception as e:
-            return render_panel(
-                "Consolidation Failure", [f"Error: {e}"], status="error"
-            )
-
-        lines = [res.get("message", "Consolidation complete."), ""]
-        for m in res.get("merged", []):
-            lines.append(f"  🧹 {m}")
-        if not res.get("merged"):
-            lines.append("  No duplicates found.")
-        return render_panel("Consolidation", lines, status="organize")
 
     @mcp.tool()
     def knowledge_get_events(
@@ -530,74 +492,7 @@ def mount_tools(mcp: object) -> None:
 
 
 
-    @mcp.tool()
-    def knowledge_lint(
-        project: str = "", max_parallel: int = 4, fix: bool = False
-    ) -> str:
-        """Check the knowledge base for broken links and orphan concepts in parallel.
 
-        Args:
-            project: Project directory path. Defaults to current directory.
-            max_parallel: Concurrency limit for link validation.
-            fix: Automatically heal broken links that match existing aliases.
-        """
-        import asyncio
-        from .linter import run_lint
-        from pathlib import Path
-
-        target = Path(project) if project else Path.cwd()
-        try:
-            res = asyncio.run(run_lint(target, max_parallel=max_parallel, fix=fix))
-        except Exception as e:
-            return render_panel("Lint Failure", [f"Error: {e}"], status="error")
-
-        if res.get("status") == "error":
-            return render_panel("Lint Error", [res.get("message", "")], status="error")
-
-        lines = [
-            f"Files Scanned: {res.get('files_scanned', 0)}",
-            f"Broken Links:  {len(res.get('broken_links', []))}",
-            f"Healed Links:  {len(res.get('healed_links', []))}",
-            f"Orphan Nodes:  {len(res.get('orphans', []))}",
-        ]
-        if fix:
-            lines.append(f"Files Fixed:   {res.get('fixed_files_count', 0)}")
-        lines.append("")
-
-        if res.get("broken_links"):
-            lines.append("Broken Links:")
-            for bl in res["broken_links"]:
-                lines.append(
-                    f"  ❌ {bl['source']}:{bl['line']} -> {bl['target']} (in {Path(bl['file']).name})"
-                )
-            lines.append("")
-
-        if res.get("healed_links"):
-            action = "Fixed" if fix else "Can Heal"
-            lines.append(f"Healed Links ({action}):")
-            for hl in res["healed_links"]:
-                lines.append(
-                    f"  ✅ {hl['source']}:{hl['line']} -> resolved to {hl['target_concept']} (originally: {hl['original']})"
-                )
-            lines.append("")
-
-        if res.get("orphans"):
-            lines.append("Orphan Concepts:")
-            for op in res["orphans"]:
-                lines.append(f"  ⚠️ {op}")
-
-        if (
-            not res.get("broken_links")
-            and not res.get("orphans")
-            and not res.get("healed_links")
-        ):
-            lines.append("✨ All links verified successfully and no orphans found!")
-
-        return render_panel(
-            "Lint Results",
-            lines,
-            status="error" if res.get("broken_links") else "ok",
-        )
 
     @mcp.tool()
     def knowledge_search(query: str, k: int = 3, project: str = "") -> str:
@@ -767,55 +662,7 @@ def mount_tools(mcp: object) -> None:
         except Exception as e:
             return render_panel("Explanation Failure", [f"Error: {e}"], status="error")
 
-    @mcp.tool()
-    def knowledge_graph_query(concept_id: str, direction: str = "both", project: str = "") -> str:
-        """Query semantic relationships for a concept.
 
-        Args:
-            concept_id: Target concept ID
-            direction: incoming, outgoing, or both. Defaults to both.
-            project: Project directory path. Defaults to current directory.
-        """
-        try:
-            with KnowledgeEngine(project or None) as eng:
-                registry = eng.state._load_registry(project or None)
-                cdata = registry.get(concept_id)
-                if not cdata:
-                    return render_panel("Query Error", [f"Concept {concept_id} not found."], status="error")
-
-                lines = [
-                    f"Concept: {cdata.get('canonical_name', '').replace('-', ' ').upper()} ({concept_id})",
-                    ""
-                ]
-
-                if direction in ("outgoing", "both"):
-                    lines.append("Outgoing Relationships:")
-                    relationships = cdata.get("relationships", [])
-                    for r in relationships:
-                        target_id = r.get("target")
-                        target_name = registry.get(target_id, {}).get("canonical_name") or target_id
-                        lines.append(f"  - [{r.get('type')}] -> {target_name} ({target_id})")
-                    if not relationships:
-                        lines.append("  - None")
-                    lines.append("")
-
-                if direction in ("incoming", "both"):
-                    lines.append("Incoming Relationships:")
-                    incoming_count = 0
-                    for cid, data in registry.items():
-                        if cid == concept_id:
-                            continue
-                        relationships = data.get("relationships", [])
-                        for r in relationships:
-                            if r.get("target") == concept_id:
-                                lines.append(f"  - {data.get('canonical_name')} ({cid}) -> [{r.get('type')}]")
-                                incoming_count += 1
-                    if incoming_count == 0:
-                        lines.append("  - None")
-
-                return render_panel("Graph Query Results", lines, status="ok")
-        except Exception as e:
-            return render_panel("Query Failure", [f"Error: {e}"], status="error")
 
     @mcp.tool()
     def knowledge_skill_candidates(project: str = "") -> str:

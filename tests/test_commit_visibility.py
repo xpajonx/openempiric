@@ -20,7 +20,6 @@ def test_commit_progress_is_emitted():
         progress.update_step("reflection", "success")
         progress.update_step("materialization", "success")
         progress.update_step("index", "success")
-        progress.update_step("vault", "success")
 
     output = f.getvalue()
     # Should print borders and all status changes sequentially
@@ -29,7 +28,6 @@ def test_commit_progress_is_emitted():
     assert "Reflection Complete" in output
     assert "Materialization Complete" in output
     assert "Updating Search Index" in output
-    assert "Vault Sync Complete" in output
 
 
 def test_render_commit_complete_panel():
@@ -69,4 +67,3 @@ def test_session_commit_orchestrates_progress(tmp_proj):
 
     output = f.getvalue()
     assert "OEM Session Commit" in output
-    assert "Vault Sync Complete" in output

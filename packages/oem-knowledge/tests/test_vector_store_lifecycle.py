@@ -216,11 +216,7 @@ def test_server_mcp_handler_closes_engine_resources(tmp_path, monkeypatch):
     assert len(closed) == 1, "knowledge_search should close its engine on success"
     assert "error" not in result.lower()
 
-    # Test success path - knowledge_consolidate
-    closed.clear()
-    result = registered_tools['knowledge_consolidate'](project="")
-    assert len(closed) == 1, "knowledge_consolidate should close its engine on success"
-    assert "error" not in result.lower()
+
 
     # Test success path - knowledge_get_events
     closed.clear()

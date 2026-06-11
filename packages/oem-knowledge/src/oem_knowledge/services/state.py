@@ -402,7 +402,7 @@ class StateService:
                 except Exception as e:
                     logger.warning("Unexpected error unlinking temporary concept file %s during rebuild: %s", f, e)
 
-        fitness_data = self.engine.calculate_fitness(project)
+        fitness_data = self.engine.fitness.calculate_fitness(project)
         events = self._load_events(project)
         for event in events:
             concept_candidates = event.get("concept_candidates", [])

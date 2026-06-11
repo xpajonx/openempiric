@@ -109,7 +109,6 @@ class CommitProgressSupervisor:
             {"id": "reflection", "name": "Reflection Complete", "status": "pending"},
             {"id": "materialization", "name": "Materialization Complete", "status": "pending"},
             {"id": "index", "name": "Updating Search Index", "status": "pending"},
-            {"id": "vault", "name": "Vault Sync Complete", "status": "pending"},
         ]
         self.is_tty = sys.stdout.isatty() or force_tty
         self.started = False

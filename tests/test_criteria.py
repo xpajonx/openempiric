@@ -421,81 +421,6 @@ aliases: ["two"]
         c2_new_content = (concepts_dir / "concept_002.md").read_text()
         assert "[[depended_on_by:concept_001|" in c2_new_content
 
-    def test_linter_broken_and_orphans(self, tmp_proj):
-        """Verify linter detects broken links and orphans."""
-        _call("knowledge_init", {"project": tmp_proj})
-
-        concepts_dir = Path(tmp_proj) / OEM_DIR / "wiki"
-        concepts_dir.mkdir(parents=True, exist_ok=True)
-
-        c1_content = """---
-concept_id: concept_001
-canonical_name: concept-one
-status: validated
-confidence: 3
----
-# Concept One
-Broken: [[concept_999]]."""
-        (concepts_dir / "concept_001.md").write_text(c1_content)
-
-        import asyncio
-        from oem_knowledge.linter import run_lint
-
-        res = asyncio.run(run_lint(Path(tmp_proj)))
-
-        assert res["status"] == "success"
-        assert len(res["broken_links"]) == 1
-        assert res["broken_links"][0]["target"] == "concept_999"
-        assert res["broken_links"][0]["line"] == 8
-        assert "concept_001" in res["orphans"]
-
-    def test_linter_auto_healing(self, tmp_proj):
-        """Verify linter heals broken links using aliases."""
-        _call("knowledge_init", {"project": tmp_proj})
-        eng = KnowledgeEngine(tmp_proj)
-
-        registry = eng.state._load_registry(tmp_proj)
-        registry["concept_002"] = {
-            "concept_id": "concept_002",
-            "canonical_name": "concept-two",
-            "aliases": ["AI Safety"],
-            "status": "validated",
-            "confidence": 3,
-            "evidence_count": 3,
-            "session_count": 2,
-            "sessions": ["session_two"],
-        }
-        eng.state._save_registry(registry, tmp_proj)
-
-        concepts_dir = Path(tmp_proj) / OEM_DIR / "wiki"
-        concepts_dir.mkdir(parents=True, exist_ok=True)
-
-        c1_content = """---
-concept_id: concept_001
-canonical_name: concept-one
-status: validated
-confidence: 3
----
-# Concept One
-We discuss [[AI Safety]] here."""
-        (concepts_dir / "concept_001.md").write_text(c1_content)
-
-        import asyncio
-        from oem_knowledge.linter import run_lint
-
-        # First run without fix=True
-        res = asyncio.run(run_lint(Path(tmp_proj), fix=False))
-        assert len(res["healed_links"]) == 1
-        assert res["healed_links"][0]["target_concept"] == "concept_002"
-        assert res["fixed_files_count"] == 0
-
-        # Now run with fix=True
-        res_fix = asyncio.run(run_lint(Path(tmp_proj), fix=True))
-        assert res_fix["fixed_files_count"] == 1
-
-        updated_content = (concepts_dir / "concept_001.md").read_text()
-        assert "[[concept_002|AI Safety]]" in updated_content
-
     def test_sfs_bounds_check(self, tmp_proj):
         """Verify SFS enforces directory boundaries and truncation rules."""
         from oem_knowledge.engine import SecureFileSystem
@@ -526,7 +451,6 @@ We discuss [[AI Safety]] here."""
         # Verify existing tools remain registered
         assert "knowledge_search" in tools
         assert "knowledge_explain_concept" in tools
-        assert "knowledge_graph_query" in tools
         assert "knowledge_usage_report" in tools
         assert "knowledge_session_commit" in tools
 

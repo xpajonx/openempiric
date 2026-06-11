@@ -17,9 +17,7 @@ def __getattr__(name: str):
     elif name == "shutil":
         import shutil
         return shutil
-    elif name == "run_lint":
-        from ..linter import run_lint
-        return run_lint
+
     elif name == "run_agent":
         from ..runtime import run_agent
         return run_agent

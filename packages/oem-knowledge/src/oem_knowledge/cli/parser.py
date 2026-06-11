@@ -117,11 +117,6 @@ def _setup_parser() -> argparse.ArgumentParser:
     )
     explain_p.add_argument("--project", type=str, default="")
 
-    vault_p = sub.add_parser("vault", help=argparse.SUPPRESS)
-    vault_p.add_argument("action", choices=["sync", "candidates", "promote", "demote"])
-    vault_p.add_argument("concept_id", type=str, nargs="?", default="")
-    vault_p.add_argument("--project", type=str, default="")
-
     identity_p = sub.add_parser("identity", help=argparse.SUPPRESS)
     identity_p.add_argument("action", choices=["scan", "review"])
     identity_p.add_argument("concept_a", type=str, nargs="?", default="")
@@ -145,11 +140,6 @@ def _setup_parser() -> argparse.ArgumentParser:
     merge_p.add_argument("secondary_id", type=str)
     merge_p.add_argument("--auto", action="store_true", help="Automatically merge")
     merge_p.add_argument("--project", type=str, default="")
-
-    lint_p = sub.add_parser("lint", help=argparse.SUPPRESS)
-    lint_p.add_argument("--project", type=str, default="")
-    lint_p.add_argument("--workers", type=int, default=4)
-    lint_p.add_argument("--fix", action="store_true", help="Automatically heal links")
 
     session_start_p = sub.add_parser(
         "session-start",
@@ -357,7 +347,7 @@ def _setup_parser() -> argparse.ArgumentParser:
     )
 
     migrate_p = sub.add_parser(
-        "migrate", help="Migrate legacy .harness directory to .oem format"
+        "migrate", help=argparse.SUPPRESS
     )
     migrate_p.add_argument("--project", type=str, default="")
 
