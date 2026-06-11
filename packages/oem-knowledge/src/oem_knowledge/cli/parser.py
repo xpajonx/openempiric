@@ -344,6 +344,39 @@ def _setup_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("mcp", help="Start the MCP tool server")
 
+    skills_p = sub.add_parser("skills", help="[User] Review and promote skill candidates")
+    skills_sub = skills_p.add_subparsers(dest="skills_action", required=True)
+
+    skills_list = skills_sub.add_parser("list", help="List all skill candidates")
+    skills_list.add_argument("--project", type=str, default="")
+
+    skills_show = skills_sub.add_parser("show", help="Show detailed candidate or approved skill")
+    skills_show.add_argument("slug", type=str)
+    skills_show.add_argument("--project", type=str, default="")
+
+    skills_suggest = skills_sub.add_parser("suggest", help="Suggest new candidates by scanning memory")
+    skills_suggest.add_argument("--project", type=str, default="")
+
+    skills_approve = skills_sub.add_parser("approve", help="Approve candidate and promote to project skill")
+    skills_approve.add_argument("slug", type=str)
+    skills_approve.add_argument("--force", action="store_true", help="Force approval even if rejected before")
+    skills_approve.add_argument("--project", type=str, default="")
+
+    skills_reject = skills_sub.add_parser("reject", help="Reject skill candidate")
+    skills_reject.add_argument("slug", type=str)
+    skills_reject.add_argument("--project", type=str, default="")
+
+    skills_defer = skills_sub.add_parser("defer", help="Defer skill candidate")
+    skills_defer.add_argument("slug", type=str)
+    skills_defer.add_argument("--project", type=str, default="")
+
+    skills_edit = skills_sub.add_parser("edit", help="Edit a skill candidate's details")
+    skills_edit.add_argument("slug", type=str)
+    skills_edit.add_argument("--title", type=str, default=None)
+    skills_edit.add_argument("--trigger", type=str, default=None)
+    skills_edit.add_argument("--behavior", type=str, default=None)
+    skills_edit.add_argument("--project", type=str, default="")
+
     sub._choices_actions = [
         a for a in sub._choices_actions if a.help is not argparse.SUPPRESS
     ]

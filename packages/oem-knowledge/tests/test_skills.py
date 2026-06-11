@@ -183,18 +183,18 @@ def test_update_skill_candidate_status(temp_project):
     approved_file = layout.skills_dir / "status-workflow.md"
     assert approved_file.exists()
     approved_content = approved_file.read_text(encoding="utf-8")
-    assert "source_type: oem_skill" in approved_content
+    assert "source_type: oem_project_skill" in approved_content
     assert "status: approved" in approved_content
 
     # Demote/change status
-    demoted = engine.skills.update_skill_candidate_status("status-workflow", "deferred", str(tmp_path))
+    demoted = engine.skills.update_skill_candidate_status("status-workflow", "deferred", str(tmp_path), force=True)
     assert demoted.status == "deferred"
     
     # Verify no destructive deletion in v0.98A:
     # the file in skills/ must still exist but with deferred status
     assert approved_file.exists()
     deferred_content = approved_file.read_text(encoding="utf-8")
-    assert "status: deferred" in deferred_content
+    assert "status: superseded" in deferred_content
 
 
 def test_record_skill_promotion_event_jsonl(temp_project):
@@ -757,4 +757,322 @@ def test_rejected_candidate_is_not_immediately_recreated(temp_project):
     # Evaluate again: must not recreate it
     res2 = engine.skill_promotion.evaluate_skill_candidates(str(tmp_path))
     assert res2["candidates_created"] == 0
+
+
+def test_skills_list_shows_candidates(temp_project):
+    engine, tmp_path = temp_project
+    engine.skills.create_skill_candidate(
+        candidate_id="sc_list_1",
+        slug="list-workflow",
+        title="List Workflow",
+        trigger="When listing",
+        recommended_behavior="Should list them.",
+        evidence=["Used once"],
+        rationale="testing list",
+        project=str(tmp_path),
+    )
+    candidates = engine.skills.list_skill_candidates(str(tmp_path))
+    assert len(candidates) == 1
+    assert candidates[0].slug == "list-workflow"
+    assert candidates[0].status == "proposed"
+
+
+def test_skills_show_displays_evidence(temp_project):
+    engine, tmp_path = temp_project
+    engine.skills.create_skill_candidate(
+        candidate_id="sc_show_1",
+        slug="show-workflow",
+        title="Show Workflow",
+        trigger="When showing",
+        recommended_behavior="Should show them.",
+        evidence=["Evidence A", "Evidence B"],
+        rationale="testing show",
+        project=str(tmp_path),
+    )
+    cand = engine.skills.load_skill_candidate("show-workflow", str(tmp_path))
+    assert cand is not None
+    assert cand.trigger == "When showing"
+    assert cand.recommended_behavior == "Should show them."
+    assert cand.evidence == ["Evidence A", "Evidence B"]
+
+
+def test_skills_approve_writes_project_skill(temp_project):
+    engine, tmp_path = temp_project
+    engine.skills.create_skill_candidate(
+        candidate_id="sc_approve_1",
+        slug="approve-workflow",
+        title="Approve Workflow",
+        trigger="When approving",
+        recommended_behavior="Should approve them.",
+        evidence=["Evidence 1"],
+        rationale="testing approve",
+        project=str(tmp_path),
+    )
+    
+    cand = engine.skills.update_skill_candidate_status("approve-workflow", "approved", str(tmp_path))
+    assert cand.status == "approved"
+    
+    layout = engine.layout(str(tmp_path))
+    approved_file = layout.skills_dir / "approve-workflow.md"
+    assert approved_file.exists()
+    
+    content = approved_file.read_text(encoding="utf-8")
+    assert "source_type: oem_project_skill" in content
+    assert "status: approved" in content
+    assert "## Skill" in content
+    assert "Should approve them." in content
+    assert "## Trigger" in content
+    assert "When approving" in content
+
+
+def test_skills_approve_records_promotion_event(temp_project):
+    engine, tmp_path = temp_project
+    engine.skills.create_skill_candidate(
+        candidate_id="sc_promo_event_1",
+        slug="promo-event-workflow",
+        title="Promo Event Workflow",
+        trigger="When promoting",
+        recommended_behavior="Should promote.",
+        evidence=["Evidence P"],
+        rationale="testing promo",
+        project=str(tmp_path),
+    )
+    
+    engine.skills.update_skill_candidate_status("promo-event-workflow", "approved", str(tmp_path))
+    layout = engine.layout(str(tmp_path))
+    promotions_file = layout.skill_promotions_path
+    
+    assert promotions_file.exists()
+    lines = promotions_file.read_text(encoding="utf-8").strip().splitlines()
+    # At least two events (proposed, then approved)
+    events = [json.loads(line) for line in lines]
+    assert any(e["slug"] == "promo-event-workflow" and e["new_status"] == "approved" for e in events)
+
+
+def test_skills_reject_updates_status_without_deleting_evidence(temp_project):
+    engine, tmp_path = temp_project
+    engine.skills.create_skill_candidate(
+        candidate_id="sc_reject_1",
+        slug="reject-workflow",
+        title="Reject Workflow",
+        trigger="When rejecting",
+        recommended_behavior="Should reject.",
+        evidence=["Evidence R"],
+        rationale="testing reject",
+        project=str(tmp_path),
+    )
+    
+    cand = engine.skills.update_skill_candidate_status("reject-workflow", "rejected", str(tmp_path))
+    assert cand.status == "rejected"
+    assert cand.evidence == ["Evidence R"]
+    
+    loaded = engine.skills.load_skill_candidate("reject-workflow", str(tmp_path))
+    assert loaded.status == "rejected"
+    assert loaded.evidence == ["Evidence R"]
+
+
+def test_skills_defer_updates_status(temp_project):
+    engine, tmp_path = temp_project
+    engine.skills.create_skill_candidate(
+        candidate_id="sc_defer_1",
+        slug="defer-workflow",
+        title="Defer Workflow",
+        trigger="When deferring",
+        recommended_behavior="Should defer.",
+        evidence=["Evidence D"],
+        rationale="testing defer",
+        project=str(tmp_path),
+    )
+    
+    cand = engine.skills.update_skill_candidate_status("defer-workflow", "deferred", str(tmp_path))
+    assert cand.status == "deferred"
+    
+    loaded = engine.skills.load_skill_candidate("defer-workflow", str(tmp_path))
+    assert loaded.status == "deferred"
+
+
+def test_skills_approve_does_not_modify_agents_md(temp_project):
+    engine, tmp_path = temp_project
+    agents_md = tmp_path / "AGENTS.md"
+    agents_md.write_text("# Agent workflow\n", encoding="utf-8")
+    
+    engine.skills.create_skill_candidate(
+        candidate_id="sc_agents_1",
+        slug="agents-workflow",
+        title="Agents Workflow",
+        trigger="When testing agents",
+        recommended_behavior="Should not touch AGENTS.md.",
+        evidence=["Evidence A"],
+        rationale="testing agents",
+        project=str(tmp_path),
+    )
+    
+    engine.skills.update_skill_candidate_status("agents-workflow", "approved", str(tmp_path))
+    assert agents_md.read_text(encoding="utf-8") == "# Agent workflow\n"
+
+
+def test_approved_skill_is_searchable_but_not_ingestion_eligible(temp_project):
+    engine, tmp_path = temp_project
+    engine.skills.create_skill_candidate(
+        candidate_id="sc_searchable_1",
+        slug="searchable-workflow",
+        title="Searchable Workflow",
+        trigger="When searching searchable",
+        recommended_behavior="Should search.",
+        evidence=["Evidence S"],
+        rationale="testing searchable",
+        project=str(tmp_path),
+    )
+    
+    engine.skills.update_skill_candidate_status("searchable-workflow", "approved", str(tmp_path))
+    
+    # Run search indexing
+    index_res = engine.search.index_all(force=True)
+    assert index_res["status"] == "success"
+    
+    # Verify searchable in database
+    search_res = engine.search.search("Searchable Workflow", k=1)
+    assert len(search_res) > 0
+    match = search_res[0]
+    
+    assert match["metadata"]["source_type"] == "oem_skill"
+    assert is_ingestion_eligible(engine.layout(str(tmp_path)).skills_dir / "searchable-workflow.md") is False
+
+
+def test_mcp_skill_candidates_returns_clean_markdown(temp_project):
+    from fastmcp import FastMCP
+    from oem_knowledge.server import mount_tools
+    mcp = FastMCP("test_mcp")
+    mount_tools(mcp)
+    
+    engine, tmp_path = temp_project
+    # Create candidate
+    engine.skills.create_skill_candidate(
+        candidate_id="sc_mcp_1",
+        slug="mcp-workflow",
+        title="Mcp Workflow",
+        trigger="When using MCP",
+        recommended_behavior="Should work.",
+        evidence=["Evidence M"],
+        rationale="testing mcp",
+        project=str(tmp_path),
+    )
+    
+    import asyncio
+    res = asyncio.run(mcp.call_tool("knowledge_skill_candidates", {"project": str(tmp_path)}))
+    res_str = res.content[0].text
+    assert "mcp-workflow" in res_str
+    assert "Mcp Workflow" in res_str
+    assert "proposed" in res_str
+
+
+def test_agent_notification_mentions_high_confidence_candidate(temp_project):
+    engine, tmp_path = temp_project
+    
+    # Create high confidence candidate (evidence >= 3)
+    engine.skills.create_skill_candidate(
+        candidate_id="sc_high_1",
+        slug="high-conf-workflow",
+        title="High Conf Workflow",
+        trigger="When doing high confidence",
+        recommended_behavior="Should behave well.",
+        evidence=["Evidence 1", "Evidence 2", "Evidence 3"],
+        rationale="testing high confidence",
+        project=str(tmp_path),
+    )
+    
+    # Mock reflect_session to return success
+    def mock_reflect(*args, **kwargs):
+        return {"status": "success", "knowledge_events": [], "report_path": str(tmp_path / "report.md")}
+    
+    from unittest.mock import patch
+    with patch("oem_knowledge.services.reflection.ReflectionService.reflect_session", new=mock_reflect):
+        res = engine.session_commit(project=str(tmp_path), conversation_text="test", update_index=False)
+        assert res.get("notification") is not None
+        assert "OEM noticed a repeated successful workflow pattern" in res["notification"]
+        assert "High Conf Workflow" in res["notification"]
+        assert "oem skills approve high-conf-workflow" in res["notification"]
+
+
+def test_skills_approve_rejected_requires_force(temp_project):
+    engine, tmp_path = temp_project
+    engine.skills.create_skill_candidate(
+        candidate_id="sc_transition_1",
+        slug="transition-workflow",
+        title="Transition Workflow",
+        trigger="When transitioning",
+        recommended_behavior="Should transition.",
+        evidence=["Evidence T"],
+        rationale="testing transition",
+        project=str(tmp_path),
+    )
+    
+    # Reject it first
+    engine.skills.update_skill_candidate_status("transition-workflow", "rejected", str(tmp_path))
+    
+    # Trying to approve without force must raise ValueError
+    with pytest.raises(ValueError) as exc:
+        engine.skills.update_skill_candidate_status("transition-workflow", "approved", str(tmp_path), force=False)
+    assert "Cannot transition from rejected to approved" in str(exc.value)
+
+
+def test_skills_approve_rejected_with_force_records_event(temp_project):
+    engine, tmp_path = temp_project
+    engine.skills.create_skill_candidate(
+        candidate_id="sc_transition_2",
+        slug="transition-workflow-2",
+        title="Transition Workflow 2",
+        trigger="When transitioning again",
+        recommended_behavior="Should transition again.",
+        evidence=["Evidence T2"],
+        rationale="testing transition again",
+        project=str(tmp_path),
+    )
+    
+    engine.skills.update_skill_candidate_status("transition-workflow-2", "rejected", str(tmp_path))
+    
+    # Approve with force
+    cand = engine.skills.update_skill_candidate_status("transition-workflow-2", "approved", str(tmp_path), force=True)
+    assert cand.status == "approved"
+    
+    layout = engine.layout(str(tmp_path))
+    promotions_file = layout.skill_promotions_path
+    lines = promotions_file.read_text(encoding="utf-8").strip().splitlines()
+    events = [json.loads(line) for line in lines]
+    assert any(e["slug"] == "transition-workflow-2" and e["new_status"] == "approved" for e in events)
+
+
+def test_skill_notification_failure_does_not_break_session_commit(temp_project):
+    engine, tmp_path = temp_project
+    
+    # Mock list_skill_candidates to raise an exception
+    def mock_list(*args, **kwargs):
+        raise RuntimeError("database crash simulation")
+        
+    from unittest.mock import patch
+    with patch("oem_knowledge.services.skills.SkillService.list_skill_candidates", new=mock_list):
+        # Mock reflect_session to return success
+        def mock_reflect(*args, **kwargs):
+            return {"status": "success", "knowledge_events": [], "report_path": str(tmp_path / "report.md")}
+        
+        with patch("oem_knowledge.services.reflection.ReflectionService.reflect_session", new=mock_reflect):
+            res = engine.session_commit(project=str(tmp_path), conversation_text="test", update_index=False)
+            assert res.get("status") == "success"
+            assert res.get("notification") is None
+
+
+def test_mcp_skill_candidate_approve_missing_slug_returns_clean_error(temp_project):
+    from fastmcp import FastMCP
+    from oem_knowledge.server import mount_tools
+    mcp = FastMCP("test_mcp")
+    mount_tools(mcp)
+    
+    engine, tmp_path = temp_project
+    
+    import asyncio
+    res = asyncio.run(mcp.call_tool("knowledge_skill_candidate_approve", {"slug": "", "project": str(tmp_path)}))
+    res_str = res.content[0].text
+    assert "Status: error" in res_str
+    assert "Slug is required" in res_str
+
 

@@ -84,7 +84,7 @@ def parse_markdown_body(body_text: str) -> dict:
         
         if header == "trigger":
             result["trigger"] = content
-        elif header == "recommended behavior":
+        elif header in ("recommended behavior", "skill"):
             result["recommended_behavior"] = content
         elif header == "evidence":
             evidence_items = []
@@ -118,6 +118,72 @@ def dump_markdown_body(candidate: SkillCandidate) -> str:
     body.append("## Status")
     body.append(candidate.status.title())
     return "\n".join(body)
+
+
+def dump_approved_skill_markdown(candidate: SkillCandidate, approved_at: str) -> str:
+    frontmatter_data = {
+        "generated_by": "openempiric",
+        "source_type": "oem_project_skill",
+        "status": "approved",
+        "slug": candidate.slug,
+        "approved_at": approved_at,
+    }
+    frontmatter = dump_frontmatter(frontmatter_data)
+    
+    body = []
+    body.append(f"# {candidate.title}\n")
+    body.append("## Trigger")
+    body.append(candidate.trigger + "\n")
+    body.append("## Skill")
+    body.append(candidate.recommended_behavior + "\n")
+    body.append("## Evidence")
+    if candidate.evidence:
+        body.append("\n".join(f"- {item}" for item in candidate.evidence) + "\n")
+    else:
+        body.append("\n")
+    
+    return f"{frontmatter}\n\n" + "\n".join(body)
+
+
+def dump_superseded_skill_markdown(candidate: SkillCandidate, approved_at: str, superseded_at: str, reason: str = "") -> str:
+    frontmatter_data = {
+        "generated_by": "openempiric",
+        "source_type": "oem_project_skill",
+        "status": "superseded",
+        "slug": candidate.slug,
+        "approved_at": approved_at,
+        "superseded_at": superseded_at,
+    }
+    if reason:
+        frontmatter_data["superseded_reason"] = reason
+    frontmatter = dump_frontmatter(frontmatter_data)
+    
+    body = []
+    body.append(f"# {candidate.title}\n")
+    body.append("## Trigger")
+    body.append(candidate.trigger + "\n")
+    body.append("## Skill")
+    body.append(candidate.recommended_behavior + "\n")
+    body.append("## Evidence")
+    if candidate.evidence:
+        body.append("\n".join(f"- {item}" for item in candidate.evidence) + "\n")
+    else:
+        body.append("\n")
+    
+    return f"{frontmatter}\n\n" + "\n".join(body)
+
+
+def _read_approved_at_from_skill_file(filepath: Path, sfs) -> str | None:
+    if sfs.exists(filepath):
+        try:
+            content = sfs.read_text(filepath)
+            parts = content.split("---", 2)
+            if len(parts) >= 3:
+                metadata = parse_frontmatter(parts[1])
+                return metadata.get("approved_at")
+        except Exception:
+            pass
+    return None
 
 
 class SkillService:
@@ -242,7 +308,7 @@ class SkillService:
                 candidates.append(candidate)
         return candidates
 
-    def update_skill_candidate_status(self, slug: str, status: str, project: str | None = None) -> SkillCandidate | None:
+    def update_skill_candidate_status(self, slug: str, status: str, project: str | None = None, force: bool = False) -> SkillCandidate | None:
         candidate = self.load_skill_candidate(slug, project)
         if not candidate:
             return None
@@ -250,6 +316,12 @@ class SkillService:
         prev_status = candidate.status
         if prev_status == status:
             return candidate
+
+        # Enforce status transition restrictions
+        if prev_status == "rejected" and status == "approved" and not force:
+            raise ValueError("Cannot transition from rejected to approved directly unless forced.")
+        if prev_status == "approved" and status in ("deferred", "rejected") and not force:
+            raise ValueError(f"Cannot demote approved skill to {status} unless forced.")
 
         candidate.status = status
         now = utc_iso()
@@ -283,20 +355,18 @@ class SkillService:
         # Handle approved state: save to .oem/skills/
         skills_filepath = layout.skills_dir / f"{slug}.md"
         if status == "approved":
-            # Change source_type to oem_skill
-            frontmatter_data["source_type"] = "oem_skill"
-            frontmatter_approved = dump_frontmatter(frontmatter_data)
-            content_approved = f"{frontmatter_approved}\n\n{body}"
+            content_approved = dump_approved_skill_markdown(candidate, now)
             sfs.write_text(skills_filepath, content_approved, force_allow_truncation=True)
-        else:
-            # NO destructive deletion of approved skills in v0.98A!
-            # If the file already exists in skills/, keep it but update its status to the new status.
-            if sfs.exists(skills_filepath):
-                # We update the file in skills/ to reflect the new status as well, keeping it without deleting it.
-                frontmatter_data["source_type"] = "oem_skill"
-                frontmatter_updated = dump_frontmatter(frontmatter_data)
-                content_updated = f"{frontmatter_updated}\n\n{body}"
-                sfs.write_text(skills_filepath, content_updated, force_allow_truncation=True)
+        elif prev_status == "approved" and status in ("deferred", "rejected") and force:
+            # Mark approved skill as superseded, do not silently delete
+            approved_at = _read_approved_at_from_skill_file(skills_filepath, sfs) or now
+            content_superseded = dump_superseded_skill_markdown(
+                candidate,
+                approved_at=approved_at,
+                superseded_at=now,
+                reason=f"Demoted to {status} with force"
+            )
+            sfs.write_text(skills_filepath, content_superseded, force_allow_truncation=True)
 
         # Record promotion event
         promo_event = SkillPromotionEvent(

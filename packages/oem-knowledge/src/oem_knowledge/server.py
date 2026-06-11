@@ -339,6 +339,13 @@ def mount_tools(mcp: object) -> None:
             if "total" in timings:
                 lines.append(f"- total: {timings['total']:.1f}s")
 
+        if res.get("notification"):
+            lines.extend([
+                "",
+                "### Notification:",
+                res["notification"]
+            ])
+
         return "\n".join(lines)
 
     @mcp.tool()
@@ -807,6 +814,134 @@ def mount_tools(mcp: object) -> None:
                 return render_panel("Graph Query Results", lines, status="ok")
         except Exception as e:
             return render_panel("Query Failure", [f"Error: {e}"], status="error")
+
+    @mcp.tool()
+    def knowledge_skill_candidates(project: str = "") -> str:
+        """List all skill candidates.
+
+        Args:
+            project: Project directory path. Defaults to current directory.
+        """
+        try:
+            with KnowledgeEngine(project or None) as eng:
+                candidates = eng.skills.list_skill_candidates(project or None)
+                if not candidates:
+                    return "No skill candidates found."
+                
+                lines = [
+                    "| Slug | Title | Confidence | Status | Evidence Count |",
+                    "| --- | --- | --- | --- | --- |"
+                ]
+                for c in candidates:
+                    lines.append(f"| {c.slug} | {c.title} | {c.confidence} | {c.status} | {len(c.evidence)} |")
+                return "\n".join(lines)
+        except Exception as e:
+            return f"Status: error\nReason: {e}"
+
+    @mcp.tool()
+    def knowledge_skill_candidate_show(slug: str, project: str = "") -> str:
+        """Show detailed candidate or approved skill.
+
+        Args:
+            slug: The slug of the skill candidate or approved skill.
+            project: Project directory path. Defaults to current directory.
+        """
+        try:
+            with KnowledgeEngine(project or None) as eng:
+                candidate = eng.skills.load_skill_candidate(slug, project or None)
+                if not candidate:
+                    layout = eng.layout(project or None)
+                    approved_path = layout.skills_dir / f"{slug}.md"
+                    if approved_path.exists():
+                        return approved_path.read_text(encoding="utf-8")
+                    return f"Status: error\nReason: Candidate/Skill '{slug}' not found."
+                
+                # Format candidate details as simple markdown
+                lines = [
+                    f"# Skill Candidate: {candidate.title}",
+                    "",
+                    f"- **Slug**: {candidate.slug}",
+                    f"- **Status**: {candidate.status}",
+                    f"- **Confidence**: {candidate.confidence}",
+                    "",
+                    "## Trigger",
+                    candidate.trigger,
+                    "",
+                    "## Recommended behavior",
+                    candidate.recommended_behavior,
+                    "",
+                    "## Rationale",
+                    candidate.rationale,
+                    "",
+                    "## Evidence",
+                ]
+                for ev in candidate.evidence:
+                    lines.append(f"- {ev}")
+                return "\n".join(lines)
+        except Exception as e:
+            return f"Status: error\nReason: {e}"
+
+    @mcp.tool()
+    def knowledge_skill_candidate_approve(slug: str = "", force: bool = False, project: str = "") -> str:
+        """Approve a skill candidate and promote it to a project skill.
+
+        Args:
+            slug: The slug of the skill candidate.
+            force: Force approval even if rejected previously.
+            project: Project directory path. Defaults to current directory.
+        """
+        if not slug:
+            return "Status: error\nReason: Slug is required."
+        try:
+            with KnowledgeEngine(project or None) as eng:
+                cand = eng.skills.update_skill_candidate_status(slug, "approved", project or None, force=force)
+                if not cand:
+                    return f"Status: error\nReason: Candidate '{slug}' not found."
+                return (
+                    "Status: approved\n"
+                    f"Skill: {slug}\n"
+                    f"Approved skill written: .oem/skills/{slug}.md"
+                )
+        except Exception as e:
+            return f"Status: error\nReason: {e}"
+
+    @mcp.tool()
+    def knowledge_skill_candidate_reject(slug: str = "", project: str = "") -> str:
+        """Reject a skill candidate.
+
+        Args:
+            slug: The slug of the skill candidate.
+            project: Project directory path. Defaults to current directory.
+        """
+        if not slug:
+            return "Status: error\nReason: Slug is required."
+        try:
+            with KnowledgeEngine(project or None) as eng:
+                cand = eng.skills.update_skill_candidate_status(slug, "rejected", project or None)
+                if not cand:
+                    return f"Status: error\nReason: Candidate '{slug}' not found."
+                return f"Status: rejected\nSkill: {slug}"
+        except Exception as e:
+            return f"Status: error\nReason: {e}"
+
+    @mcp.tool()
+    def knowledge_skill_candidate_defer(slug: str = "", project: str = "") -> str:
+        """Defer a skill candidate.
+
+        Args:
+            slug: The slug of the skill candidate.
+            project: Project directory path. Defaults to current directory.
+        """
+        if not slug:
+            return "Status: error\nReason: Slug is required."
+        try:
+            with KnowledgeEngine(project or None) as eng:
+                cand = eng.skills.update_skill_candidate_status(slug, "deferred", project or None)
+                if not cand:
+                    return f"Status: error\nReason: Candidate '{slug}' not found."
+                return f"Status: deferred\nSkill: {slug}"
+        except Exception as e:
+            return f"Status: error\nReason: {e}"
 
 
 def main() -> None:

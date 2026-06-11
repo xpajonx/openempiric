@@ -179,6 +179,9 @@ def _run_session_command_impl(args):
                 retrieval_mode=eng.search.resolve_retrieval_mode()
             )
         )
+        if res.get("notification"):
+            print()
+            print(res["notification"])
         if args.verbose and "explainability" in res:
             exp = res["explainability"]
             debug_lines = [

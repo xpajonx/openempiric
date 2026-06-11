@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import re
@@ -31,6 +32,8 @@ from oem_knowledge.fs import FileLock, SecureFileSystem
 from oem_knowledge.project_layout import ProjectLayout
 from contextlib import contextmanager
 from typing import Callable
+
+logger = logging.getLogger(__name__)
 
 class PhaseTimer:
     def __init__(self):
@@ -830,6 +833,58 @@ class KnowledgeEngine:
             warnings.append(f"Session commit partial: reflection/materialization succeeded, indexing failed: {index_failed_reason}")
             ret_status = "partial"
 
+        # Check for high-confidence candidates (evidence count >= 3 or confidence "high")
+        notification = None
+        try:
+            candidates = self.skills.list_skill_candidates(project)
+            high_conf = [
+                c for c in candidates 
+                if c.status in ("proposed", "deferred") 
+                and (c.confidence == "high" or len(c.evidence) >= 3)
+            ]
+            if high_conf:
+                cand = high_conf[0]
+                
+                # Fetch original evidence IDs (e.g. "CRIT-03A") from event store
+                events_data = []
+                for evid in cand.source_event_ids:
+                    try:
+                        ev = self.state.get_event(project, evid)
+                        if ev and ev.get("evidence"):
+                            events_data.append(ev["evidence"])
+                    except Exception:
+                        pass
+                
+                if not events_data:
+                    events_data = cand.evidence
+                
+                ev_lines = []
+                for ev_val in events_data:
+                    val = str(ev_val).strip()
+                    if not val.lower().startswith("used successfully"):
+                        val = f"Used successfully in {val}"
+                    ev_lines.append(f"- {val}")
+                
+                unique_ev_lines = []
+                for line in ev_lines:
+                    if line not in unique_ev_lines:
+                        unique_ev_lines.append(line)
+                
+                ev_lines_str = "\n".join(unique_ev_lines[:3])
+                
+                notification = (
+                    "OEM noticed a repeated successful workflow pattern.\n\n"
+                    f"Candidate skill:\n"
+                    f"{cand.title}\n\n"
+                    f"Evidence:\n"
+                    f"{ev_lines_str}\n\n"
+                    f"Recommendation:\n"
+                    f"Review with: oem skills show {cand.slug}\n"
+                    f"Approve with: oem skills approve {cand.slug}"
+                )
+        except Exception as e:
+            logger.warning("Failed to generate skill candidate notification: %s", e)
+
         return {
             "status": ret_status,
             "failed_step": failed_step,
@@ -841,6 +896,7 @@ class KnowledgeEngine:
             "explainability": explainability,
             "warnings": warnings + res.get("warnings", []),
             "phase_timings": p_timings,
+            "notification": notification,
         }
 
     def record_outcome(

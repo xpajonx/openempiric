@@ -69,6 +69,7 @@ def _has_oem_metadata(content: str | None) -> bool:
             "source_type: oem_generated",
             "source_type: oem_skill_candidate",
             "source_type: oem_skill",
+            "source_type: oem_project_skill",
             "<!-- generated_by: openempiric -->",
         )
     )
