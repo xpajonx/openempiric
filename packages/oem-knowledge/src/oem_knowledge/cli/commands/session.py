@@ -287,4 +287,17 @@ def _run_session_command_impl(args):
         run_agent(args.agent, eng, project)
 
     elif args.command == "recover":
-        cmd_recover(eng, project, abort=args.abort, status=args.status)
+        scope = getattr(args, "scope", None)
+        dry_run = getattr(args, "dry_run", False)
+        apply = getattr(args, "apply", False)
+        backup = getattr(args, "backup", None)
+        cmd_recover(
+            eng,
+            project,
+            abort=args.abort,
+            status=args.status,
+            scope=scope,
+            dry_run=dry_run,
+            apply=apply,
+            backup=backup,
+        )

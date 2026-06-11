@@ -6,7 +6,8 @@ import argparse
 class _OEMArgumentParser(argparse.ArgumentParser):
     def parse_args(self, args=None, namespace=None):
         parsed = super().parse_args(args, namespace)
-        if getattr(parsed, "command", None) == "clean":
+        cmd = getattr(parsed, "command", None)
+        if cmd in ("clean", "recover"):
             if getattr(parsed, "dry_run", False) and getattr(parsed, "apply", False):
                 self.error("--dry-run and --apply cannot be used together")
             if getattr(parsed, "backup", None) is False and not getattr(
@@ -209,6 +210,31 @@ def _setup_parser() -> argparse.ArgumentParser:
     recover_p.add_argument(
         "--status", action="store_true", help="Print current active session status"
     )
+    recover_p.add_argument(
+        "--scope",
+        choices=["reflection"],
+        default=None,
+        help="Scope of recovery"
+    )
+    recover_p.add_argument(
+        "--dry-run", action="store_true", help="Analyze only; do not mutate"
+    )
+    recover_p.add_argument(
+        "--apply", action="store_true", help="Apply safe recovery actions"
+    )
+    recover_p.add_argument(
+        "--backup",
+        dest="backup",
+        action="store_true",
+        default=None,
+        help="Create a backup before applying repairs",
+    )
+    recover_p.add_argument(
+        "--no-backup",
+        dest="backup",
+        action="store_false",
+        help="Apply repairs without creating a backup",
+    )
 
     runtime_summary_p = sub.add_parser("runtime-summary", help=argparse.SUPPRESS)
     runtime_summary_p.add_argument("--days", type=int, default=7)
@@ -296,6 +322,9 @@ def _setup_parser() -> argparse.ArgumentParser:
         "doctor", help="[User] Check workspace health, plugin links, and warmer status"
     )
     doctor_p.add_argument("--project", type=str, default="")
+    doctor_p.add_argument(
+        "--fix", action="store_true", help="Automatically repair safe doctor findings"
+    )
 
     warmup_p = sub.add_parser("warmup", help=argparse.SUPPRESS)
     warmup_p.add_argument("--project", type=str, default="")

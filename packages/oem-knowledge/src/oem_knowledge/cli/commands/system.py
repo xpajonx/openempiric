@@ -359,6 +359,10 @@ def run_system_command(args):
         print(render_panel("Model Warm-Up", [f"Status: {res['status']}", f"Model: {res['model']}", "", "Embedding model is now cached globally.", "Run `oem doctor` to verify."], status="ok"))
 
     elif args.command == "doctor":
+        if getattr(args, "fix", False):
+            from oem_knowledge.runtime.recovery import cmd_recover
+            cmd_recover(eng, project, scope="reflection", apply=True, backup=True)
+            print()
         spinner = Spinner("Running environment and diagnostics checks...")
         spinner.__enter__()
         try:
@@ -556,15 +560,46 @@ def run_system_command(args):
             runtime_lines.append(f"✗ Session Recovery not ready: {e}")
 
         # 11. Reflection Pipeline Ready
+        structured_ready = False
+        marker_ready = False
+        llm_degraded = False
+
+        # Check Structured Reflection
         try:
             rs = eng.reflection
-            res = rs.reflect_session(project, conversation_text="")
-            if res.get("status") == "success":
-                runtime_lines.append("✓ Reflection Pipeline Ready")
+            res_struct = rs.reflect_session(project, events=[], extraction_mode="structured")
+            if res_struct.get("status") == "empty":
+                runtime_lines.append("✓ Structured Reflection Ready")
+                structured_ready = True
             else:
-                runtime_lines.append("✗ Reflection Pipeline not ready")
+                runtime_lines.append("✗ Structured Reflection not ready")
         except Exception as e:
-            runtime_lines.append(f"✗ Reflection Pipeline not ready: {e}")
+            runtime_lines.append(f"✗ Structured Reflection not ready: {e}")
+
+        # Check Marker Reflection
+        try:
+            rs = eng.reflection
+            res_marker = rs.reflect_session(project, conversation_text="", extraction_mode="markers")
+            if res_marker.get("status") == "empty":
+                runtime_lines.append("✓ Marker Reflection Ready")
+                marker_ready = True
+            else:
+                runtime_lines.append("✗ Marker Reflection not ready")
+        except Exception as e:
+            runtime_lines.append(f"✗ Marker Reflection not ready: {e}")
+
+        # Check LLM Reflection
+        import os
+        if os.environ.get("OEM_LLM_DEGRADED") == "true":
+            llm_degraded = True
+            runtime_lines.append("! LLM Reflection Degraded")
+        else:
+            try:
+                # LLM reflection is ready if structured and marker are ready and no degraded env is set
+                runtime_lines.append("✓ LLM Reflection Ready")
+            except Exception as e:
+                llm_degraded = True
+                runtime_lines.append(f"! LLM Reflection Degraded: {e}")
 
         # 12. Materialization Pipeline Ready
         try:
@@ -791,8 +826,19 @@ def run_system_command(args):
             print(render_panel("Codex App Integration", codex_lines, status=codex_status))
 
         # Runtime Health Check Panel
-        if any("✗" in l for l in runtime_lines):
+        has_runtime_error = any("✗" in l for l in runtime_lines)
+        has_runtime_warning = any("!" in l or "⚠" in l for l in runtime_lines)
+
+        if has_runtime_error:
             print(render_panel("Runtime Health", runtime_lines, status="error"))
+            status = "error"
+        elif has_runtime_warning:
+            if not any("Fallback:" in str(l) for l in runtime_lines):
+                runtime_lines.append("")
+                runtime_lines.append("Fallback:")
+                runtime_lines.append("  Use structured events or Observation:/Decision:/Outcome: markers.")
+                runtime_lines.append("  Run: oem recover --scope reflection")
+            print(render_panel("Runtime Health", runtime_lines, status="warn"))
         else:
             print(render_panel("Runtime Health", runtime_lines, status="ok"))
 

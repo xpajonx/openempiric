@@ -122,7 +122,9 @@ def mount_tools(mcp: object) -> None:
                 "events_written": res.get("events_written", 0),
                 "events_rejected": res.get("events_rejected", 0),
                 "warnings": res.get("warnings", []),
-                "suggestion": res.get("suggestion")
+                "suggestion": res.get("suggestion"),
+                "message": res.get("message"),
+                "failed_step": res.get("failed_step")
             }, indent=2)
 
         events_list = res.get("knowledge_events", [])

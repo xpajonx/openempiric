@@ -101,10 +101,10 @@ class ReflectionService:
                     extracted.append({
                         "event_type": e_type,
                         "summary": summary,
-                        "evidence": line.strip(),
-                        "concept_candidates": [summary[:80].lower()],
+                        "evidence": summary,
+                        "concept_candidates": [],
                         "confidence": 4, # 0.8 default
-                        "source": "chat",
+                        "source": "agent_marker",
                         "source_type": "agent_transcript",
                         "ingestion_eligible": True,
                         "event_id": str(uuid.uuid4()),
@@ -161,7 +161,7 @@ class ReflectionService:
             evidence = summary
         concept_candidates = ev.get("concept_candidates") or ev.get("concepts")
         if not concept_candidates:
-            concept_candidates = [summary[:80].lower()]
+            concept_candidates = []
         elif isinstance(concept_candidates, str):
             concept_candidates = [concept_candidates]
         elif isinstance(concept_candidates, list):
@@ -464,7 +464,7 @@ class ReflectionService:
                 for ev in extracted_markers:
                     knowledge_events.append({
                         "type": ev["event_type"],
-                        "concept": ev["concept_candidates"][0],
+                        "concept": ev["concept_candidates"][0] if ev.get("concept_candidates") else (ev.get("summary") or "General Learning")[:80].title(),
                         "evidence": ev["evidence"],
                         "confidence": ev["confidence"],
                         "source": ev["source"],
@@ -555,7 +555,7 @@ class ReflectionService:
 
             event_id = ev.get("event_id") or str(uuid.uuid4())
             timestamp = ev.get("timestamp") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            concept_candidates = ev.get("concept_candidates") or [concept_str]
+            concept_candidates = ev.get("concept_candidates") or [concept_str.lower()]
             source = ev.get("source", "chat")
             
             canonical_event = {

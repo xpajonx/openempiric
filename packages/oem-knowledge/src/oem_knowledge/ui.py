@@ -33,6 +33,8 @@ def status_tag(status: str) -> str:
         return f"{GREEN} EXECUTING{RESET}"
     elif s in ("ERROR", "FAIL", "FAILURE"):
         return f"{RED} ERROR{RESET}"
+    elif s in ("WARN", "WARNING", "DEGRADED"):
+        return f"{YELLOW} WARN{RESET}"
     return f"{CYAN} {status.upper()}{RESET}"
 
 

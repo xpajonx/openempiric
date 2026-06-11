@@ -37,7 +37,7 @@ def test_structured_prefixes_preserved(engine, tmp_path):
         session_id="test_prefix_1",
     )
     chat_events = [
-        e for e in res["canonical_events"] if e.get("source") == "chat"
+        e for e in res["canonical_events"] if e.get("source") in ("chat", "agent_marker", "agent_structured")
     ]
     assert len(chat_events) >= 1
     assert any(
@@ -99,7 +99,7 @@ def test_report_prioritization(engine, tmp_path):
         session_id="test_priority_1",
     )
     sources = [e.get("source", "") for e in res["canonical_events"]]
-    chat_positions = [i for i, s in enumerate(sources) if s in ("chat", "chat-fallback")]
+    chat_positions = [i for i, s in enumerate(sources) if s in ("chat", "chat-fallback", "agent_marker", "agent_structured")]
     diff_positions = [i for i, s in enumerate(sources) if s == "diff"]
     if chat_positions and diff_positions:
         assert max(chat_positions) < min(diff_positions), (
@@ -118,7 +118,7 @@ def test_mixed_prefix_and_fallback(engine, tmp_path):
         session_id="test_mixed_1",
     )
     structured = [
-        e for e in res["canonical_events"] if e.get("source") == "chat"
+        e for e in res["canonical_events"] if e.get("source") in ("chat", "agent_marker", "agent_structured")
     ]
     fallback = [
         e for e in res["canonical_events"] if e.get("source") == "chat-fallback"
