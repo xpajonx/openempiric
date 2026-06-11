@@ -235,6 +235,11 @@ def _setup_parser() -> argparse.ArgumentParser:
         action="store_false",
         help="Apply repairs without creating a backup",
     )
+    recover_p.add_argument(
+        "--rebuild-reports",
+        action="store_true",
+        help="Explicitly rebuild session report files",
+    )
 
     runtime_summary_p = sub.add_parser("runtime-summary", help=argparse.SUPPRESS)
     runtime_summary_p.add_argument("--days", type=int, default=7)

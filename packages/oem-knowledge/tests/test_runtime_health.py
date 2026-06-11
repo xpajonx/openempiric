@@ -166,7 +166,7 @@ def test_recovery_reflection_scope_dry_run_and_apply(engine, tmp_path):
 
     # Run apply with backup
     with patch("builtins.print") as mock_print:
-        cmd_recover(engine, str(tmp_path), scope="reflection", dry_run=False, apply=True, backup=True)
+        cmd_recover(engine, str(tmp_path), scope="reflection", dry_run=False, apply=True, backup=True, rebuild_reports=True)
         
         # Verify empty orphan session was deleted
         assert not orphan_file.exists()
@@ -189,7 +189,7 @@ def test_recovery_reflection_scope_dry_run_and_apply(engine, tmp_path):
         # Verify ev2 has event_id, timestamp, and source_type populated
         assert ev2["event_id"] is not None
         assert ev2["timestamp"] is not None
-        assert ev2["source_type"] == "agent_transcript"
+        assert ev2["source_type"] == "recovered_event"
 
         # Verify backup was created
         backups_dir = harness / "backups"

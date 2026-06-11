@@ -291,6 +291,7 @@ def _run_session_command_impl(args):
         dry_run = getattr(args, "dry_run", False)
         apply = getattr(args, "apply", False)
         backup = getattr(args, "backup", None)
+        rebuild_reports = getattr(args, "rebuild_reports", False)
         cmd_recover(
             eng,
             project,
@@ -300,4 +301,5 @@ def _run_session_command_impl(args):
             dry_run=dry_run,
             apply=apply,
             backup=backup,
+            rebuild_reports=rebuild_reports,
         )

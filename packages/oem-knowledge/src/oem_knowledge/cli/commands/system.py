@@ -361,7 +361,23 @@ def run_system_command(args):
     elif args.command == "doctor":
         if getattr(args, "fix", False):
             from oem_knowledge.runtime.recovery import cmd_recover
-            cmd_recover(eng, project, scope="reflection", apply=True, backup=True)
+            res = cmd_recover(eng, project, scope="reflection", apply=True, backup=True, rebuild_reports=False)
+            print("Doctor fix applied safe reflection recovery.")
+            if res and res.get("backup_dir"):
+                p = Path(res["backup_dir"])
+                try:
+                    rel = p.relative_to(eng._resolve_harness(project).parent)
+                except Exception:
+                    rel = p
+                print(f"Backup: {rel}")
+            if res and res.get("report_file"):
+                p = Path(res["report_file"])
+                try:
+                    rel = p.relative_to(eng._resolve_harness(project).parent)
+                except Exception:
+                    rel = p
+                print(f"Report: {rel}")
+            print("Skipped destructive repairs: session report rebuild")
             print()
         spinner = Spinner("Running environment and diagnostics checks...")
         spinner.__enter__()
