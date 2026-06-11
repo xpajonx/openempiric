@@ -165,6 +165,7 @@ class KnowledgeEngine:
         from oem_knowledge.services.event_migration import EventMigrator
         from oem_knowledge.services.fitness import FitnessService
         from oem_knowledge.services.skills import SkillService
+        from oem_knowledge.services.skill_promotion import SkillPromotionService
 
         self.search = SearchService(self)
         self.materialization = MaterializationService(self)
@@ -173,6 +174,7 @@ class KnowledgeEngine:
         self.event_migrator = EventMigrator(self)
         self.fitness = FitnessService(self)
         self.skills = SkillService(self)
+        self.skill_promotion = SkillPromotionService(self)
 
     def close(self) -> None:
         for service in (getattr(self, "search", None),):

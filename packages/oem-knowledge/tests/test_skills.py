@@ -243,3 +243,518 @@ def test_skill_candidate_storage_does_not_mutate_agents_md(temp_project):
     engine.skills.update_skill_candidate_status("no-mutate-workflow", "approved", str(tmp_path))
     
     assert agents_md.read_text(encoding="utf-8") == "# Agent Guidelines\n"
+
+
+def test_evaluate_skill_candidates_creates_candidate_from_repeated_success(temp_project):
+    engine, tmp_path = temp_project
+    
+    # 1. Setup concept registry
+    engine.state._save_registry({
+        "concept_critical_fix": {
+            "canonical_name": "critical-fix-characterization",
+            "aliases": [],
+            "status": "validated",
+            "confidence": 3,
+        }
+    }, str(tmp_path))
+    
+    # 2. Setup outcomes
+    outcomes_file = engine.layout(str(tmp_path)).root / "state" / "outcomes.jsonl"
+    outcomes_file.parent.mkdir(parents=True, exist_ok=True)
+    outcomes_file.write_text(json.dumps({
+        "session_id": "session_success_1",
+        "outcome": "success",
+        "retrieved_concepts": ["critical-fix-characterization"],
+        "referenced_concepts": ["critical-fix-characterization"],
+        "timestamp": "2026-06-11T00:00:00Z"
+    }) + "\n", encoding="utf-8")
+    
+    # 3. Setup events (at least 2 matching trigger/behavior heuristic)
+    from oem_knowledge.models import KnowledgeEvent
+    ev1 = KnowledgeEvent(
+        event_id="ev_001",
+        timestamp="2026-06-11T00:00:00Z",
+        project="test",
+        session_id="session_success_1",
+        event_type="decision",
+        concept_candidates=["critical-fix-characterization"],
+        summary="When fixing production bugs, start with characterization tests.",
+        evidence="CRIT-03A",
+        confidence=4,
+        source="chat"
+    )
+    ev2 = KnowledgeEvent(
+        event_id="ev_002",
+        timestamp="2026-06-11T00:00:00Z",
+        project="test",
+        session_id="session_success_1",
+        event_type="decision",
+        concept_candidates=["critical-fix-characterization"],
+        summary="When fixing production bugs, start with characterization tests.",
+        evidence="CRIT-04A",
+        confidence=4,
+        source="chat"
+    )
+    engine.state._append_event(ev1, str(tmp_path))
+    engine.state._append_event(ev2, str(tmp_path))
+    
+    # Evaluate
+    res = engine.skill_promotion.evaluate_skill_candidates(str(tmp_path))
+    
+    assert res["status"] == "success"
+    assert res["candidates_created"] == 1
+    assert len(res["candidates"]) == 1
+    
+    cand = res["candidates"][0]
+    assert cand["slug"] == "critical-fix-characterization-workflow"
+    assert cand["title"] == "Critical Fix Characterization Workflow"
+    assert cand["confidence"] == "medium"
+    assert cand["status"] == "proposed"
+    
+    # Verify markdown file exists
+    layout = engine.layout(str(tmp_path))
+    cand_file = layout.skill_candidates_dir / "critical-fix-characterization-workflow.md"
+    assert cand_file.exists()
+    
+    loaded = engine.skills.load_skill_candidate("critical-fix-characterization-workflow", str(tmp_path))
+    assert loaded is not None
+    assert loaded.trigger == "When fixing production bugs"
+    assert loaded.recommended_behavior == "Start with characterization tests."
+    assert loaded.source_event_ids == ["ev_001", "ev_002"]
+    assert loaded.source_concept_ids == ["concept_critical_fix"]
+
+
+def test_evaluate_skill_candidates_requires_evidence(temp_project):
+    engine, tmp_path = temp_project
+    
+    # Setup concept registry
+    engine.state._save_registry({
+        "concept_critical_fix": {
+            "canonical_name": "critical-fix",
+            "aliases": [],
+            "status": "validated",
+        }
+    }, str(tmp_path))
+    
+    # 1 outcome but no events (no evidence)
+    outcomes_file = engine.layout(str(tmp_path)).root / "state" / "outcomes.jsonl"
+    outcomes_file.parent.mkdir(parents=True, exist_ok=True)
+    outcomes_file.write_text(json.dumps({
+        "session_id": "session_success_1",
+        "outcome": "success",
+        "retrieved_concepts": ["critical-fix"],
+        "timestamp": "2026-06-11T00:00:00Z"
+    }) + "\n", encoding="utf-8")
+    
+    res = engine.skill_promotion.evaluate_skill_candidates(str(tmp_path))
+    assert res["candidates_created"] == 0
+
+
+def test_evaluate_skill_candidates_requires_trigger(temp_project):
+    engine, tmp_path = temp_project
+    
+    engine.state._save_registry({
+        "concept_no_trigger": {
+            "canonical_name": "no-trigger-concept",
+            "aliases": [],
+            "status": "validated",
+        }
+    }, str(tmp_path))
+    
+    outcomes_file = engine.layout(str(tmp_path)).root / "state" / "outcomes.jsonl"
+    outcomes_file.parent.mkdir(parents=True, exist_ok=True)
+    outcomes_file.write_text(json.dumps({
+        "session_id": "session_1",
+        "outcome": "success",
+        "retrieved_concepts": ["no-trigger-concept"],
+        "timestamp": "2026-06-11T00:00:00Z"
+    }) + "\n", encoding="utf-8")
+    
+    # Events have no "When/If/During" trigger keywords
+    from oem_knowledge.models import KnowledgeEvent
+    ev1 = KnowledgeEvent(
+        event_id="ev_1",
+        timestamp="2026-06-11T00:00:00Z",
+        project="test",
+        session_id="session_1",
+        event_type="decision",
+        concept_candidates=["no-trigger-concept"],
+        summary="Some behavior that is recommended.",
+        evidence="CRIT-03A",
+        confidence=4,
+        source="chat"
+    )
+    ev2 = KnowledgeEvent(
+        event_id="ev_2",
+        timestamp="2026-06-11T00:00:00Z",
+        project="test",
+        session_id="session_1",
+        event_type="decision",
+        concept_candidates=["no-trigger-concept"],
+        summary="Another behavior that is recommended.",
+        evidence="CRIT-04A",
+        confidence=4,
+        source="chat"
+    )
+    engine.state._append_event(ev1, str(tmp_path))
+    engine.state._append_event(ev2, str(tmp_path))
+    
+    res = engine.skill_promotion.evaluate_skill_candidates(str(tmp_path))
+    assert res["candidates_created"] == 0
+
+
+def test_evaluate_skill_candidates_skips_vague_pattern_without_behavior(temp_project):
+    engine, tmp_path = temp_project
+    
+    engine.state._save_registry({
+        "concept_no_behavior": {
+            "canonical_name": "no-behavior-concept",
+            "aliases": [],
+            "status": "validated",
+        }
+    }, str(tmp_path))
+    
+    outcomes_file = engine.layout(str(tmp_path)).root / "state" / "outcomes.jsonl"
+    outcomes_file.parent.mkdir(parents=True, exist_ok=True)
+    outcomes_file.write_text(json.dumps({
+        "session_id": "session_1",
+        "outcome": "success",
+        "retrieved_concepts": ["no-behavior-concept"],
+        "timestamp": "2026-06-11T00:00:00Z"
+    }) + "\n", encoding="utf-8")
+    
+    # Events have trigger but no clear behavior keywords (should/must/always/start with)
+    from oem_knowledge.models import KnowledgeEvent
+    ev1 = KnowledgeEvent(
+        event_id="ev_1",
+        timestamp="2026-06-11T00:00:00Z",
+        project="test",
+        session_id="session_1",
+        event_type="decision",
+        concept_candidates=["no-behavior-concept"],
+        summary="When fixing bugs, we did some testing.",
+        evidence="CRIT-03A",
+        confidence=4,
+        source="chat"
+    )
+    ev2 = KnowledgeEvent(
+        event_id="ev_2",
+        timestamp="2026-06-11T00:00:00Z",
+        project="test",
+        session_id="session_1",
+        event_type="decision",
+        concept_candidates=["no-behavior-concept"],
+        summary="When fixing bugs, testing occurred.",
+        evidence="CRIT-04A",
+        confidence=4,
+        source="chat"
+    )
+    engine.state._append_event(ev1, str(tmp_path))
+    engine.state._append_event(ev2, str(tmp_path))
+    
+    res = engine.skill_promotion.evaluate_skill_candidates(str(tmp_path))
+    assert res["candidates_created"] == 0
+
+
+def test_evaluate_skill_candidates_does_not_duplicate_existing_candidate(temp_project):
+    engine, tmp_path = temp_project
+    
+    # Create an existing proposed candidate
+    engine.skills.create_skill_candidate(
+        candidate_id="sc_existing",
+        slug="critical-fix-characterization-workflow",
+        title="Critical Fix Characterization Workflow",
+        trigger="When fixing production bugs",
+        recommended_behavior="Start with characterization tests.",
+        evidence=["old evidence"],
+        rationale="because",
+        source_event_ids=["ev_old"],
+        project=str(tmp_path),
+    )
+    
+    engine.state._save_registry({
+        "concept_critical_fix": {
+            "canonical_name": "critical-fix-characterization",
+            "aliases": [],
+            "status": "validated",
+        }
+    }, str(tmp_path))
+    
+    outcomes_file = engine.layout(str(tmp_path)).root / "state" / "outcomes.jsonl"
+    outcomes_file.parent.mkdir(parents=True, exist_ok=True)
+    outcomes_file.write_text(json.dumps({
+        "session_id": "session_success_1",
+        "outcome": "success",
+        "retrieved_concepts": ["critical-fix-characterization"],
+        "timestamp": "2026-06-11T00:00:00Z"
+    }) + "\n", encoding="utf-8")
+    
+    from oem_knowledge.models import KnowledgeEvent
+    ev1 = KnowledgeEvent(
+        event_id="ev_001",
+        timestamp="2026-06-11T00:00:00Z",
+        project="test",
+        session_id="session_success_1",
+        event_type="decision",
+        concept_candidates=["critical-fix-characterization"],
+        summary="When fixing production bugs, start with characterization tests.",
+        evidence="CRIT-03A",
+        confidence=4,
+        source="chat"
+    )
+    ev2 = KnowledgeEvent(
+        event_id="ev_002",
+        timestamp="2026-06-11T00:00:00Z",
+        project="test",
+        session_id="session_success_1",
+        event_type="decision",
+        concept_candidates=["critical-fix-characterization"],
+        summary="When fixing production bugs, start with characterization tests.",
+        evidence="CRIT-04A",
+        confidence=4,
+        source="chat"
+    )
+    engine.state._append_event(ev1, str(tmp_path))
+    engine.state._append_event(ev2, str(tmp_path))
+    
+    res = engine.skill_promotion.evaluate_skill_candidates(str(tmp_path))
+    
+    # Duplicate detected, skipped creating a new one (but updates evidence on the proposed one)
+    assert res["candidates_created"] == 0
+    
+    loaded = engine.skills.load_skill_candidate("critical-fix-characterization-workflow", str(tmp_path))
+    assert loaded is not None
+    assert "old evidence" in loaded.evidence
+    assert "When fixing production bugs, start with characterization tests." in loaded.evidence
+    assert set(loaded.source_event_ids) == {"ev_old", "ev_001", "ev_002"}
+
+
+def test_evaluate_skill_candidates_does_not_approve_automatically(temp_project):
+    engine, tmp_path = temp_project
+    
+    engine.state._save_registry({
+        "concept_cf": {
+            "canonical_name": "critical-fix",
+            "aliases": [],
+            "status": "validated",
+        }
+    }, str(tmp_path))
+    
+    outcomes_file = engine.layout(str(tmp_path)).root / "state" / "outcomes.jsonl"
+    outcomes_file.parent.mkdir(parents=True, exist_ok=True)
+    outcomes_file.write_text(json.dumps({
+        "session_id": "session_success_1",
+        "outcome": "success",
+        "retrieved_concepts": ["critical-fix"],
+        "timestamp": "2026-06-11T00:00:00Z"
+    }) + "\n", encoding="utf-8")
+    
+    from oem_knowledge.models import KnowledgeEvent
+    ev1 = KnowledgeEvent(
+        event_id="ev_1",
+        timestamp="2026-06-11T00:00:00Z",
+        project="test",
+        session_id="session_success_1",
+        event_type="decision",
+        concept_candidates=["critical-fix"],
+        summary="When fixing production bugs, start with characterization tests.",
+        evidence="CRIT-03A",
+        confidence=4,
+        source="chat"
+    )
+    ev2 = KnowledgeEvent(
+        event_id="ev_2",
+        timestamp="2026-06-11T00:00:00Z",
+        project="test",
+        session_id="session_success_1",
+        event_type="decision",
+        concept_candidates=["critical-fix"],
+        summary="When fixing production bugs, start with characterization tests.",
+        evidence="CRIT-04A",
+        confidence=4,
+        source="chat"
+    )
+    engine.state._append_event(ev1, str(tmp_path))
+    engine.state._append_event(ev2, str(tmp_path))
+    
+    res = engine.skill_promotion.evaluate_skill_candidates(str(tmp_path))
+    assert res["candidates_created"] == 1
+    
+    loaded = engine.skills.load_skill_candidate(res["candidates"][0]["slug"], str(tmp_path))
+    assert loaded.status == "proposed"  # must NOT be approved automatically
+
+
+def test_evaluate_skill_candidates_does_not_modify_agents_md(temp_project):
+    engine, tmp_path = temp_project
+    
+    agents_md = tmp_path / "AGENTS.md"
+    agents_md.write_text("# Agents\n", encoding="utf-8")
+    
+    engine.state._save_registry({
+        "concept_cf": {
+            "canonical_name": "critical-fix",
+            "aliases": [],
+            "status": "validated",
+        }
+    }, str(tmp_path))
+    
+    outcomes_file = engine.layout(str(tmp_path)).root / "state" / "outcomes.jsonl"
+    outcomes_file.parent.mkdir(parents=True, exist_ok=True)
+    outcomes_file.write_text(json.dumps({
+        "session_id": "session_success_1",
+        "outcome": "success",
+        "retrieved_concepts": ["critical-fix"],
+        "timestamp": "2026-06-11T00:00:00Z"
+    }) + "\n", encoding="utf-8")
+    
+    from oem_knowledge.models import KnowledgeEvent
+    ev1 = KnowledgeEvent(
+        event_id="ev_1",
+        timestamp="2026-06-11T00:00:00Z",
+        project="test",
+        session_id="session_success_1",
+        event_type="decision",
+        concept_candidates=["critical-fix"],
+        summary="When fixing production bugs, start with characterization tests.",
+        evidence="CRIT-03A",
+        confidence=4,
+        source="chat"
+    )
+    ev2 = KnowledgeEvent(
+        event_id="ev_2",
+        timestamp="2026-06-11T00:00:00Z",
+        project="test",
+        session_id="session_success_1",
+        event_type="decision",
+        concept_candidates=["critical-fix"],
+        summary="When fixing production bugs, start with characterization tests.",
+        evidence="CRIT-04A",
+        confidence=4,
+        source="chat"
+    )
+    engine.state._append_event(ev1, str(tmp_path))
+    engine.state._append_event(ev2, str(tmp_path))
+    
+    engine.skill_promotion.evaluate_skill_candidates(str(tmp_path))
+    
+    assert agents_md.read_text(encoding="utf-8") == "# Agents\n"
+
+
+def test_evaluate_skill_candidates_records_promotion_event(temp_project):
+    engine, tmp_path = temp_project
+    
+    engine.state._save_registry({
+        "concept_cf": {
+            "canonical_name": "critical-fix",
+            "aliases": [],
+            "status": "validated",
+        }
+    }, str(tmp_path))
+    
+    outcomes_file = engine.layout(str(tmp_path)).root / "state" / "outcomes.jsonl"
+    outcomes_file.parent.mkdir(parents=True, exist_ok=True)
+    outcomes_file.write_text(json.dumps({
+        "session_id": "session_success_1",
+        "outcome": "success",
+        "retrieved_concepts": ["critical-fix"],
+        "timestamp": "2026-06-11T00:00:00Z"
+    }) + "\n", encoding="utf-8")
+    
+    from oem_knowledge.models import KnowledgeEvent
+    ev1 = KnowledgeEvent(
+        event_id="ev_1",
+        timestamp="2026-06-11T00:00:00Z",
+        project="test",
+        session_id="session_success_1",
+        event_type="decision",
+        concept_candidates=["critical-fix"],
+        summary="When fixing production bugs, start with characterization tests.",
+        evidence="CRIT-03A",
+        confidence=4,
+        source="chat"
+    )
+    ev2 = KnowledgeEvent(
+        event_id="ev_2",
+        timestamp="2026-06-11T00:00:00Z",
+        project="test",
+        session_id="session_success_1",
+        event_type="decision",
+        concept_candidates=["critical-fix"],
+        summary="When fixing production bugs, start with characterization tests.",
+        evidence="CRIT-04A",
+        confidence=4,
+        source="chat"
+    )
+    engine.state._append_event(ev1, str(tmp_path))
+    engine.state._append_event(ev2, str(tmp_path))
+    
+    res = engine.skill_promotion.evaluate_skill_candidates(str(tmp_path))
+    
+    layout = engine.layout(str(tmp_path))
+    assert layout.skill_promotions_path.exists()
+    lines = layout.skill_promotions_path.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 1
+    evt = json.loads(lines[0])
+    assert evt["slug"] == res["candidates"][0]["slug"]
+    assert evt["event_type"] == "proposed"
+
+
+def test_rejected_candidate_is_not_immediately_recreated(temp_project):
+    engine, tmp_path = temp_project
+    
+    engine.state._save_registry({
+        "concept_cf": {
+            "canonical_name": "critical-fix",
+            "aliases": [],
+            "status": "validated",
+        }
+    }, str(tmp_path))
+    
+    outcomes_file = engine.layout(str(tmp_path)).root / "state" / "outcomes.jsonl"
+    outcomes_file.parent.mkdir(parents=True, exist_ok=True)
+    outcomes_file.write_text(json.dumps({
+        "session_id": "session_success_1",
+        "outcome": "success",
+        "retrieved_concepts": ["critical-fix"],
+        "timestamp": "2026-06-11T00:00:00Z"
+    }) + "\n", encoding="utf-8")
+    
+    from oem_knowledge.models import KnowledgeEvent
+    ev1 = KnowledgeEvent(
+        event_id="ev_1",
+        timestamp="2026-06-11T00:00:00Z",
+        project="test",
+        session_id="session_success_1",
+        event_type="decision",
+        concept_candidates=["critical-fix"],
+        summary="When fixing production bugs, start with characterization tests.",
+        evidence="CRIT-03A",
+        confidence=4,
+        source="chat"
+    )
+    ev2 = KnowledgeEvent(
+        event_id="ev_2",
+        timestamp="2026-06-11T00:00:00Z",
+        project="test",
+        session_id="session_success_1",
+        event_type="decision",
+        concept_candidates=["critical-fix"],
+        summary="When fixing production bugs, start with characterization tests.",
+        evidence="CRIT-04A",
+        confidence=4,
+        source="chat"
+    )
+    engine.state._append_event(ev1, str(tmp_path))
+    engine.state._append_event(ev2, str(tmp_path))
+    
+    # First evaluate: creates candidate
+    res = engine.skill_promotion.evaluate_skill_candidates(str(tmp_path))
+    slug = res["candidates"][0]["slug"]
+    
+    # Reject it
+    engine.skills.update_skill_candidate_status(slug, "rejected", str(tmp_path))
+    
+    # Evaluate again: must not recreate it
+    res2 = engine.skill_promotion.evaluate_skill_candidates(str(tmp_path))
+    assert res2["candidates_created"] == 0
+
