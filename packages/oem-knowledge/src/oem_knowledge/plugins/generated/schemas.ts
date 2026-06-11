@@ -31,6 +31,8 @@ export interface KnowledgeEvent {
   confidence: number;
   source: string;
   schema_version: number;
+  source_type?: string | null;
+  ingestion_eligible?: boolean | null;
   tokens?: Record<string, number> | null;
   cost?: number | null;
   duration_s?: number | null;

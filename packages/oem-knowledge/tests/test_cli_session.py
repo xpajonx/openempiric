@@ -18,7 +18,7 @@ def temp_project(tmp_path):
 
 def test_cli_session_end_verbose_prints_phase_progress(temp_project, capsys):
     parser = _setup_parser()
-    args = parser.parse_args(["session-end", "--project", str(temp_project), "--chat", "test verbose output", "--verbose"])
+    args = parser.parse_args(["session-end", "--project", str(temp_project), "--chat", "decision: test verbose output", "--verbose"])
     run_session_command(args)
     captured = capsys.readouterr()
     assert "[session] load_state" in captured.out
@@ -31,7 +31,7 @@ def test_cli_session_end_verbose_prints_phase_progress(temp_project, capsys):
 
 def test_cli_session_end_no_index_skips_search_index(temp_project):
     parser = _setup_parser()
-    args = parser.parse_args(["session-end", "--project", str(temp_project), "--chat", "test no index option", "--no-index"])
+    args = parser.parse_args(["session-end", "--project", str(temp_project), "--chat", "decision: test no index option", "--no-index"])
     with patch.object(KnowledgeEngine, "session_commit", wraps=KnowledgeEngine(temp_project).session_commit) as mock_commit:
         try:
             run_session_command(args)

@@ -54,8 +54,8 @@ def test_empty_chat_no_crash(engine, tmp_path):
         conversation_text="Done.",
         session_id="test_empty_1",
     )
-    assert res["status"] == "success"
-    assert "report_path" in res
+    assert res["status"] == "empty"
+    assert res["report_path"] is None
     assert "explainability" in res
 
 

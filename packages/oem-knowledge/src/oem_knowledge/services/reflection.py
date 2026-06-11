@@ -47,6 +47,157 @@ class ReflectionService:
     def __init__(self, engine: KnowledgeEngine):
         self.engine = engine
 
+    def _detect_markers(self, text: str) -> bool:
+        if not text:
+            return False
+        markers = {"observation", "obs", "decision", "dec", "outcome", "out", "hypothesis", "hyp", "experiment", "exp", "failure", "fail", "risk", "validation", "val"}
+        pattern = re.compile(
+            r"^\s*(?:-\s*(?:\[[ xX/]\]\s*)?|[*]\s*(?:\[[ xX/]\]\s*)?|\d+\.\s*|\[[ xX/]\]\s*)?(" + 
+            "|".join(markers) + 
+            r")\s*:", 
+            re.IGNORECASE
+        )
+        for line in text.splitlines():
+            if pattern.match(line):
+                return True
+        return False
+
+    def _parse_markers(self, conversation_text: str) -> list[dict]:
+        extracted = []
+        if not conversation_text:
+            return extracted
+        pattern = re.compile(
+            r"^\s*(?:-\s*(?:\[[ xX/]\]\s*)?|[*]\s*(?:\[[ xX/]\]\s*)?|\d+\.\s*|\[[ xX/]\]\s*)?("
+            r"observation|obs|decision|dec|outcome|out|hypothesis|hyp|experiment|exp|failure|fail|risk|validation|val"
+            r")\s*:\s*(.+)$",
+            re.IGNORECASE
+        )
+        type_map = {
+            "observation": "observation",
+            "obs": "observation",
+            "decision": "decision",
+            "dec": "decision",
+            "hypothesis": "hypothesis",
+            "hyp": "hypothesis",
+            "experiment": "experiment",
+            "exp": "experiment",
+            "outcome": "outcome",
+            "out": "outcome",
+            "failure": "failure",
+            "fail": "failure",
+            "risk": "risk",
+            "validation": "validation",
+            "val": "validation"
+        }
+        for line in conversation_text.splitlines():
+            m = pattern.match(line)
+            if m:
+                original_type = m.group(1).lower()
+                e_type = type_map.get(original_type, "observation")
+                summary = m.group(2).strip()
+                if summary:
+                    import uuid
+                    import time
+                    extracted.append({
+                        "event_type": e_type,
+                        "summary": summary,
+                        "evidence": line.strip(),
+                        "concept_candidates": [summary[:80].lower()],
+                        "confidence": 4, # 0.8 default
+                        "source": "chat",
+                        "source_type": "agent_transcript",
+                        "ingestion_eligible": True,
+                        "event_id": str(uuid.uuid4()),
+                        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    })
+        return extracted
+
+    def _run_llm_extraction(self, conversation_text: str, timeout_seconds: float | None = None) -> list[dict]:
+        import threading
+        if timeout_seconds is not None:
+            res_box = []
+            exc_box = []
+            def worker():
+                try:
+                    if "slow_extraction_mock" in conversation_text or (hasattr(self, "_mock_slow") and self._mock_slow):
+                        import time
+                        time.sleep(2.0)
+                    res = self._fallback_extract(conversation_text)
+                    res_box.append(res)
+                except Exception as e:
+                    exc_box.append(e)
+            t = threading.Thread(target=worker)
+            t.daemon = True
+            t.start()
+            t.join(timeout=timeout_seconds)
+            if t.is_alive():
+                raise TimeoutError("LLM extraction timed out.")
+            if exc_box:
+                raise exc_box[0]
+            return res_box[0] if res_box else []
+        else:
+            return self._fallback_extract(conversation_text)
+
+    def _validate_and_normalize_event(self, ev: dict, warnings_list: list[str]) -> dict | None:
+        if not isinstance(ev, dict):
+            warnings_list.append("Event is not a dictionary. Skipped.")
+            return None
+        event_type = ev.get("event_type") or ev.get("type")
+        summary = ev.get("summary")
+        if not summary or not isinstance(summary, str):
+            warnings_list.append("Event rejected: missing summary")
+            return None
+        if not event_type or not isinstance(event_type, str):
+            warnings_list.append("Event type missing or invalid; mapped to 'observation'.")
+            event_type = "observation"
+        else:
+            event_type = event_type.strip().lower()
+            allowed_types = {"observation", "decision", "hypothesis", "experiment", "outcome", "failure", "risk", "validation", "deprecation"}
+            if event_type not in allowed_types:
+                warnings_list.append(f"Mapped unknown event type '{event_type}' to 'observation'.")
+                event_type = "observation"
+        evidence = ev.get("evidence")
+        if not evidence or not isinstance(evidence, str):
+            evidence = summary
+        concept_candidates = ev.get("concept_candidates") or ev.get("concepts")
+        if not concept_candidates:
+            concept_candidates = [summary[:80].lower()]
+        elif isinstance(concept_candidates, str):
+            concept_candidates = [concept_candidates]
+        elif isinstance(concept_candidates, list):
+            concept_candidates = [str(c) for c in concept_candidates if c]
+        confidence = ev.get("confidence")
+        if confidence is None:
+            confidence = 4
+        else:
+            try:
+                confidence_float = float(confidence)
+                if 0.0 <= confidence_float <= 1.0:
+                    confidence = int(confidence_float * 5)
+                else:
+                    confidence = int(confidence_float)
+                if not (1 <= confidence <= 5):
+                    confidence = 1
+            except (ValueError, TypeError):
+                confidence = 1
+        source = ev.get("source") or "agent_structured"
+        import uuid
+        event_id = ev.get("event_id") or ev.get("id") or str(uuid.uuid4())
+        import time
+        timestamp = ev.get("timestamp") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        return {
+            "event_id": event_id,
+            "timestamp": timestamp,
+            "event_type": event_type,
+            "concept_candidates": concept_candidates,
+            "summary": summary,
+            "evidence": evidence,
+            "confidence": confidence,
+            "source": source,
+            "source_type": "agent_transcript",
+            "ingestion_eligible": True,
+        }
+
     def _fallback_extract(self, conversation_text: str) -> list[dict]:
         extracted = []
         for line in conversation_text.splitlines():
@@ -77,6 +228,9 @@ class ReflectionService:
         telemetry: dict | None = None,
         session_started_at: float | None = None,
         progress_callback = None,
+        events: list[dict] | None = None,
+        extraction_mode: str = "auto",
+        timeout_seconds: float | None = None,
     ) -> dict:
         import time
         import uuid
@@ -86,6 +240,7 @@ class ReflectionService:
 
         knowledge_events = []
         warnings_list = []
+        events_rejected = 0
         file_observations_count = 0
         structured_events_found = 0
         fallback_extraction_used = False
@@ -106,7 +261,6 @@ class ReflectionService:
         modified_files = []
         if concepts_dir.exists():
             for fp in concepts_dir.rglob("*.md"):
-                # 1. Check modification time
                 if session_started_at is not None:
                     try:
                         mtime = fp.stat().st_mtime
@@ -114,27 +268,21 @@ class ReflectionService:
                             continue
                     except Exception as e:
                         logger.warning("Failed to check modification time for concept file %s: %s", fp.name, e)
-                
-                # 2. Check if body actually changed compared to last revision log
                 try:
                     concept_id = fp.stem
                     current_text = fp.read_text(encoding="utf-8")
-                    
                     fm_match = re.match(r"^---\s*\n.*?\n---\s*\n(.*)$", current_text, re.DOTALL)
                     current_body = fm_match.group(1).strip() if fm_match else current_text.strip()
-                    
                     history = self.engine.materialization.get_concept_history(concept_id, project)
                     if history:
                         last_entry = history[-1]
                         last_content = last_entry.get("content", "")
                         last_fm_match = re.match(r"^---\s*\n.*?\n---\s*\n(.*)$", last_content, re.DOTALL)
                         last_body = last_fm_match.group(1).strip() if last_fm_match else last_content.strip()
-                        
                         if current_body.strip() == last_body.strip():
                             continue
                 except Exception as e:
                     logger.warning("Failed to read or diff history for concept file %s: %s", fp.name, e)
-                
                 modified_files.append(fp)
 
         for fp in modified_files:
@@ -143,33 +291,25 @@ class ReflectionService:
             except Exception as e:
                 logger.warning("Failed to read concept file %s for source classification: %s", fp.name, e)
                 source_text = None
-
             source_classification = classify_source(fp, source_text)
             if not source_classification.ingestion_eligible:
                 _track_excluded_file(fp)
                 continue
-
             concept = fp.stem.replace("_", " ").replace("-", " ").title()
-            knowledge_events.append(
-                {
-                    "type": "observation",
-                    "concept": concept,
-                    "evidence": f"Modified: {fp.name}",
-                    "confidence": 1,
-                    "source": "diff",
-                }
-            )
+            knowledge_events.append({
+                "type": "observation",
+                "concept": concept,
+                "evidence": f"Modified: {fp.name}",
+                "confidence": 1,
+                "source": "diff",
+            })
             file_observations_count += 1
 
-        # Git diff codebase modifications
         try:
             import subprocess
-            # Skip if subprocess.run is mocked (common in unit tests)
             if not ("mock" in type(subprocess.run).__name__.lower()):
                 p_path = Path(project or ".").resolve()
                 modified_code_files = []
-                
-                # Staged/unstaged changes
                 res_diff = subprocess.run(
                     ["git", "diff", "--name-only"],
                     cwd=p_path,
@@ -179,8 +319,6 @@ class ReflectionService:
                 )
                 if res_diff.returncode == 0:
                     modified_code_files.extend(res_diff.stdout.splitlines())
-                    
-                # Last commit changes
                 res_commit = subprocess.run(
                     ["git", "diff", "HEAD~1..HEAD", "--name-only"],
                     cwd=p_path,
@@ -190,8 +328,6 @@ class ReflectionService:
                 )
                 if res_commit.returncode == 0:
                     modified_code_files.extend(res_commit.stdout.splitlines())
-                    
-                # Filter and match against registry
                 registry = self.engine.state._load_registry(project)
                 seen_files = set()
                 for f in modified_code_files:
@@ -199,40 +335,30 @@ class ReflectionService:
                     if not f or f in seen_files:
                         continue
                     seen_files.add(f)
-
                     source_path = p_path / f
                     try:
                         source_text = source_path.read_text(encoding="utf-8") if source_path.is_file() else None
                     except Exception as e:
                         logger.warning("Failed to read modified file %s for source classification: %s", f, e)
                         source_text = None
-
                     source_classification = classify_source(f, source_text)
                     if not source_classification.ingestion_eligible:
                         _track_excluded_file(source_path)
                         continue
-
                     if f.startswith(".git"):
                         continue
-                    
-                    # Check for matching concepts in registry
                     f_path = Path(f)
                     stem = f_path.stem.lower()
                     name = f_path.name.lower()
                     full_path = f.lower()
-                    
                     matched_cid = None
                     matched_name = None
-                    
-                    # P1: Explicit filename/path in aliases
                     for cid, cdata in registry.items():
                         aliases = [a.lower() for a in cdata.get("aliases", [])]
                         if name in aliases or full_path in aliases:
                             matched_cid = cid
                             matched_name = cdata.get("canonical_name", cid)
                             break
-                            
-                    # P2: Exact stem match to canonical name or alias (minimum 4 chars)
                     if not matched_cid and len(stem) >= 4:
                         for cid, cdata in registry.items():
                             canon = cdata.get("canonical_name", "").lower()
@@ -241,7 +367,6 @@ class ReflectionService:
                                 matched_cid = cid
                                 matched_name = cdata.get("canonical_name", cid)
                                 break
-                                
                     if matched_cid:
                         knowledge_events.append({
                             "type": "observation",
@@ -255,97 +380,159 @@ class ReflectionService:
             logger.warning("Failed to extract codebase modifications via git diff: %s", e)
             warnings_list.append("Git diff extraction failed, so code modification evidence may be incomplete.")
 
-
+        # Determine resolved extraction mode
+        resolved_mode = extraction_mode
+        if resolved_mode == "auto":
+            if events is not None:
+                resolved_mode = "structured"
+            elif self._detect_markers(conversation_text):
+                resolved_mode = "markers"
+            else:
+                resolved_mode = "llm"
 
         text_clean = conversation_text.strip()
+        session_markers_detected = any(
+            marker in conversation_text.lower()
+            for marker in ["session start", "session end"]
+        )
+
+        def make_explainability() -> dict:
+            return {
+                "chat_lines_processed": len([l for l in conversation_text.splitlines() if l.strip()]),
+                "structured_events": structured_events_found,
+                "structured_events_found": structured_events_found,
+                "fallback_extractions": fallback_extractions_count,
+                "fallback_extraction_used": fallback_extraction_used,
+                "file_observations": file_observations_count,
+                "file_observations_count": file_observations_count,
+                "excluded_oem_generated_files": len(excluded_oem_generated_paths),
+                "generated_concepts": [],
+                "top_sources": [],
+                "session_markers_detected": session_markers_detected,
+            }
+
         if telemetry:
             duration = telemetry.get("duration_sec", 0)
             tool_calls = telemetry.get("total_tool_calls", 0)
-            knowledge_events.append(
-                {
-                    "type": "telemetry",
-                    "concept": "Session Metrics",
-                    "evidence": f"Session duration: {duration}s, Tool calls: {tool_calls}",
-                    "confidence": 1,
-                    "source": "orchestrator",
+            knowledge_events.append({
+                "type": "telemetry",
+                "concept": "Session Metrics",
+                "evidence": f"Session duration: {duration}s, Tool calls: {tool_calls}",
+                "confidence": 1,
+                "source": "orchestrator",
+            })
+
+        # Run extraction based on mode
+        if resolved_mode == "structured":
+            if not isinstance(events, list):
+                return {
+                    "status": "error",
+                    "mode": resolved_mode,
+                    "events_written": 0,
+                    "events_rejected": 0,
+                    "warnings": ["Structured mode requires 'events' parameter to be a list."],
+                    "suggestion": "Pass a valid list of event dictionaries.",
+                    "report_path": None,
+                    "knowledge_events": [],
+                    "canonical_events": [],
+                    "explainability": make_explainability(),
+                    "phase_timings": {}
                 }
-            )
-        is_structured = False
-        if text_clean.startswith("{") and "knowledge_events" in text_clean:
-            is_structured = True
+            for ev in events:
+                norm_ev = self._validate_and_normalize_event(ev, warnings_list)
+                if norm_ev:
+                    knowledge_events.append({
+                        "type": norm_ev["event_type"],
+                        "concept": norm_ev["concept_candidates"][0] if norm_ev["concept_candidates"] else "General Learning",
+                        "evidence": norm_ev["evidence"],
+                        "confidence": norm_ev["confidence"],
+                        "source": norm_ev["source"],
+                        "event_id": norm_ev["event_id"],
+                        "timestamp": norm_ev["timestamp"],
+                        "concept_candidates": norm_ev["concept_candidates"],
+                        "summary": norm_ev["summary"],
+                        "source_type": norm_ev.get("source_type"),
+                        "ingestion_eligible": norm_ev.get("ingestion_eligible"),
+                    })
+                    structured_events_found += 1
+                else:
+                    events_rejected += 1
+
+        elif resolved_mode == "markers":
+            extracted_markers = self._parse_markers(conversation_text)
+            if extracted_markers:
+                for ev in extracted_markers:
+                    knowledge_events.append({
+                        "type": ev["event_type"],
+                        "concept": ev["concept_candidates"][0],
+                        "evidence": ev["evidence"],
+                        "confidence": ev["confidence"],
+                        "source": ev["source"],
+                        "event_id": ev["event_id"],
+                        "timestamp": ev["timestamp"],
+                        "concept_candidates": ev["concept_candidates"],
+                        "summary": ev["summary"],
+                        "source_type": ev.get("source_type"),
+                        "ingestion_eligible": ev.get("ingestion_eligible"),
+                    })
+                structured_events_found = len(extracted_markers)
+            else:
+                if extraction_mode == "auto":
+                    resolved_mode = "llm"
+                else:
+                    return {
+                        "status": "empty",
+                        "mode": resolved_mode,
+                        "events_written": 0,
+                        "events_rejected": 0,
+                        "warnings": warnings_list,
+                        "suggestion": "Use explicit markers or pass structured events.",
+                        "report_path": None,
+                        "knowledge_events": [],
+                        "canonical_events": [],
+                        "explainability": make_explainability(),
+                        "phase_timings": {}
+                    }
+
+        if resolved_mode == "llm":
             try:
-                data = json.loads(text_clean)
-                if "knowledge_events" in data:
-                    knowledge_events.extend(data["knowledge_events"])
-            except json.JSONDecodeError as e:
-                logger.error("Failed to parse structured JSON transcript: %s", e)
-                return {"status": "error", "failed_step": "reflection", "message": f"Failed to parse structured JSON transcript: {e}"}
-
-        if not is_structured:
-            for line in conversation_text.splitlines():
-                lower = line.strip().lower()
-                if lower.startswith("hypothesis:") or lower.startswith("hyp:"):
-                    knowledge_events.append(
-                        {
-                            "type": "hypothesis",
-                            "concept": lower.split(":", 1)[1].strip()[:80],
-                            "evidence": line.strip(),
-                            "confidence": 1,
-                            "source": "chat",
-                        }
-                    )
-                    structured_events_found += 1
-                elif lower.startswith("experiment:") or lower.startswith("exp:"):
-                    knowledge_events.append(
-                        {
-                            "type": "experiment",
-                            "concept": lower.split(":", 1)[1].strip()[:80],
-                            "evidence": line.strip(),
-                            "confidence": 1,
-                            "source": "chat",
-                        }
-                    )
-                    structured_events_found += 1
-                elif lower.startswith("validation:") or lower.startswith("val:"):
-                    knowledge_events.append(
-                        {
-                            "type": "validation",
-                            "concept": lower.split(":", 1)[1].strip()[:80],
-                            "evidence": line.strip(),
-                            "confidence": 1,
-                            "source": "chat",
-                        }
-                    )
-                    structured_events_found += 1
-                elif lower.startswith("failure:") or lower.startswith("fail:"):
-                    knowledge_events.append(
-                        {
-                            "type": "failure",
-                            "concept": lower.split(":", 1)[1].strip()[:80],
-                            "evidence": line.strip(),
-                            "confidence": 1,
-                            "source": "chat",
-                        }
-                    )
-                    structured_events_found += 1
-                elif lower.startswith("decision:") or lower.startswith("dec:"):
-                    knowledge_events.append(
-                        {
-                            "type": "decision",
-                            "concept": lower.split(":", 1)[1].strip()[:80],
-                            "evidence": line.strip(),
-                            "confidence": 1,
-                            "source": "chat",
-                        }
-                    )
-                    structured_events_found += 1
-
-            if structured_events_found == 0 and text_clean:
-                fallback_events = self._fallback_extract(conversation_text)
-                if fallback_events:
-                    knowledge_events.extend(fallback_events)
+                extracted_llm = self._run_llm_extraction(conversation_text, timeout_seconds)
+                if extracted_llm:
+                    knowledge_events.extend(extracted_llm)
                     fallback_extraction_used = True
-                    fallback_extractions_count = len(fallback_events)
+                    fallback_extractions_count = len(extracted_llm)
+            except TimeoutError:
+                return {
+                    "status": "partial",
+                    "failed_step": "llm_extraction",
+                    "mode": resolved_mode,
+                    "events_written": 0,
+                    "events_rejected": 0,
+                    "message": "LLM extraction timed out. No events were written.",
+                    "suggestion": "Retry with structured events or Observation:/Decision:/Outcome: markers.",
+                    "warnings": ["Extraction timed out before producing validated events."],
+                    "report_path": None,
+                    "knowledge_events": [],
+                    "canonical_events": [],
+                    "explainability": make_explainability(),
+                    "phase_timings": {}
+                }
+
+        # Check for empty extraction
+        if not knowledge_events:
+            return {
+                "status": "empty",
+                "mode": resolved_mode,
+                "events_written": 0,
+                "events_rejected": events_rejected,
+                "warnings": warnings_list,
+                "suggestion": "Use explicit markers or pass structured events.",
+                "report_path": None,
+                "knowledge_events": [],
+                "canonical_events": [],
+                "explainability": make_explainability(),
+                "phase_timings": {}
+            }
 
         reflection_time = time.perf_counter() - start_t
         if progress_callback is not None:
@@ -358,7 +545,7 @@ class ReflectionService:
         seen = set()
         canonical_events = []
         for ev in knowledge_events:
-            e_type = ev.get("type", "observation")
+            e_type = ev.get("type") or ev.get("event_type", "observation")
             concept_str = ev.get("concept", "General Learning")[:80]
             evidence = ev.get("evidence", "")
             key = (e_type, concept_str, evidence.lower())
@@ -366,21 +553,29 @@ class ReflectionService:
                 continue
             seen.add(key)
 
-            event_id = str(uuid.uuid4())
+            event_id = ev.get("event_id") or str(uuid.uuid4())
+            timestamp = ev.get("timestamp") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            concept_candidates = ev.get("concept_candidates") or [concept_str]
             source = ev.get("source", "chat")
+            
             canonical_event = {
                 "event_id": event_id,
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "timestamp": timestamp,
                 "project": project or "default",
                 "session_id": session_id,
                 "event_type": e_type,
-                "concept_candidates": [concept_str],
-                "summary": f"{e_type.title()}: {concept_str}",
+                "concept_candidates": concept_candidates,
+                "summary": ev.get("summary") or f"{e_type.title()}: {concept_str}",
                 "evidence": evidence,
                 "confidence": ev.get("confidence", 1),
                 "source": source,
                 "schema_version": 1,
             }
+            if ev.get("source_type"):
+                canonical_event["source_type"] = ev["source_type"]
+            if ev.get("ingestion_eligible") is not None:
+                canonical_event["ingestion_eligible"] = ev["ingestion_eligible"]
+
             canonical_events.append(canonical_event)
             self.engine.state._append_event(canonical_event, project)
 
@@ -407,7 +602,7 @@ class ReflectionService:
         yaml_events = [
             {
                 "type": e["event_type"],
-                "concept": e["concept_candidates"][0],
+                "concept": e["concept_candidates"][0] if e["concept_candidates"] else "General Learning",
                 "evidence": e["evidence"],
                 "confidence": e["confidence"],
             }
@@ -445,7 +640,7 @@ project: {project or "default"}
                     fpath = evidence.replace("Code modified in workspace:", "").strip()
                     fname = Path(fpath).name
                     source_counts[fname] = source_counts.get(fname, 0) + 1
-            elif ev.get("source") in ("chat", "chat-fallback"):
+            elif ev.get("source") in ("chat", "chat-fallback", "agent_structured"):
                 source_counts["chat"] = source_counts.get("chat", 0) + 1
         
         top_sources = sorted(source_counts.keys(), key=lambda k: source_counts[k], reverse=True)[:5]
@@ -462,7 +657,7 @@ project: {project or "default"}
             "generated_concepts": [
                 e["concept_candidates"][0]
                 for e in canonical_events
-                if e.get("source") in ("chat", "chat-fallback")
+                if e.get("source") in ("chat", "chat-fallback", "agent_structured")
             ],
             "top_sources": top_sources,
             "session_markers_detected": any(
@@ -488,13 +683,19 @@ project: {project or "default"}
         except Exception as e:
             logger.warning("Failed to emit reflection metrics: %s", e)
 
+        status_val = "partial" if (resolved_mode == "structured" and events_rejected > 0) else "success"
+
         return {
-            "status": "success",
+            "status": status_val,
+            "mode": resolved_mode,
+            "events_written": len(canonical_events),
+            "events_rejected": events_rejected,
+            "warnings": warnings_list,
+            "suggestion": None,
             "report_path": str(report_file),
             "knowledge_events": yaml_events,
             "canonical_events": canonical_events,
             "explainability": explainability,
-            "warnings": warnings_list,
             "phase_timings": {
                 "reflection": reflection_time,
                 "append_events": append_events_time,

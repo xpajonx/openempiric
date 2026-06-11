@@ -550,6 +550,9 @@ class KnowledgeEngine:
         update_index: bool = True,
         index_budget_seconds: float | None = 10.0,
         progress_callback = None,
+        events: list[dict] | None = None,
+        extraction_mode: str = "auto",
+        timeout_seconds: float | None = None,
     ) -> dict:
         from oem_knowledge.fs import LockTimeoutError
         from oem_knowledge.runtime.supervisor import CommitProgressSupervisor
@@ -585,9 +588,35 @@ class KnowledgeEngine:
                     telemetry=telemetry,
                     session_started_at=session_started_at,
                     progress_callback=progress_callback,
+                    events=events,
+                    extraction_mode=extraction_mode,
+                    timeout_seconds=timeout_seconds,
                 )
                 if "phase_timings" in res:
                     timer.timings.update(res["phase_timings"])
+
+                if res.get("status") == "empty" or (res.get("status") == "partial" and res.get("failed_step") == "llm_extraction"):
+                    progress.update_step("reflection", "failed")
+                    timer.timings["total"] = time.perf_counter() - start_time
+                    p_timings = {
+                        "load_state": timer.timings.get("load_state", 0.0),
+                        "reflection": timer.timings.get("reflection", 0.0),
+                        "append_events": 0.0,
+                        "materialization": 0.0,
+                        "search_index": 0.0,
+                        "write_report": 0.0,
+                        "cleanup": 0.0,
+                        "total": timer.timings["total"],
+                    }
+                    return {
+                        "status": res.get("status"),
+                        "failed_step": res.get("failed_step"),
+                        "message": res.get("message", "Reflection did not complete successfully."),
+                        "suggestion": res.get("suggestion"),
+                        "events_written": 0,
+                        "warnings": res.get("warnings", []),
+                        "phase_timings": p_timings,
+                    }
 
                 if res.get("status") == "error":
                     progress.update_step("reflection", "failed")

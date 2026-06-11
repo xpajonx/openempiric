@@ -127,6 +127,28 @@ def _run_session_command_impl(args):
             ))
             sys.exit(1)
 
+        if res.get("status") == "empty":
+            print(render_panel(
+                "Session End Complete",
+                [
+                    "No extractable knowledge events found.",
+                    res.get("suggestion") or "Use explicit markers or pass structured events."
+                ],
+                status="info"
+            ))
+            sys.exit(0)
+
+        if res.get("status") == "partial" and res.get("failed_step") == "llm_extraction":
+            print(render_panel(
+                "Session End Timeout",
+                [
+                    res.get("message", "LLM extraction timed out. No events were written."),
+                    res.get("suggestion") or "Retry with structured events or Observation:/Decision:/Outcome: markers."
+                ],
+                status="error"
+            ))
+            sys.exit(1)
+
         if res.get("status") == "partial" and not getattr(args, "verbose", False):
             print("Session end: partial success")
             print("Canonical memory saved.")

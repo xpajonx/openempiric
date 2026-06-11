@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+import json
 from pathlib import Path
 
 from .ui import render_panel
@@ -73,7 +74,12 @@ def mount_tools(mcp: object) -> None:
 
     @mcp.tool()
     def knowledge_reflect(
-        project: str = "", conversation_text: str = "", session_id: str = ""
+        project: str = "",
+        conversation_text: str = "",
+        session_id: str = "",
+        events: list[dict] | None = None,
+        extraction_mode: str = "auto",
+        timeout_seconds: float | None = None,
     ) -> str:
         """Extract structured Knowledge Events from conversation text and write a session report.
 
@@ -81,22 +87,53 @@ def mount_tools(mcp: object) -> None:
             project: Project directory path. Defaults to current directory.
             conversation_text: Raw conversation text or structured knowledge events.
             session_id: Optional session ID for correlation.
+            events: Optional pre-extracted structured events.
+            extraction_mode: Mode to use: 'auto', 'structured', 'markers', or 'llm'.
+            timeout_seconds: Optional timeout in seconds for LLM extraction.
         """
         try:
             with KnowledgeEngine(project or None) as eng:
-                res = eng.reflection.reflect_session(project or None, conversation_text, session_id)
+                res = eng.reflection.reflect_session(
+                    project=project or None,
+                    conversation_text=conversation_text,
+                    session_id=session_id,
+                    events=events,
+                    extraction_mode=extraction_mode,
+                    timeout_seconds=timeout_seconds,
+                )
         except Exception as e:
+            # For JSON request contexts, we want to return structured JSON errors
+            if events is not None or extraction_mode != "auto":
+                return json.dumps({
+                    "status": "error",
+                    "mode": extraction_mode,
+                    "events_written": 0,
+                    "events_rejected": 0,
+                    "warnings": [str(e)],
+                    "suggestion": "Check the tool arguments or workspace lock status."
+                }, indent=2)
             return render_panel("Reflection Failure", [f"Error: {e}"], status="error")
 
-        events = res.get("knowledge_events", [])
+        status = res.get("status")
+        if events is not None or status in ("partial", "empty") or extraction_mode != "auto":
+            return json.dumps({
+                "status": status,
+                "mode": res.get("mode", extraction_mode),
+                "events_written": res.get("events_written", 0),
+                "events_rejected": res.get("events_rejected", 0),
+                "warnings": res.get("warnings", []),
+                "suggestion": res.get("suggestion")
+            }, indent=2)
+
+        events_list = res.get("knowledge_events", [])
         lines = [
             f"Report: {Path(res.get('report_path', '')).name}",
             "",
             "Knowledge Events Extracted:",
         ]
-        for ev in events:
+        for ev in events_list:
             lines.append(f"  - [{ev.get('type', '').upper()}] {ev.get('concept', '')}")
-        if not events:
+        if not events_list:
             lines.append("  - None")
         if res.get("warnings"):
             lines.extend([
@@ -150,10 +187,23 @@ def mount_tools(mcp: object) -> None:
         return render_panel("Knowledge Graph", lines, status="organize")
 
     def _commit_session_from_tool(
-        eng: KnowledgeEngine, project: str, conversation_text: str, session_id: str
+        eng: KnowledgeEngine,
+        project: str,
+        conversation_text: str,
+        session_id: str,
+        events: list[dict] | None = None,
+        extraction_mode: str = "auto",
+        timeout_seconds: float | None = None,
     ) -> str:
         try:
-            res = eng.session_commit(project or None, conversation_text, session_id)
+            res = eng.session_commit(
+                project or None,
+                conversation_text,
+                session_id,
+                events=events,
+                extraction_mode=extraction_mode,
+                timeout_seconds=timeout_seconds,
+            )
         except Exception as e:
             return f"# Session End Failure\n\nError: {e}"
 
@@ -161,6 +211,46 @@ def mount_tools(mcp: object) -> None:
         failed_step = res.get("failed_step")
         warnings = res.get("warnings", [])
         timings = res.get("phase_timings", {})
+
+        if status == "empty":
+            lines = [
+                "# Session End / Commit Empty",
+                "",
+                "No extractable knowledge events found.",
+            ]
+            if res.get("suggestion"):
+                lines.extend([
+                    "",
+                    "### Suggestion:",
+                    res["suggestion"]
+                ])
+            if warnings:
+                lines.extend([
+                    "",
+                    "### Warnings:",
+                    *[f"- ⚠ {w}" for w in warnings]
+                ])
+            return "\n".join(lines)
+
+        if status == "partial" and failed_step == "llm_extraction":
+            lines = [
+                "# Session End / Commit Partial",
+                "",
+                res.get("message", "LLM extraction timed out. No events were written."),
+            ]
+            if res.get("suggestion"):
+                lines.extend([
+                    "",
+                    "### Suggestion:",
+                    res["suggestion"]
+                ])
+            if warnings:
+                lines.extend([
+                    "",
+                    "### Warnings:",
+                    *[f"- ⚠ {w}" for w in warnings]
+                ])
+            return "\n".join(lines)
 
         if status == "error":
             failed_step = res.get("failed_step", "reflection/materialization")
@@ -191,10 +281,10 @@ def mount_tools(mcp: object) -> None:
             return "\n".join(lines)
 
         from pathlib import Path
-        events = res.get("knowledge_events", [])
+        events_list = res.get("knowledge_events", [])
         event_counts: dict[str, int] = {}
-        for ev in events:
-            t = ev.get("type", "observation")
+        for ev in events_list:
+            t = ev.get("type") or ev.get("event_type", "observation")
             event_counts[t] = event_counts.get(t, 0) + 1
 
         if status == "partial":
@@ -253,7 +343,12 @@ def mount_tools(mcp: object) -> None:
 
     @mcp.tool()
     def knowledge_session_commit(
-        project: str = "", conversation_text: str = "", session_id: str = ""
+        project: str = "",
+        conversation_text: str = "",
+        session_id: str = "",
+        events: list[dict] | None = None,
+        extraction_mode: str = "auto",
+        timeout_seconds: float | None = None,
     ) -> str:
         """Deprecated internal lifecycle hook.
 
@@ -264,16 +359,32 @@ def mount_tools(mcp: object) -> None:
             project: Project directory path. Defaults to current directory.
             conversation_text: Raw conversation text for knowledge extraction.
             session_id: Optional session ID for correlation.
+            events: Optional pre-extracted structured events.
+            extraction_mode: Mode to use: 'auto', 'structured', 'markers', or 'llm'.
+            timeout_seconds: Optional timeout in seconds for LLM extraction.
         """
         try:
             with KnowledgeEngine(project or None) as eng:
-                return _commit_session_from_tool(eng, project, conversation_text, session_id)
+                return _commit_session_from_tool(
+                    eng,
+                    project,
+                    conversation_text,
+                    session_id,
+                    events=events,
+                    extraction_mode=extraction_mode,
+                    timeout_seconds=timeout_seconds,
+                )
         except Exception as e:
             return f"# Session Commit Failure\n\nError: {e}"
 
     @mcp.tool()
     def knowledge_session_end(
-        project: str = "", conversation_text: str = "", session_id: str = ""
+        project: str = "",
+        conversation_text: str = "",
+        session_id: str = "",
+        events: list[dict] | None = None,
+        extraction_mode: str = "auto",
+        timeout_seconds: float | None = None,
     ) -> str:
         """End the current knowledge session, trigger reflection/materialization, update graph, and re-index.
 
@@ -281,10 +392,21 @@ def mount_tools(mcp: object) -> None:
             project: Project directory path. Defaults to current directory.
             conversation_text: Raw conversation text or history for knowledge extraction.
             session_id: Optional session ID.
+            events: Optional pre-extracted structured events.
+            extraction_mode: Mode to use: 'auto', 'structured', 'markers', or 'llm'.
+            timeout_seconds: Optional timeout in seconds for LLM extraction.
         """
         try:
             with KnowledgeEngine(project or None) as eng:
-                return _commit_session_from_tool(eng, project, conversation_text, session_id)
+                return _commit_session_from_tool(
+                    eng,
+                    project,
+                    conversation_text,
+                    session_id,
+                    events=events,
+                    extraction_mode=extraction_mode,
+                    timeout_seconds=timeout_seconds,
+                )
         except Exception as e:
             return f"# Session End Failure\n\nError: {e}"
 

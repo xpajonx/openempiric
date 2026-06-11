@@ -43,6 +43,8 @@ class KnowledgeEvent(BaseModel):
     )
     source: str = Field(description="Source of capture: chat, diff, test")
     schema_version: int = Field(default=1)
+    source_type: str | None = Field(default=None)
+    ingestion_eligible: bool | None = Field(default=None)
 
     # Orchestrator Telemetry Integration
     tokens: dict[str, int] | None = Field(
