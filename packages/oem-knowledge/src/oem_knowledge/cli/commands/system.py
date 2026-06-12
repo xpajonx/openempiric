@@ -363,6 +363,11 @@ def run_system_command(args):
             from oem_knowledge.runtime.recovery import cmd_recover
             res = cmd_recover(eng, project, scope="reflection", apply=True, backup=True, rebuild_reports=False)
             print("Doctor fix applied safe reflection recovery.")
+            if res and res.get("repairs"):
+                print("Repairs applied:")
+                for r in res["repairs"]:
+                    if r:
+                        print(f"  - {r}")
             if res and res.get("backup_dir"):
                 p = Path(res["backup_dir"])
                 try:
@@ -370,8 +375,8 @@ def run_system_command(args):
                 except Exception:
                     rel = p
                 print(f"Backup: {rel}")
-            if res and res.get("report_file"):
-                p = Path(res["report_file"])
+            if res and res.get("report_path"):
+                p = Path(res["report_path"])
                 try:
                     rel = p.relative_to(eng._resolve_harness(project).parent)
                 except Exception:
@@ -379,487 +384,58 @@ def run_system_command(args):
                 print(f"Report: {rel}")
             print("Skipped destructive repairs: session report rebuild")
             print()
+
         spinner = Spinner("Running environment and diagnostics checks...")
         spinner.__enter__()
         try:
-            resolved_dir = eng._resolve_harness(project)
-            workspace_root = resolved_dir
-        except Exception:
-            workspace_root = Path(project or ".")
+            from oem_knowledge.health import build_runtime_health
+            res = build_runtime_health(project)
+        finally:
+            spinner.__exit__(None, None, None)
 
-        # Walk up to find workspace root containing pyproject.toml
-        while workspace_root.parent != workspace_root:
-            if (workspace_root / "pyproject.toml").exists():
-                break
-            workspace_root = workspace_root.parent
+        status_map = {"success": "ok", "warn": "warn", "error": "error"}
 
-        pyproject_path = workspace_root / "pyproject.toml"
-        root_venv_path = workspace_root / ".venv"
-        
-        # Detect if this is the OpenEmpiric development workspace
-        is_dev_workspace = False
-        if pyproject_path.exists():
-            try:
-                content = pyproject_path.read_text(encoding="utf-8")
-                if 'name = "oem-mcp"' in content:
-                    is_dev_workspace = True
-            except Exception:
-                pass
+        # 1. Environment Check Panel
+        env_lines = []
+        for c in res["environment"]["checks"]:
+            symbol = "✓" if c["status"] == "success" else ("⚠" if c["status"] == "warn" else "✗")
+            env_lines.append(f"{symbol} {c['name']}")
+        print(render_panel("OEM Environment Check", env_lines, status=status_map.get(res["environment"]["status"], "ok")))
 
-        lines = []
-        status = "ok"
+        # 2. OpenCode Panel
+        if res["opencode"]["active"]:
+            opencode_lines = []
+            for c in res["opencode"]["checks"]:
+                symbol = "✓" if c["status"] == "success" else ("⚠" if c["status"] == "warn" else "✗")
+                opencode_lines.append(f"{symbol} {c['name']}")
+            print(render_panel("OpenCode Integration", opencode_lines, status=status_map.get(res["opencode"]["status"], "ok")))
 
-        if is_dev_workspace:
-            # 1. Root workspace check
-            if pyproject_path.exists():
-                lines.append("✓ Root workspace detected")
-            else:
-                lines.append("✗ Root workspace pyproject.toml not found")
-                status = "error"
+        # 3. Codex App Panel
+        if res["codex_app"]["active"]:
+            codex_lines = []
+            for c in res["codex_app"]["checks"]:
+                symbol = "✓" if c["status"] == "success" else ("⚠" if c["status"] == "warn" else "✗")
+                codex_lines.append(f"{symbol} {c['name']}")
+            print(render_panel("Codex App Integration", codex_lines, status=status_map.get(res["codex_app"]["status"], "ok")))
 
-            # 2. Root venv check
-            if root_venv_path.exists():
-                lines.append("✓ Root .venv exists")
-            else:
-                lines.append("✗ Root .venv not found")
-                status = "error"
-
-            # 3. UV workspace health check
-            try:
-                content = pyproject_path.read_text(encoding="utf-8")
-                if "[tool.uv.workspace]" in content:
-                    lines.append("✓ UV workspace healthy")
-                else:
-                    lines.append("✗ [tool.uv.workspace] missing in root pyproject.toml")
-                    status = "error"
-            except Exception as e:
-                lines.append(f"✗ Failed to read root pyproject.toml: {e}")
-                status = "error"
-
-            # 4. Nested virtualenvs scan
-            nested_venvs = []
-            packages_dir = workspace_root / "packages"
-            if packages_dir.exists() and packages_dir.is_dir():
-                for p in packages_dir.iterdir():
-                    if p.is_dir():
-                        sub_venv = p / ".venv"
-                        if sub_venv.exists():
-                            nested_venvs.append(str(sub_venv.relative_to(workspace_root)))
-
-            if nested_venvs:
-                status = "error"
-                for nv in nested_venvs:
-                    lines.append(f"✗ Nested virtualenv detected: {nv}")
-                lines.append("")
-                lines.append("Suggested Fix:")
-                lines.append(f"  rm -rf {Path(packages_dir.relative_to(workspace_root)) / '*/.venv'}")
-                lines.append("  uv sync")
-            else:
-                lines.append("✓ No nested virtualenvs detected")
-        else:
-            lines.append("✓ Running as globally installed user tool")
-            lines.append(f"✓ Project directory: {workspace_root.resolve()}")
-            if shutil.which("oem"):
-                lines.append("✓ OEM executable available")
-            else:
-                lines.append("⚠ OEM executable not found in PATH — install via `uv tool install oem-knowledge`")
-            try:
-                import oem_knowledge  # noqa: F401
-                lines.append("✓ Package importable")
-            except ImportError:
-                lines.append("✗ Package not importable")
-                status = "error"
-            lines.append("⚠ Development workspace not detected")
-
-        # 5. Events log schema version check
-        try:
-            schema_status = eng.event_migrator.get_schema_status(project)
-            if schema_status["status"] == "up_to_date":
-                lines.append(f"✓ Events schema up to date ({schema_status['message']})")
-            elif schema_status["status"] == "outdated":
-                lines.append(f"✗ Events schema outdated: {schema_status['message']}")
-                status = "error"
-            else:
-                lines.append(f"✗ Events schema check: {schema_status.get('message')}")
-                status = "error"
-        except Exception as e:
-            lines.append(f"✗ Events schema check failed: {e}")
-            status = "error"
-
-        # 6. Skill installation check & adapter detection
-        enabled_adapters = []
-        try:
-            h_dir = eng._resolve_harness(project)
-            skills_file = h_dir / "skills" / "openempiric.yaml"
-            if skills_file.exists():
-                try:
-                    import yaml
-                    with open(skills_file, "r", encoding="utf-8") as f:
-                        data = yaml.safe_load(f)
-                        if data:
-                            if "adapters" in data:
-                                val = data["adapters"]
-                                if isinstance(val, list):
-                                    enabled_adapters = list(val)
-                                else:
-                                    enabled_adapters = [val]
-                            elif "adapter" in data:
-                                enabled_adapters = [data["adapter"]]
-                except Exception:
-                    pass
-                
-                adapters_str = ", ".join(enabled_adapters) if enabled_adapters else "none"
-                lines.append(f"✓ OEM Skill Installed (enabled adapters: {adapters_str})")
-            else:
-                lines.append("✗ OEM Skill not installed (missing skills/openempiric.yaml)")
-                status = "error"
-        except Exception as e:
-            lines.append(f"✗ Failed to verify OEM Skill installation: {e}")
-            status = "error"
-
-        # Default to opencode if none found
-        if not enabled_adapters:
-            enabled_adapters = ["opencode"]
-
-        # 7. Embedding Cache Ready check
-        try:
-            retrieval_mode = eng.search.get_retrieval_mode()
-            semantic_installed = eng.search.semantic_dependencies_available()
-
-            if eng.embedding_cache_ready():
-                lines.append("✓ Embedding Cache Ready")
-            else:
-                if retrieval_mode == "hybrid":
-                    lines.append("✗ Embedding Cache not ready")
-                    lines.append("  → Run `oem warmup` once per machine to pre-download")
-                    lines.append("  → Or switch to `oem config retrieval auto` or `oem config retrieval bm25`")
-                    status = "error"
-                elif semantic_installed:
-                    lines.append("⚠ Embedding Cache cold (semantic retrieval will download on first use)")
-                    lines.append("  → Run `oem warmup` to pre-download, or let the first managed run warm it")
-                else:
-                    lines.append("⚠ Semantic retrieval not installed; BM25-only mode active")
-                    lines.append("  → Install `[semantic]` for hybrid search, or continue with BM25/auto mode")
-        except Exception as e:
-            lines.append(f"✗ Failed to check Embedding Cache: {e}")
-            status = "error"
-
-        # 8. Managed Runtime Available check
-        try:
-            if shutil.which("oem"):
-                lines.append("✓ Managed Runtime Available")
-            else:
-                lines.append("⚠ Managed Runtime not available (executable 'oem' not found in PATH)")
-        except Exception as e:
-            lines.append(f"✗ Failed to check Managed Runtime: {e}")
-            status = "error"
-
-        # 9. Search Pipeline Available check
-        try:
-            _ = eng.search.stats()
-            eng.search.search("test", k=1)
-            lines.append("✓ Search Pipeline Available")
-        except Exception as e:
-            lines.append(f"✗ Search Pipeline not available: {e}")
-            status = "error"
-
-        # --- Runtime Health Checks ---
+        # 4. Runtime Health Panel
         runtime_lines = []
+        for c in res["runtime"]["checks"]:
+            symbol = "✓" if c["status"] == "success" else ("⚠" if c["status"] == "warn" else "✗")
+            runtime_lines.append(f"{symbol} {c['name']}")
+        
+        has_runtime_warning = any(c["status"] == "warn" for c in res["runtime"]["checks"])
+        if has_runtime_warning:
+            runtime_lines.append("")
+            runtime_lines.append("Fallback:")
+            runtime_lines.append("  Use structured events or Observation:/Decision:/Outcome: markers.")
+            runtime_lines.append("  Run: oem recover --scope reflection")
+        
+        print(render_panel("Runtime Health", runtime_lines, status=status_map.get(res["runtime"]["status"], "ok")))
 
-        # 10. Session Recovery Ready
-        from oem_knowledge.runtime import SessionState
-        try:
-            active_file = resolved_dir / "state" / "active_session.json"
-            _ = SessionState.load(active_file)
-            runtime_lines.append("✓ Session Recovery Ready")
-        except Exception as e:
-            runtime_lines.append(f"✗ Session Recovery not ready: {e}")
-
-        # 11. Reflection Pipeline Ready
-        structured_ready = False
-        marker_ready = False
-        llm_degraded = False
-
-        # Check Structured Reflection
-        try:
-            rs = eng.reflection
-            res_struct = rs.reflect_session(project, events=[], extraction_mode="structured")
-            if res_struct.get("status") == "empty":
-                runtime_lines.append("✓ Structured Reflection Ready")
-                structured_ready = True
-            else:
-                runtime_lines.append("✗ Structured Reflection not ready")
-        except Exception as e:
-            runtime_lines.append(f"✗ Structured Reflection not ready: {e}")
-
-        # Check Marker Reflection
-        try:
-            rs = eng.reflection
-            res_marker = rs.reflect_session(project, conversation_text="", extraction_mode="markers")
-            if res_marker.get("status") == "empty":
-                runtime_lines.append("✓ Marker Reflection Ready")
-                marker_ready = True
-            else:
-                runtime_lines.append("✗ Marker Reflection not ready")
-        except Exception as e:
-            runtime_lines.append(f"✗ Marker Reflection not ready: {e}")
-
-        # Check LLM Reflection
-        import os
-        if os.environ.get("OEM_LLM_DEGRADED") == "true":
-            llm_degraded = True
-            runtime_lines.append("! LLM Reflection Degraded")
-        else:
-            try:
-                # LLM reflection is ready if structured and marker are ready and no degraded env is set
-                runtime_lines.append("✓ LLM Reflection Ready")
-            except Exception as e:
-                llm_degraded = True
-                runtime_lines.append(f"! LLM Reflection Degraded: {e}")
-
-        # 12. Materialization Pipeline Ready
-        try:
-            mat_res = eng.materialization.materialize_concepts(project)
-            if mat_res.get("status") == "success":
-                runtime_lines.append("✓ Materialization Pipeline Ready")
-            else:
-                runtime_lines.append("✗ Materialization Pipeline not ready")
-        except Exception as e:
-            runtime_lines.append(f"✗ Materialization Pipeline not ready: {e}")
-
-        # 13. Outcome Tracking Ready
-        try:
-            outcomes_file = resolved_dir / "state" / "outcomes.jsonl"
-            outcomes_file.parent.mkdir(parents=True, exist_ok=True)
-            runtime_lines.append("✓ Outcome Tracking Ready")
-        except Exception as e:
-            runtime_lines.append(f"✗ Outcome Tracking not ready: {e}")
-
-        spinner.__exit__(None, None, None)
-        print(render_panel("OEM Environment Check", lines, status=status))
-
-        # --- OpenCode Integration Panel ---
-        opencode_lines = []
-        opencode_status = "ok"
-        opencode_dir = Path.home() / ".config" / "opencode"
-        jsonc_file = opencode_dir / "opencode.jsonc"
-        opencode_active = ("opencode" in enabled_adapters or jsonc_file.exists())
-
-        if opencode_active:
-            plugin_dest = opencode_dir / "plugins" / "openempiric.ts"
-            inst_dest = opencode_dir / "instructions" / "memory-start.md"
-
-            # Check plugin
-            if not plugin_dest.exists():
-                opencode_lines.append("✗ OpenCode Plugin not installed (missing plugins/openempiric.ts) — run 'oem setup opencode'")
-                opencode_status = "error"
-            else:
-                try:
-                    p_content = plugin_dest.read_text(encoding="utf-8")
-                    if "knowledge_session_start" in p_content or "verify plugin array" in p_content or "session lifecycle is automatic" in p_content:
-                        opencode_lines.append("⚠ OpenCode Plugin is legacy/outdated — run 'oem setup opencode --repair'")
-                        if opencode_status != "error":
-                            opencode_status = "warning"
-                    else:
-                        opencode_lines.append("✓ OpenCode Plugin installed")
-                except Exception as e:
-                    opencode_lines.append(f"⚠ Failed to read openempiric.ts plugin: {e}")
-                    if opencode_status != "error":
-                        opencode_status = "warning"
-
-            # Check instructions
-            if not inst_dest.exists():
-                opencode_lines.append("✗ OpenCode Instructions not installed (missing instructions/memory-start.md) — run 'oem setup opencode'")
-                opencode_status = "error"
-            else:
-                try:
-                    i_content = inst_dest.read_text(encoding="utf-8")
-                    if "knowledge_session_start" in i_content or "knowledge_session_commit" in i_content or "verify plugin array" in i_content:
-                        opencode_lines.append("⚠ OpenCode Instructions are legacy/outdated — run 'oem setup opencode --repair'")
-                        if opencode_status != "error":
-                            opencode_status = "warning"
-                    else:
-                        opencode_lines.append("✓ OpenCode Instructions installed")
-                except Exception as e:
-                    opencode_lines.append(f"⚠ Failed to read memory-start.md instructions: {e}")
-                    if opencode_status != "error":
-                        opencode_status = "warning"
-
-            # Check config
-            mcp_registered = False
-            mcp_cmd = []
-            if not jsonc_file.exists():
-                opencode_lines.append("✗ OpenCode Config missing (missing opencode.jsonc) — run 'oem setup opencode'")
-                opencode_status = "error"
-            else:
-                try:
-                    text = jsonc_file.read_text(encoding="utf-8")
-                    cleaned = _strip_jsonc_comments(text)
-                    config_data = json.loads(cleaned, strict=False)
-                    inst_path_str = str(inst_dest.resolve())
-                    inst_list = config_data.get("instructions", [])
-                    if inst_path_str not in inst_list:
-                        opencode_lines.append("✗ OpenCode Config does not register memory-start.md instruction — run 'oem setup opencode'")
-                        opencode_status = "error"
-                    else:
-                        opencode_lines.append("✓ OpenCode Config verified")
-
-                    mcp_config = config_data.get("mcp", {}).get("openempiric")
-                    if mcp_config:
-                        mcp_registered = True
-                        cmd = mcp_config.get("command")
-                        mcp_args = mcp_config.get("args", [])
-                        if isinstance(cmd, str):
-                            mcp_cmd = [cmd] + mcp_args
-                        elif isinstance(cmd, list):
-                            mcp_cmd = cmd + mcp_args
-                        opencode_lines.append("✓ OEM MCP Server registered in OpenCode config")
-                    else:
-                        opencode_lines.append("✗ OEM MCP Server not registered in OpenCode config — run 'oem setup opencode'")
-                        opencode_status = "error"
-                except Exception as e:
-                    opencode_lines.append(f"✗ OpenCode Config validation failed: {e} — run 'oem setup opencode'")
-                    opencode_status = "error"
-
-            # Check MCP Server Reachability and Functionality
-            if mcp_registered and mcp_cmd:
-                reachable, functional, num_tools, err = check_mcp_server(mcp_cmd)
-                if reachable:
-                    opencode_lines.append("✓ OEM MCP Server reachable")
-                    if functional:
-                        opencode_lines.append("✓ OEM MCP Server functional (stats call succeeded)")
-                    else:
-                        opencode_lines.append(f"✗ OEM MCP Server functional check failed: {err}")
-                        opencode_status = "error"
-                    opencode_lines.append(f"✓ {num_tools} tools available")
-                else:
-                    opencode_lines.append(f"✗ OEM MCP Server unreachable: {err}")
-                    opencode_status = "error"
-
-            # Check Context Injection Working
-            from oem_knowledge.runtime import _OEM_RUNTIME_CONTEXT_PATH
-            try:
-                from oem_knowledge.runtime import _compile_oem_context
-                _ = _compile_oem_context(eng)
-                context_dir = _OEM_RUNTIME_CONTEXT_PATH.parent
-                context_dir.mkdir(parents=True, exist_ok=True)
-                test_file = context_dir / ".oem_doctor_write_test"
-                test_file.write_text("test", encoding="utf-8")
-                test_file.unlink()
-                opencode_lines.append("✓ Context Injection Working")
-            except Exception as e:
-                opencode_lines.append(f"✗ Context Injection not working: {e}")
-                opencode_status = "error"
-
-            # Check MCP Registered (via adapter)
-            try:
-                from oem_knowledge.adapters import get_adapter
-                adapter = get_adapter("opencode", eng, project)
-                if adapter.verify_mcp():
-                    opencode_lines.append("✓ MCP Registered")
-                else:
-                    opencode_lines.append("✗ MCP not registered")
-                    opencode_status = "error"
-            except Exception as e:
-                opencode_lines.append(f"✗ Failed to verify MCP registration: {e}")
-                opencode_status = "error"
-
-            print(render_panel("OpenCode Integration", opencode_lines, status=opencode_status))
-
-        # --- Codex App Integration Panel ---
-        codex_lines = []
-        codex_status = "ok"
-        codex_active = False
-
-        try:
-            from oem_knowledge.adapters.codex_app.adapter import CodexAppAdapter
-            codex_adapter = CodexAppAdapter(eng, project)
-            
-            try:
-                config_path = codex_adapter.get_config_path()
-                codex_home_detected = True
-            except RuntimeError as re_err:
-                codex_home_detected = False
-                re_msg = str(re_err)
-                lines_err = [line.strip() for line in re_msg.splitlines()]
-                if "codex-app" in enabled_adapters or "codex" in enabled_adapters:
-                    codex_active = True
-                    codex_lines.append("✗ Codex home not detected")
-                    for line_err in lines_err:
-                        if "Please configure" in line_err or "Example" in line_err:
-                            codex_lines.append(f"  → {line_err}")
-                    codex_status = "error"
-
-            if codex_active is False and codex_home_detected:
-                if config_path.exists() or "codex-app" in enabled_adapters or "codex" in enabled_adapters:
-                    codex_active = True
-                    
-                    # 1. Config found
-                    if config_path.exists():
-                        codex_lines.append("✓ Config found")
-                    else:
-                        codex_lines.append(f"✗ Config not found (missing {config_path})")
-                        codex_status = "error"
-                    
-                    # 2. OEM MCP registered
-                    if config_path.exists() and codex_adapter.verify_mcp():
-                        codex_lines.append("✓ OEM MCP registered")
-                        
-                        # 3. Tools reachable
-                        expected_mcp = codex_adapter.build_mcp_config()
-                        mcp_cmd = [expected_mcp["command"]] + expected_mcp["args"]
-                        if sys.platform != "win32" and "wsl.exe" in mcp_cmd[0].lower():
-                            mcp_cmd[0] = "wsl.exe"
-                        reachable, functional, num_tools, err = check_mcp_server(mcp_cmd)
-                        if reachable and functional:
-                            codex_lines.append("✓ Tools reachable")
-                        else:
-                            codex_lines.append(f"✗ Tools unreachable: {err}")
-                            codex_status = "error"
-                    else:
-                        codex_lines.append("✗ OEM MCP registered")
-                        codex_lines.append("✗ Tools reachable (MCP not registered)")
-                        codex_status = "error"
-
-                    # 4. Check MCP Registered hook (via adapter)
-                    try:
-                        if codex_adapter.verify_mcp():
-                            codex_lines.append("✓ MCP Registered")
-                        else:
-                            codex_lines.append("✗ MCP not registered")
-                            codex_status = "error"
-                    except Exception as e:
-                        codex_lines.append(f"✗ Failed to verify MCP registration: {e}")
-                        codex_status = "error"
-
-        except Exception as e:
-            if "codex-app" in enabled_adapters or "codex" in enabled_adapters:
-                codex_active = True
-                codex_lines.append(f"✗ Codex App Integration Check failed: {e}")
-                codex_status = "error"
-
-        if codex_active:
-            print(render_panel("Codex App Integration", codex_lines, status=codex_status))
-
-        # Runtime Health Check Panel
-        has_runtime_error = any("✗" in l for l in runtime_lines)
-        has_runtime_warning = any("!" in l or "⚠" in l for l in runtime_lines)
-
-        if has_runtime_error:
-            print(render_panel("Runtime Health", runtime_lines, status="error"))
-            status = "error"
-        elif has_runtime_warning:
-            if not any("Fallback:" in str(l) for l in runtime_lines):
-                runtime_lines.append("")
-                runtime_lines.append("Fallback:")
-                runtime_lines.append("  Use structured events or Observation:/Decision:/Outcome: markers.")
-                runtime_lines.append("  Run: oem recover --scope reflection")
-            print(render_panel("Runtime Health", runtime_lines, status="warn"))
-        else:
-            print(render_panel("Runtime Health", runtime_lines, status="ok"))
-
-        if status == "error" or (codex_active and codex_status == "error"):
+        if res["environment"]["status"] == "error" or res["runtime"]["status"] == "error" or (res["codex_app"]["active"] and res["codex_app"]["status"] == "error"):
             sys.exit(1)
+
 
         # --- Knowledge Health Dashboard ---
         try:
@@ -939,7 +515,7 @@ def run_system_command(args):
         except Exception as e:
             print(render_panel("Knowledge Health Dashboard", [f"Could not compute: {e}"], status="error"))
 
-        if status == "error" or (codex_active and codex_status == "error"):
+        if res["environment"]["status"] == "error" or res["runtime"]["status"] == "error" or (res["codex_app"]["active"] and res["codex_app"]["status"] == "error"):
             sys.exit(1)
 
     elif args.command == "migrate":

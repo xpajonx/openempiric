@@ -75,6 +75,446 @@ def is_empty_orphan_session(content: str, file_date: str, dates_with_events: set
     text = re.sub(r"^\s*#.*$", "", text, flags=re.MULTILINE)
     return len(text.strip()) == 0
 
+def recover_reflection(
+    eng: KnowledgeEngine,
+    project: str | None = None,
+    dry_run: bool = False,
+    apply: bool = False,
+    backup: bool | None = None,
+    rebuild_reports: bool = False,
+) -> dict:
+    harness = eng._resolve_harness(project)
+
+    if not dry_run and not apply:
+        dry_run = True
+
+    if dry_run and apply:
+        raise ValueError("dry_run and apply are mutually exclusive.")
+
+    if backup is False and not apply:
+        raise ValueError("no-backup is only valid in apply mode.")
+
+    events_path = eng.layout(project).events_path
+    sessions_dir = eng.layout(project).sessions_dir
+    
+    event_files = [harness / "events.jsonl", harness / "runtime_events.jsonl"]
+    existing_event_files = [f for f in event_files if f.exists()]
+
+    invalid_jsonl_records = []
+    missing_metadata_events = []
+    unique_events = []
+    
+    seen_event_ids = set()
+    seen_bodies = set()
+    seen_summary_ts_source = set()
+    
+    duplicate_events_count = 0
+    file_to_events = {}
+
+    for ef in existing_event_files:
+        file_events = []
+        try:
+            try:
+                rel_file = str(ef.relative_to(harness))
+            except Exception:
+                rel_file = str(ef.name)
+                
+            lines = ef.read_text(encoding="utf-8").splitlines()
+            for line_no, line in enumerate(lines, 1):
+                raw = line.strip()
+                if not raw:
+                    continue
+                try:
+                    ev = json.loads(raw)
+                    if not isinstance(ev, dict):
+                        invalid_jsonl_records.append({
+                            "file": rel_file,
+                            "line_number": line_no,
+                            "raw_line": raw,
+                            "error": "Not a JSON object"
+                        })
+                        continue
+                    
+                    has_missing = False
+                    reasons = []
+                    if not ev.get("event_id") and not ev.get("id"):
+                        has_missing = True
+                        reasons.append("event_id")
+                    if not ev.get("timestamp"):
+                        has_missing = True
+                        reasons.append("timestamp")
+                    if not ev.get("source_type"):
+                        has_missing = True
+                        reasons.append("source_type")
+
+                    if has_missing:
+                        missing_metadata_events.append((ev, reasons))
+
+                    repaired_ev = dict(ev)
+                    if has_missing:
+                        repaired_ev["source"] = "recovered_reflection"
+                        repaired_ev["source_type"] = "recovered_event"
+                        repaired_ev["recovered_by"] = "oem recover --scope reflection"
+                        repaired_ev["recovery_reason"] = "missing event_id/timestamp/source_type"
+                        
+                        if not repaired_ev.get("event_id") and not repaired_ev.get("id"):
+                            repaired_ev["event_id"] = str(uuid.uuid4())
+                        elif repaired_ev.get("id") and not repaired_ev.get("event_id"):
+                            repaired_ev["event_id"] = repaired_ev.get("id")
+                        
+                        if not repaired_ev.get("timestamp"):
+                            repaired_ev["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                        
+                        if not repaired_ev.get("event_type"):
+                            repaired_ev["event_type"] = "observation"
+                        
+                        if not repaired_ev.get("summary"):
+                            repaired_ev["summary"] = repaired_ev.get("evidence") or "Recovered event"
+
+                    ev_id = repaired_ev.get("event_id") or repaired_ev.get("id")
+                    body_parts = {k: v for k, v in repaired_ev.items() if k not in ("event_id", "id", "timestamp")}
+                    normalized_body = json.dumps(body_parts, sort_keys=True)
+                    triple = (repaired_ev.get("summary"), repaired_ev.get("timestamp"), repaired_ev.get("source"))
+                    
+                    is_duplicate = False
+                    if ev_id and ev_id in seen_event_ids:
+                        is_duplicate = True
+                    elif normalized_body in seen_bodies:
+                        is_duplicate = True
+                    elif triple[0] and triple[1] and triple[2] and triple in seen_summary_ts_source:
+                        is_duplicate = True
+                        
+                    if is_duplicate:
+                        duplicate_events_count += 1
+                    else:
+                        if ev_id:
+                            seen_event_ids.add(ev_id)
+                        seen_bodies.add(normalized_body)
+                        if triple[0] and triple[1] and triple[2]:
+                            seen_summary_ts_source.add(triple)
+                        unique_events.append(repaired_ev)
+                        file_events.append(repaired_ev)
+                        
+                except json.JSONDecodeError as err:
+                    invalid_jsonl_records.append({
+                        "file": rel_file,
+                        "line_number": line_no,
+                        "raw_line": raw,
+                        "error": str(err)
+                    })
+        except Exception:
+            pass
+        file_to_events[ef] = file_events
+
+    # Collect dates with events
+    dates_with_events = set()
+    for ev in unique_events:
+        s_id = ev.get("session_id") or "default_session"
+        date_str = None
+        ts = ev.get("timestamp")
+        if ts and len(ts) >= 10:
+            date_str = ts[:10]
+        if not date_str:
+            match = re.search(r"session_(\d{4})(\d{2})(\d{2})", s_id)
+            if match:
+                date_str = f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
+        if not date_str:
+            date_str = time.strftime("%Y-%m-%d")
+        dates_with_events.add(date_str)
+
+    empty_orphan_files = []
+    if sessions_dir.exists():
+        for f in sessions_dir.glob("*.md"):
+            try:
+                content = f.read_text(encoding="utf-8")
+                file_date = f.name[:10]
+                if is_empty_orphan_session(content, file_date, dates_with_events):
+                    empty_orphan_files.append(f)
+            except Exception:
+                pass
+
+    inconsistent_reports = []
+    reports_to_rebuild = {}
+    reports_to_append_notes = {}
+    
+    session_to_events = {}
+    for ev in unique_events:
+        s_id = ev.get("session_id") or "default_session"
+        session_to_events.setdefault(s_id, []).append(ev)
+
+    date_to_sessions = {}
+    for s_id, s_evs in session_to_events.items():
+        date_str = None
+        if s_evs:
+            ts = s_evs[0].get("timestamp")
+            if ts and len(ts) >= 10:
+                date_str = ts[:10]
+        if not date_str:
+            match = re.search(r"session_(\d{4})(\d{2})(\d{2})", s_id)
+            if match:
+                date_str = f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
+        if not date_str:
+            date_str = time.strftime("%Y-%m-%d")
+        
+        date_to_sessions.setdefault(date_str, []).append((s_id, s_evs))
+
+    for date_str, sessions in date_to_sessions.items():
+        sessions.sort(key=lambda item: item[0])
+        
+    if sessions_dir.exists():
+        for date_str, sessions in date_to_sessions.items():
+            report_files = sorted([f for f in sessions_dir.glob(f"{date_str}*.md") if f not in empty_orphan_files])
+            for idx, (s_id, s_evs) in enumerate(sessions):
+                if idx < len(report_files):
+                    rf = report_files[idx]
+                    if rf in empty_orphan_files:
+                        continue
+                    try:
+                        content = rf.read_text(encoding="utf-8")
+                        parsed = parse_markdown_report(content)
+                        report_evs = parsed.get("events") or []
+                        
+                        def norm(e):
+                            return (
+                                str(e.get("type") or e.get("event_type", "")).strip().lower(),
+                                str(e.get("concept") or "").strip().lower()[:80],
+                                str(e.get("evidence") or "").strip().lower()
+                            )
+                        
+                        s_evs_norm = sorted([norm(e) for e in s_evs])
+                        report_evs_norm = sorted([norm(e) for e in report_evs])
+                        
+                        has_generated_by = parsed.get("frontmatter", {}).get("generated_by") == "openempiric"
+                        
+                        if s_evs_norm != report_evs_norm or not has_generated_by:
+                            inconsistent_reports.append(rf)
+                            if rebuild_reports:
+                                reports_to_rebuild[rf] = (date_str, s_evs)
+                            else:
+                                if has_generated_by:
+                                    mismatch_details = []
+                                    mismatch_details.append(f"Event store has {len(s_evs)} events, while session report has {len(report_evs)} events.")
+                                    store_diff = [e for e in s_evs if norm(e) not in report_evs_norm]
+                                    report_diff = [e for e in report_evs if norm(e) not in s_evs_norm]
+                                    if store_diff:
+                                        mismatch_details.append("Events in store but missing/different in report:")
+                                        for e in store_diff:
+                                            mismatch_details.append(f"  - [{e.get('event_type', 'observation')}] Concept: {e.get('concept_candidates', ['unknown'])[0] if e.get('concept_candidates') else 'unknown'}, Summary: {e.get('summary', 'N/A')}")
+                                    if report_diff:
+                                        mismatch_details.append("Events in report but missing/different in store:")
+                                        for e in report_diff:
+                                            mismatch_details.append(f"  - [{e.get('type') or e.get('event_type', 'observation')}] Concept: {e.get('concept', 'unknown')}, Evidence: {e.get('evidence', 'N/A')}")
+                                    reports_to_append_notes[rf] = (content, mismatch_details)
+                    except Exception:
+                        inconsistent_reports.append(rf)
+                        if rebuild_reports:
+                            reports_to_rebuild[rf] = (date_str, s_evs)
+
+    issues = []
+    if empty_orphan_files:
+        issues.append(f"{len(empty_orphan_files)} empty orphan session files")
+    if missing_metadata_events:
+        issues.append(f"{len(missing_metadata_events)} manually appended events missing source metadata")
+    if invalid_jsonl_records:
+        issues.append(f"{len(invalid_jsonl_records)} invalid JSONL lines")
+    if duplicate_events_count:
+        issues.append(f"{duplicate_events_count} duplicate events")
+    if inconsistent_reports:
+        issues.append(f"{len(inconsistent_reports)} session reports inconsistent with event store")
+
+    repairs = []
+    changed_files = []
+    warnings = []
+    errors = []
+    backup_dir = None
+    quarantine_file = None
+    report_file = None
+
+    status = "success" if not issues else "warn"
+
+    if apply:
+        if backup is not False:
+            timestamp = time.strftime("%Y%m%d-%H%M%S")
+            backup_dir = harness / "backups" / f"recover-reflection-{timestamp}"
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            
+            paths_to_backup = [
+                harness / "events.jsonl",
+                harness / "runtime_events.jsonl",
+                harness / "sessions",
+                harness / "reports",
+                harness / "state"
+            ]
+            for src_path in paths_to_backup:
+                if not src_path.exists():
+                    continue
+                if src_path.is_file():
+                    rel = src_path.relative_to(harness)
+                    dest = backup_dir / rel
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(src_path, dest)
+                elif src_path.is_dir():
+                    for f in src_path.rglob("*"):
+                        if f.is_file():
+                            rel = f.relative_to(harness)
+                            dest = backup_dir / rel
+                            dest.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.copy2(f, dest)
+
+        if empty_orphan_files:
+            repairs.append("remove empty orphan session files")
+            for f in empty_orphan_files:
+                try:
+                    f.unlink()
+                    changed_files.append(str(f))
+                except Exception as e:
+                    errors.append(f"Failed to remove orphan file {f.name}: {e}")
+        
+        for ef in existing_event_files:
+            file_events = file_to_events.get(ef, [])
+            try:
+                with open(ef, "w", encoding="utf-8") as out_f:
+                    for ev in file_events:
+                        out_f.write(json.dumps(ev) + "\n")
+                changed_files.append(str(ef))
+            except Exception as e:
+                errors.append(f"Error repairing event file {ef.name}: {e}")
+
+        if invalid_jsonl_records:
+            repairs.append("normalize event metadata and clean event log")
+            timestamp = time.strftime("%Y%m%d-%H%M%S")
+            quarantine_file = harness / "reports" / f"recover-reflection-{timestamp}-invalid-jsonl.md"
+            quarantine_file.parent.mkdir(parents=True, exist_ok=True)
+            
+            quarantine_content = [
+                "---",
+                "generated_by: openempiric",
+                "source_type: oem_recovery_report",
+                "scope: reflection",
+                "---",
+                "# Invalid JSONL Quarantine Report",
+                "",
+                "## Invalid JSONL",
+                ""
+            ]
+            for rec in invalid_jsonl_records:
+                quarantine_content.extend([
+                    f"### {rec['file']}:{rec['line_number']}",
+                    "",
+                    f"Error: {rec['error']}",
+                    "",
+                    "```json",
+                    rec['raw_line'],
+                    "```",
+                    ""
+                ])
+            
+            try:
+                quarantine_file.write_text("\n".join(quarantine_content), encoding="utf-8")
+                changed_files.append(str(quarantine_file))
+            except Exception as e:
+                errors.append(f"Failed to write quarantine file: {e}")
+
+        if reports_to_rebuild:
+            repairs.append("rebuild session report from runtime events")
+            for rf, (date_str, s_evs) in reports_to_rebuild.items():
+                try:
+                    parsed = parse_markdown_report(rf.read_text(encoding="utf-8"))
+                    project_name = parsed.get("frontmatter", {}).get("project", "default")
+                    new_report = build_markdown_report(date_str, project_name, s_evs)
+                    rf.write_text(new_report, encoding="utf-8")
+                    changed_files.append(str(rf))
+                except Exception as e:
+                    errors.append(f"Error rebuilding report {rf.name}: {e}")
+
+        if reports_to_append_notes:
+            repairs.append("append recovery notes to session reports")
+            for rf, (content, mismatch_details) in reports_to_append_notes.items():
+                try:
+                    if "## Recovery Notes" in content:
+                        content_base = content.split("## Recovery Notes")[0].rstrip()
+                    else:
+                        content_base = content.rstrip()
+                    notes_text = "\n\n## Recovery Notes\n" + "\n".join(f"- {detail}" for detail in mismatch_details) + "\n"
+                    rf.write_text(content_base + notes_text, encoding="utf-8")
+                    changed_files.append(str(rf))
+                except Exception as e:
+                    errors.append(f"Error appending recovery notes to {rf.name}: {e}")
+
+        timestamp = time.strftime("%Y%m%d-%H%M%S")
+        report_file = harness / "reports" / f"recover-reflection-{timestamp}.md"
+        report_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        report_lines = [
+            "---",
+            "generated_by: openempiric",
+            "source_type: oem_recovery_report",
+            "scope: reflection",
+            "---",
+            "# Reflection Recovery Report",
+            "",
+            "## Summary",
+            f"- Empty orphan files removed: {len(empty_orphan_files)}",
+            f"- Invalid JSONL lines quarantined: {len(invalid_jsonl_records)}",
+            f"- Events normalized (missing metadata): {len(missing_metadata_events)}",
+            f"- Duplicate events removed: {duplicate_events_count}",
+            f"- Inconsistent session reports: {len(inconsistent_reports)}",
+            ""
+        ]
+        
+        if empty_orphan_files:
+            report_lines.extend([
+                "### Removed Empty Orphan Files",
+                *[f"- `{f.name}`" for f in empty_orphan_files],
+                ""
+            ])
+            
+        if missing_metadata_events:
+            report_lines.extend([
+                "### Normalized Events",
+                "The following events had missing metadata normalized and provenance added:",
+                ""
+            ])
+            for idx, (ev, reasons) in enumerate(missing_metadata_events, 1):
+                report_lines.append(f"{idx}. Event concept: `{ev.get('concept_candidates', [''])[0] if ev.get('concept_candidates') else ev.get('concept', 'unknown')}` - missing: {', '.join(reasons)}")
+            report_lines.append("")
+
+        try:
+            report_file.write_text("\n".join(report_lines), encoding="utf-8")
+            changed_files.append(str(report_file))
+        except Exception as e:
+            errors.append(f"Failed to write recovery report: {e}")
+
+        status = "success"
+
+    from oem_knowledge.runtime.result import make_result
+    return make_result(
+        status=status,
+        operation="recover_reflection",
+        project=str(project or "."),
+        mode="apply" if apply else "dry_run",
+        scope="reflection",
+        backup_dir=str(backup_dir) if backup_dir else None,
+        report_path=str(report_file) if report_file else None,
+        quarantine_file=str(quarantine_file) if quarantine_file else None,
+        changed_files=changed_files,
+        issues=issues,
+        repairs=repairs if apply else [
+            r for r in [
+                "remove empty orphan session files" if empty_orphan_files else None,
+                "normalize event metadata and clean event log" if (missing_metadata_events or invalid_jsonl_records or duplicate_events_count) else None,
+                "rebuild session report from runtime events" if (inconsistent_reports and rebuild_reports) else ("append recovery notes to session reports" if inconsistent_reports else None)
+            ] if r is not None
+        ],
+        warnings=warnings,
+        errors=errors,
+        empty_orphan_files=[str(f) for f in empty_orphan_files],
+        invalid_jsonl_count=len(invalid_jsonl_records),
+        missing_metadata_count=len(missing_metadata_events),
+        duplicate_events_count=duplicate_events_count,
+        inconsistent_reports=[str(f) for f in inconsistent_reports],
+    )
+
 def cmd_recover(
     eng: KnowledgeEngine,
     project: str | None = None,
@@ -89,431 +529,66 @@ def cmd_recover(
     harness = eng._resolve_harness(project)
 
     if scope == "reflection":
-        if not dry_run and not apply:
-            dry_run = True
-
-        if dry_run and apply:
-            print("Error: --dry-run and --apply are mutually exclusive.", file=sys.stderr)
+        try:
+            res = recover_reflection(
+                eng, project, dry_run=dry_run, apply=apply, backup=backup, rebuild_reports=rebuild_reports
+            )
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
             sys.exit(1)
 
-        if backup is False and not apply:
-            print("Error: --no-backup is only valid in apply mode.", file=sys.stderr)
-            sys.exit(1)
-
-        events_path = eng.layout(project).events_path
-        sessions_dir = eng.layout(project).sessions_dir
-        
-        event_files = [harness / "events.jsonl", harness / "runtime_events.jsonl"]
-        existing_event_files = [f for f in event_files if f.exists()]
-
-        invalid_jsonl_records = []
-        missing_metadata_events = []
-        unique_events = []
-        
-        seen_event_ids = set()
-        seen_bodies = set()
-        seen_summary_ts_source = set()
-        
-        duplicate_events_count = 0
-        file_to_events = {}
-
-        for ef in existing_event_files:
-            file_events = []
-            try:
-                try:
-                    rel_file = str(ef.relative_to(harness))
-                except Exception:
-                    rel_file = str(ef.name)
-                    
-                lines = ef.read_text(encoding="utf-8").splitlines()
-                for line_no, line in enumerate(lines, 1):
-                    raw = line.strip()
-                    if not raw:
-                        continue
-                    try:
-                        ev = json.loads(raw)
-                        if not isinstance(ev, dict):
-                            invalid_jsonl_records.append({
-                                "file": rel_file,
-                                "line_number": line_no,
-                                "raw_line": raw,
-                                "error": "Not a JSON object"
-                            })
-                            continue
-                        
-                        has_missing = False
-                        reasons = []
-                        if not ev.get("event_id") and not ev.get("id"):
-                            has_missing = True
-                            reasons.append("event_id")
-                        if not ev.get("timestamp"):
-                            has_missing = True
-                            reasons.append("timestamp")
-                        if not ev.get("source_type"):
-                            has_missing = True
-                            reasons.append("source_type")
-
-                        if has_missing:
-                            missing_metadata_events.append((ev, reasons))
-
-                        repaired_ev = dict(ev)
-                        if has_missing:
-                            repaired_ev["source"] = "recovered_reflection"
-                            repaired_ev["source_type"] = "recovered_event"
-                            repaired_ev["recovered_by"] = "oem recover --scope reflection"
-                            repaired_ev["recovery_reason"] = "missing event_id/timestamp/source_type"
-                            
-                            if not repaired_ev.get("event_id") and not repaired_ev.get("id"):
-                                repaired_ev["event_id"] = str(uuid.uuid4())
-                            elif repaired_ev.get("id") and not repaired_ev.get("event_id"):
-                                repaired_ev["event_id"] = repaired_ev.get("id")
-                            
-                            if not repaired_ev.get("timestamp"):
-                                repaired_ev["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                            
-                            if not repaired_ev.get("event_type"):
-                                repaired_ev["event_type"] = "observation"
-                            
-                            if not repaired_ev.get("summary"):
-                                repaired_ev["summary"] = repaired_ev.get("evidence") or "Recovered event"
-
-                        ev_id = repaired_ev.get("event_id") or repaired_ev.get("id")
-                        body_parts = {k: v for k, v in repaired_ev.items() if k not in ("event_id", "id", "timestamp")}
-                        normalized_body = json.dumps(body_parts, sort_keys=True)
-                        triple = (repaired_ev.get("summary"), repaired_ev.get("timestamp"), repaired_ev.get("source"))
-                        
-                        is_duplicate = False
-                        if ev_id and ev_id in seen_event_ids:
-                            is_duplicate = True
-                        elif normalized_body in seen_bodies:
-                            is_duplicate = True
-                        elif triple[0] and triple[1] and triple[2] and triple in seen_summary_ts_source:
-                            is_duplicate = True
-                            
-                        if is_duplicate:
-                            duplicate_events_count += 1
-                        else:
-                            if ev_id:
-                                seen_event_ids.add(ev_id)
-                            seen_bodies.add(normalized_body)
-                            if triple[0] and triple[1] and triple[2]:
-                                seen_summary_ts_source.add(triple)
-                            unique_events.append(repaired_ev)
-                            file_events.append(repaired_ev)
-                            
-                    except json.JSONDecodeError as err:
-                        invalid_jsonl_records.append({
-                            "file": rel_file,
-                            "line_number": line_no,
-                            "raw_line": raw,
-                            "error": str(err)
-                        })
-            except Exception:
-                pass
-            file_to_events[ef] = file_events
-
-        # Collect dates with events
-        dates_with_events = set()
-        for ev in unique_events:
-            s_id = ev.get("session_id") or "default_session"
-            date_str = None
-            ts = ev.get("timestamp")
-            if ts and len(ts) >= 10:
-                date_str = ts[:10]
-            if not date_str:
-                match = re.search(r"session_(\d{4})(\d{2})(\d{2})", s_id)
-                if match:
-                    date_str = f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
-            if not date_str:
-                date_str = time.strftime("%Y-%m-%d")
-            dates_with_events.add(date_str)
-
-        empty_orphan_files = []
-        if sessions_dir.exists():
-            for f in sessions_dir.glob("*.md"):
-                try:
-                    content = f.read_text(encoding="utf-8")
-                    file_date = f.name[:10]
-                    if is_empty_orphan_session(content, file_date, dates_with_events):
-                        empty_orphan_files.append(f)
-                except Exception:
-                    pass
-
-        inconsistent_reports = []
-        reports_to_rebuild = {}
-        reports_to_append_notes = {}
-        
-        session_to_events = {}
-        for ev in unique_events:
-            s_id = ev.get("session_id") or "default_session"
-            session_to_events.setdefault(s_id, []).append(ev)
-
-        date_to_sessions = {}
-        for s_id, s_evs in session_to_events.items():
-            date_str = None
-            if s_evs:
-                ts = s_evs[0].get("timestamp")
-                if ts and len(ts) >= 10:
-                    date_str = ts[:10]
-            if not date_str:
-                match = re.search(r"session_(\d{4})(\d{2})(\d{2})", s_id)
-                if match:
-                    date_str = f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
-            if not date_str:
-                date_str = time.strftime("%Y-%m-%d")
-            
-            date_to_sessions.setdefault(date_str, []).append((s_id, s_evs))
-
-        for date_str, sessions in date_to_sessions.items():
-            sessions.sort(key=lambda item: item[0])
-            
-        if sessions_dir.exists():
-            for date_str, sessions in date_to_sessions.items():
-                report_files = sorted([f for f in sessions_dir.glob(f"{date_str}*.md") if f not in empty_orphan_files])
-                for idx, (s_id, s_evs) in enumerate(sessions):
-                    if idx < len(report_files):
-                        rf = report_files[idx]
-                        if rf in empty_orphan_files:
-                            continue
-                        try:
-                            content = rf.read_text(encoding="utf-8")
-                            parsed = parse_markdown_report(content)
-                            report_evs = parsed.get("events") or []
-                            
-                            def norm(e):
-                                return (
-                                    str(e.get("type") or e.get("event_type", "")).strip().lower(),
-                                    str(e.get("concept") or "").strip().lower()[:80],
-                                    str(e.get("evidence") or "").strip().lower()
-                                )
-                            
-                            s_evs_norm = sorted([norm(e) for e in s_evs])
-                            report_evs_norm = sorted([norm(e) for e in report_evs])
-                            
-                            has_generated_by = parsed.get("frontmatter", {}).get("generated_by") == "openempiric"
-                            
-                            if s_evs_norm != report_evs_norm or not has_generated_by:
-                                inconsistent_reports.append(rf)
-                                if rebuild_reports:
-                                    reports_to_rebuild[rf] = (date_str, s_evs)
-                                else:
-                                    if has_generated_by:
-                                        mismatch_details = []
-                                        mismatch_details.append(f"Event store has {len(s_evs)} events, while session report has {len(report_evs)} events.")
-                                        store_diff = [e for e in s_evs if norm(e) not in report_evs_norm]
-                                        report_diff = [e for e in report_evs if norm(e) not in s_evs_norm]
-                                        if store_diff:
-                                            mismatch_details.append("Events in store but missing/different in report:")
-                                            for e in store_diff:
-                                                mismatch_details.append(f"  - [{e.get('event_type', 'observation')}] Concept: {e.get('concept_candidates', ['unknown'])[0] if e.get('concept_candidates') else 'unknown'}, Summary: {e.get('summary', 'N/A')}")
-                                        if report_diff:
-                                            mismatch_details.append("Events in report but missing/different in store:")
-                                            for e in report_diff:
-                                                mismatch_details.append(f"  - [{e.get('type') or e.get('event_type', 'observation')}] Concept: {e.get('concept', 'unknown')}, Evidence: {e.get('evidence', 'N/A')}")
-                                        reports_to_append_notes[rf] = (content, mismatch_details)
-                        except Exception:
-                            inconsistent_reports.append(rf)
-                            if rebuild_reports:
-                                reports_to_rebuild[rf] = (date_str, s_evs)
+        empty_orphan_count = len(res.get("empty_orphan_files", []))
+        invalid_jsonl_count = res.get("invalid_jsonl_count", 0)
+        missing_metadata_count = res.get("missing_metadata_count", 0)
+        duplicate_events_count = res.get("duplicate_events_count", 0)
+        inconsistent_reports_count = len(res.get("inconsistent_reports", []))
 
         print("Found:")
-        print(f"- {len(empty_orphan_files)} empty orphan session files")
-        print(f"- {len(missing_metadata_events)} manually appended events missing source metadata")
-        print(f"- {len(invalid_jsonl_records)} invalid JSONL lines")
+        print(f"- {empty_orphan_count} empty orphan session files")
+        print(f"- {missing_metadata_count} manually appended events missing source metadata")
+        print(f"- {invalid_jsonl_count} invalid JSONL lines")
         print(f"- {duplicate_events_count} duplicate events")
-        print(f"- {len(inconsistent_reports)} session reports inconsistent with event store")
+        print(f"- {inconsistent_reports_count} session reports inconsistent with event store")
         print()
-        
-        if len(empty_orphan_files) == 0 and len(missing_metadata_events) == 0 and len(invalid_jsonl_records) == 0 and duplicate_events_count == 0 and len(inconsistent_reports) == 0:
+
+        if not res.get("issues"):
             print("No repairs needed.")
-            return {
-                "empty_orphan_files": [],
-                "invalid_jsonl_count": 0,
-                "missing_metadata_count": 0,
-                "duplicate_events_count": 0,
-                "inconsistent_reports": [],
-                "backup_dir": None,
-                "quarantine_file": None,
-                "report_file": None,
-            }
+            return res
 
         print("Suggested repairs:")
-        if empty_orphan_files:
-            print("- remove empty orphan session files")
-        if missing_metadata_events or invalid_jsonl_records or duplicate_events_count:
-            print("- normalize event metadata and clean event log")
-        if inconsistent_reports:
-            if rebuild_reports:
-                print("- rebuild session report from runtime events")
-            else:
-                print("- append recovery notes to session reports")
+        for r in res.get("repairs", []):
+            if r:
+                print(f"- {r}")
         if apply and backup is not False:
             print("- create backup before apply")
         print()
 
-        backup_dir = None
-        quarantine_file = None
-        report_file = None
-
         if apply:
-            if backup is not False:
-                timestamp = time.strftime("%Y%m%d-%H%M%S")
-                backup_dir = harness / "backups" / f"recover-reflection-{timestamp}"
-                backup_dir.mkdir(parents=True, exist_ok=True)
-                
-                paths_to_backup = [
-                    harness / "events.jsonl",
-                    harness / "runtime_events.jsonl",
-                    harness / "sessions",
-                    harness / "reports",
-                    harness / "state"
-                ]
-                for src_path in paths_to_backup:
-                    if not src_path.exists():
-                        continue
-                    if src_path.is_file():
-                        rel = src_path.relative_to(harness)
-                        dest = backup_dir / rel
-                        dest.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.copy2(src_path, dest)
-                    elif src_path.is_dir():
-                        for f in src_path.rglob("*"):
-                            if f.is_file():
-                                rel = f.relative_to(harness)
-                                dest = backup_dir / rel
-                                dest.parent.mkdir(parents=True, exist_ok=True)
-                                shutil.copy2(f, dest)
+            if res.get("backup_dir"):
+                p = Path(res["backup_dir"])
                 try:
-                    rel_print = backup_dir.relative_to(harness.parent)
+                    rel_print = p.relative_to(harness.parent)
                 except Exception:
-                    rel_print = backup_dir
+                    rel_print = p
                 print(f"Backup created at: {rel_print}")
 
-            for f in empty_orphan_files:
+            if res.get("quarantine_file"):
+                p = Path(res["quarantine_file"])
                 try:
-                    f.unlink()
+                    rel_quar = p.relative_to(harness.parent)
                 except Exception:
-                    pass
-            
-            for ef in existing_event_files:
-                file_events = file_to_events.get(ef, [])
-                try:
-                    with open(ef, "w", encoding="utf-8") as out_f:
-                        for ev in file_events:
-                            out_f.write(json.dumps(ev) + "\n")
-                except Exception as e:
-                    print(f"Error repairing event file {ef.name}: {e}")
+                    rel_quar = p
+                print(f"Quarantined {invalid_jsonl_count} lines to: {rel_quar}")
 
-            if invalid_jsonl_records:
-                timestamp = time.strftime("%Y%m%d-%H%M%S")
-                quarantine_file = harness / "reports" / f"recover-reflection-{timestamp}-invalid-jsonl.md"
-                quarantine_file.parent.mkdir(parents=True, exist_ok=True)
-                
-                quarantine_content = [
-                    "---",
-                    "generated_by: openempiric",
-                    "source_type: oem_recovery_report",
-                    "scope: reflection",
-                    "---",
-                    "# Invalid JSONL Quarantine Report",
-                    "",
-                    "## Invalid JSONL",
-                    ""
-                ]
-                for rec in invalid_jsonl_records:
-                    quarantine_content.extend([
-                        f"### {rec['file']}:{rec['line_number']}",
-                        "",
-                        f"Error: {rec['error']}",
-                        "",
-                        "```json",
-                        rec['raw_line'],
-                        "```",
-                        ""
-                    ])
-                
-                quarantine_file.write_text("\n".join(quarantine_content), encoding="utf-8")
+            if res.get("report_path"):
+                p = Path(res["report_path"])
                 try:
-                    rel_quar = quarantine_file.relative_to(harness.parent)
+                    rel_rep = p.relative_to(harness.parent)
                 except Exception:
-                    rel_quar = quarantine_file
-                print(f"Quarantined {len(invalid_jsonl_records)} lines to: {rel_quar}")
+                    rel_rep = p
+                print(f"Repairs applied successfully. Report written to: {rel_rep}")
 
-            for rf, (date_str, s_evs) in reports_to_rebuild.items():
-                try:
-                    parsed = parse_markdown_report(rf.read_text(encoding="utf-8"))
-                    project_name = parsed.get("frontmatter", {}).get("project", "default")
-                    new_report = build_markdown_report(date_str, project_name, s_evs)
-                    rf.write_text(new_report, encoding="utf-8")
-                except Exception as e:
-                    print(f"Error rebuilding report {rf.name}: {e}")
-
-            for rf, (content, mismatch_details) in reports_to_append_notes.items():
-                try:
-                    if "## Recovery Notes" in content:
-                        content_base = content.split("## Recovery Notes")[0].rstrip()
-                    else:
-                        content_base = content.rstrip()
-                    notes_text = "\n\n## Recovery Notes\n" + "\n".join(f"- {detail}" for detail in mismatch_details) + "\n"
-                    rf.write_text(content_base + notes_text, encoding="utf-8")
-                except Exception as e:
-                    print(f"Error appending recovery notes to {rf.name}: {e}")
-
-            timestamp = time.strftime("%Y%m%d-%H%M%S")
-            report_file = harness / "reports" / f"recover-reflection-{timestamp}.md"
-            report_file.parent.mkdir(parents=True, exist_ok=True)
-            
-            report_lines = [
-                "---",
-                "generated_by: openempiric",
-                "source_type: oem_recovery_report",
-                "scope: reflection",
-                "---",
-                "# Reflection Recovery Report",
-                "",
-                "## Summary",
-                f"- Empty orphan files removed: {len(empty_orphan_files)}",
-                f"- Invalid JSONL lines quarantined: {len(invalid_jsonl_records)}",
-                f"- Events normalized (missing metadata): {len(missing_metadata_events)}",
-                f"- Duplicate events removed: {duplicate_events_count}",
-                f"- Inconsistent session reports: {len(inconsistent_reports)}",
-                ""
-            ]
-            
-            if empty_orphan_files:
-                report_lines.extend([
-                    "### Removed Empty Orphan Files",
-                    *[f"- `{f.name}`" for f in empty_orphan_files],
-                    ""
-                ])
-                
-            if missing_metadata_events:
-                report_lines.extend([
-                    "### Normalized Events",
-                    "The following events had missing metadata normalized and provenance added:",
-                    ""
-                ])
-                for idx, (ev, reasons) in enumerate(missing_metadata_events, 1):
-                    report_lines.append(f"{idx}. Event concept: `{ev.get('concept_candidates', [''])[0] if ev.get('concept_candidates') else ev.get('concept', 'unknown')}` - missing: {', '.join(reasons)}")
-                report_lines.append("")
-
-            report_file.write_text("\n".join(report_lines), encoding="utf-8")
-            try:
-                rel_rep = report_file.relative_to(harness.parent)
-            except Exception:
-                rel_rep = report_file
-            print(f"Repairs applied successfully. Report written to: {rel_rep}")
-
-        return {
-            "empty_orphan_files": [str(f) for f in empty_orphan_files],
-            "invalid_jsonl_count": len(invalid_jsonl_records),
-            "missing_metadata_count": len(missing_metadata_events),
-            "duplicate_events_count": duplicate_events_count,
-            "inconsistent_reports": [str(f) for f in inconsistent_reports],
-            "backup_dir": str(backup_dir) if backup_dir else None,
-            "quarantine_file": str(quarantine_file) if quarantine_file else None,
-            "report_file": str(report_file) if report_file else None,
-        }
+        return res
 
     # Normal recovery (Active session recovery)
     active_session_file = harness / "state" / "active_session.json"

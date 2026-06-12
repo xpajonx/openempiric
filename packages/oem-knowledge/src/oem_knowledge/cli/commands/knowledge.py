@@ -326,11 +326,21 @@ def _run_knowledge_command_impl(args):
         print(render_panel("Contradiction Scan", lines, status="error" if contradictions else "ok"))
 
     elif args.command == "health":
+        from oem_knowledge.health import build_runtime_health
+        health_res = build_runtime_health(project)
+
         stale = eng.state.detect_stale_concepts(args.stale_sessions, project)
         merges = eng.propose_merges(args.similarity_threshold, project)
         conflicts = eng.detect_contradictions(project)
         
         lines = []
+
+        # Runtime health section
+        lines.append("Runtime Checks:")
+        for check in health_res["runtime"]["checks"]:
+            symbol = "✓" if check["status"] == "success" else ("⚠" if check["status"] == "warn" else "✗")
+            lines.append(f"  {symbol} {check['name']}")
+        lines.append("")
         
         # Stale concepts section
         lines.append("Stale Concepts:")
@@ -361,6 +371,7 @@ def _run_knowledge_command_impl(args):
             lines.append("  None")
             
         print(render_panel("Knowledge Health Scan", lines, status="stats"))
+
 
     elif args.command == "merge":
         res = eng.state.merge_concepts(project, args.primary_id, args.secondary_id)

@@ -220,7 +220,7 @@ class ReflectionService:
                     break
         return extracted
 
-    def reflect_session(
+    def extract_session_events(
         self,
         project: str | None = None,
         conversation_text: str = "",
@@ -268,21 +268,21 @@ class ReflectionService:
                             continue
                     except Exception as e:
                         logger.warning("Failed to check modification time for concept file %s: %s", fp.name, e)
-                try:
-                    concept_id = fp.stem
-                    current_text = fp.read_text(encoding="utf-8")
-                    fm_match = re.match(r"^---\s*\n.*?\n---\s*\n(.*)$", current_text, re.DOTALL)
-                    current_body = fm_match.group(1).strip() if fm_match else current_text.strip()
-                    history = self.engine.materialization.get_concept_history(concept_id, project)
-                    if history:
-                        last_entry = history[-1]
-                        last_content = last_entry.get("content", "")
-                        last_fm_match = re.match(r"^---\s*\n.*?\n---\s*\n(.*)$", last_content, re.DOTALL)
-                        last_body = last_fm_match.group(1).strip() if last_fm_match else last_content.strip()
-                        if current_body.strip() == last_body.strip():
-                            continue
-                except Exception as e:
-                    logger.warning("Failed to read or diff history for concept file %s: %s", fp.name, e)
+                    try:
+                        concept_id = fp.stem
+                        current_text = fp.read_text(encoding="utf-8")
+                        fm_match = re.match(r"^---\s*\n.*?\n---\s*\n(.*)$", current_text, re.DOTALL)
+                        current_body = fm_match.group(1).strip() if fm_match else current_text.strip()
+                        history = self.engine.materialization.get_concept_history(concept_id, project)
+                        if history:
+                            last_entry = history[-1]
+                            last_content = last_entry.get("content", "")
+                            last_fm_match = re.match(r"^---\s*\n.*?\n---\s*\n(.*)$", last_content, re.DOTALL)
+                            last_body = last_fm_match.group(1).strip() if last_fm_match else last_content.strip()
+                            if current_body.strip() == last_body.strip():
+                                continue
+                    except Exception as e:
+                        logger.warning("Failed to read or diff history for concept file %s: %s", fp.name, e)
                 modified_files.append(fp)
 
         for fp in modified_files:
@@ -380,7 +380,6 @@ class ReflectionService:
             logger.warning("Failed to extract codebase modifications via git diff: %s", e)
             warnings_list.append("Git diff extraction failed, so code modification evidence may be incomplete.")
 
-        # Determine resolved extraction mode
         resolved_mode = extraction_mode
         if resolved_mode == "auto":
             if events is not None:
@@ -422,7 +421,6 @@ class ReflectionService:
                 "source": "orchestrator",
             })
 
-        # Run extraction based on mode
         if resolved_mode == "structured":
             if not isinstance(events, list):
                 return {
@@ -518,7 +516,6 @@ class ReflectionService:
                     "phase_timings": {}
                 }
 
-        # Check for empty extraction
         if not knowledge_events:
             return {
                 "status": "empty",
@@ -535,12 +532,6 @@ class ReflectionService:
             }
 
         reflection_time = time.perf_counter() - start_t
-        if progress_callback is not None:
-            try:
-                progress_callback("append_events")
-            except Exception:
-                pass
-        t_append_start = time.perf_counter()
 
         seen = set()
         canonical_events = []
@@ -577,27 +568,8 @@ class ReflectionService:
                 canonical_event["ingestion_eligible"] = ev["ingestion_eligible"]
 
             canonical_events.append(canonical_event)
-            self.engine.state._append_event(canonical_event, project)
 
-        append_events_time = time.perf_counter() - t_append_start
-        if progress_callback is not None:
-            try:
-                progress_callback("write_report")
-            except Exception:
-                pass
-        t_write_start = time.perf_counter()
-
-        # Prioritize events: chat-derived first, then orchestrator, then file observations
         canonical_events.sort(key=lambda e: _SOURCE_PRIORITY.get(e.get("source", ""), 99))
-
-        sessions_dir = self.engine._sessions_dir(project)
-        sfs = self.engine._sfs(project)
-        date_str = time.strftime("%Y-%m-%d")
-        report_file = sessions_dir / f"{date_str}.md"
-        counter = 1
-        while sfs.exists(report_file) and counter < 1000:
-            report_file = sessions_dir / f"{date_str}_{counter}.md"
-            counter += 1
 
         yaml_events = [
             {
@@ -608,26 +580,6 @@ class ReflectionService:
             }
             for e in canonical_events
         ]
-        yaml_content = json.dumps({"knowledge_events": yaml_events}, indent=2)
-
-        report = f"""---
-date: {date_str}
-project: {project or "default"}
----
-# Session Learning Report — {date_str}
-
-## Knowledge Events
-```json
-{yaml_content}
-```
-"""
-        try:
-            sfs.write_text(report_file, report, force_allow_truncation=True)
-        except OSError as e:
-            logger.error("Failed to write session learning report to %s: %s", report_file, e)
-            return {"status": "error", "failed_step": "reflection", "message": f"Failed to write session learning report: {e}"}
-
-        write_report_time = time.perf_counter() - t_write_start
 
         source_counts = {}
         for ev in canonical_events:
@@ -666,6 +618,105 @@ project: {project or "default"}
             ),
         }
 
+        status_val = "partial" if (resolved_mode == "structured" and events_rejected > 0) else "success"
+
+        return {
+            "status": status_val,
+            "mode": resolved_mode,
+            "events_written": len(canonical_events),
+            "events_rejected": events_rejected,
+            "warnings": warnings_list,
+            "suggestion": None,
+            "knowledge_events": yaml_events,
+            "canonical_events": canonical_events,
+            "explainability": explainability,
+            "reflection_time": reflection_time,
+        }
+
+    def reflect_session(
+        self,
+        project: str | None = None,
+        conversation_text: str = "",
+        session_id: str = "",
+        telemetry: dict | None = None,
+        session_started_at: float | None = None,
+        progress_callback = None,
+        events: list[dict] | None = None,
+        extraction_mode: str = "auto",
+        timeout_seconds: float | None = None,
+    ) -> dict:
+        import time
+        from pathlib import Path
+        
+        # Call the new extract_session_events method
+        res = self.extract_session_events(
+            project=project,
+            conversation_text=conversation_text,
+            session_id=session_id,
+            telemetry=telemetry,
+            session_started_at=session_started_at,
+            progress_callback=progress_callback,
+            events=events,
+            extraction_mode=extraction_mode,
+            timeout_seconds=timeout_seconds,
+        )
+
+        status_val = res.get("status")
+        if status_val == "error" or status_val == "empty" or (status_val == "partial" and res.get("failed_step") == "llm_extraction"):
+            return res
+
+        canonical_events = res.get("canonical_events", [])
+        
+        # Persist events using public append_events
+        if progress_callback is not None:
+            try:
+                progress_callback("append_events")
+            except Exception:
+                pass
+        t_append_start = time.perf_counter()
+        
+        self.engine.state.append_events(canonical_events, project)
+        append_events_time = time.perf_counter() - t_append_start
+
+        # Write session report
+        if progress_callback is not None:
+            try:
+                progress_callback("write_report")
+            except Exception:
+                pass
+        t_write_start = time.perf_counter()
+
+        sessions_dir = self.engine._sessions_dir(project)
+        sfs = self.engine._sfs(project)
+        date_str = time.strftime("%Y-%m-%d")
+        report_file = sessions_dir / f"{date_str}.md"
+        counter = 1
+        while sfs.exists(report_file) and counter < 1000:
+            report_file = sessions_dir / f"{date_str}_{counter}.md"
+            counter += 1
+
+        yaml_events = res.get("knowledge_events", [])
+        yaml_content = json.dumps({"knowledge_events": yaml_events}, indent=2)
+
+        report = f"""---
+date: {date_str}
+project: {project or "default"}
+---
+# Session Learning Report — {date_str}
+
+## Knowledge Events
+```json
+{yaml_content}
+```
+"""
+        try:
+            sfs.write_text(report_file, report, force_allow_truncation=True)
+        except OSError as e:
+            logger.error("Failed to write session learning report to %s: %s", report_file, e)
+            return {"status": "error", "failed_step": "reflection", "message": f"Failed to write session learning report: {e}"}
+
+        write_report_time = time.perf_counter() - t_write_start
+
         # Emit reflection metrics
         try:
             from oem_knowledge.tools.metrics import update_metrics_file
@@ -673,6 +724,11 @@ project: {project or "default"}
             p = Path(project or ".").resolve()
             root = find_harness_root(p) or p
             metrics_file = (root / OEM_DIR / "state" / "metrics.json")
+            
+            structured_events_found = res.get("explainability", {}).get("structured_events_found", 0)
+            fallback_extraction_used = res.get("explainability", {}).get("fallback_extraction_used", False)
+            file_observations_count = res.get("explainability", {}).get("file_observations_count", 0)
+            
             update_metrics_file(metrics_file, {
                 "structured_events": structured_events_found,
                 "fallback_extractions": 1 if fallback_extraction_used else 0,
@@ -683,22 +739,25 @@ project: {project or "default"}
         except Exception as e:
             logger.warning("Failed to emit reflection metrics: %s", e)
 
-        status_val = "partial" if (resolved_mode == "structured" and events_rejected > 0) else "success"
+        # Update timings
+        phase_timings = {
+            "reflection": res.get("reflection_time", 0.0),
+            "append_events": append_events_time,
+            "write_report": write_report_time,
+        }
 
         return {
             "status": status_val,
-            "mode": resolved_mode,
+            "mode": res.get("mode"),
             "events_written": len(canonical_events),
-            "events_rejected": events_rejected,
-            "warnings": warnings_list,
+            "events_rejected": res.get("events_rejected", 0),
+            "warnings": res.get("warnings", []),
             "suggestion": None,
             "report_path": str(report_file),
             "knowledge_events": yaml_events,
             "canonical_events": canonical_events,
-            "explainability": explainability,
-            "phase_timings": {
-                "reflection": reflection_time,
-                "append_events": append_events_time,
-                "write_report": write_report_time,
-            }
+            "explainability": res.get("explainability"),
+            "phase_timings": phase_timings,
         }
+
+    _original_reflect_session_func = reflect_session

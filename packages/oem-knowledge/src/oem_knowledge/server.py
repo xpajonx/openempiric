@@ -546,15 +546,34 @@ def mount_tools(mcp: object) -> None:
             project: Project directory path. Defaults to current directory.
         """
         try:
+            from oem_knowledge.health import build_runtime_health
+            res = build_runtime_health(project or None)
+
             with KnowledgeEngine(project or None) as eng:
                 stale = eng.state.detect_stale_concepts(stale_sessions, project or None)
                 merges = eng.propose_merges(similarity_threshold, project or None)
                 conflicts = eng.detect_contradictions(project or None)
         except Exception as e:
-            return render_panel("Health Check Failure", [f"Error: {e}"], status="error")
+            err_data = {
+                "status": "error",
+                "operation": "knowledge_health_check",
+                "message": str(e),
+                "failed_step": "knowledge_health_check",
+                "warnings": [],
+                "errors": [str(e)],
+                "suggestion": "Ensure the project directory exists and contains valid .oem/ memory files."
+            }
+            return json.dumps(err_data, indent=2)
 
         lines = []
         
+        # Runtime Checks
+        lines.append("Runtime Checks:")
+        for c in res["runtime"]["checks"]:
+            symbol = "✓" if c["status"] == "success" else ("⚠" if c["status"] == "warn" else "✗")
+            lines.append(f"  {symbol} {c['name']}")
+        lines.append("")
+
         # Stale concepts section
         lines.append("Stale Concepts:")
         if stale:

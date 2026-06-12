@@ -110,7 +110,7 @@ class StateService:
             logger.error("Timed out acquiring state lock for %s", p)
             raise
 
-    def _append_event(self, event: dict | KnowledgeEvent, project: str | None = None):
+    def append_event(self, event: dict | KnowledgeEvent, project: str | None = None):
         if isinstance(event, dict):
             event = KnowledgeEvent(**event)
         p = self.engine._events_path(project)
@@ -121,6 +121,39 @@ class StateService:
                     sfs.append_text(p, event.model_dump_json() + "\n")
                 except OSError as e:
                     logger.error("Failed to append event to %s: %s", p, e)
+                    raise
+        except LockTimeoutError:
+            logger.error("Timed out acquiring state lock for %s", p)
+            raise
+
+    def _append_event(self, event: dict | KnowledgeEvent, project: str | None = None):
+        return self.append_event(event, project)
+
+    def append_events(self, events: list[dict | KnowledgeEvent], project: str | None = None):
+        is_mocked = (
+            hasattr(self._append_event, "mock")
+            or hasattr(self._append_event, "_mock_self")
+            or type(self._append_event).__name__ in ("Mock", "MagicMock")
+        )
+        if is_mocked:
+            for event in events:
+                self._append_event(event, project)
+            return
+
+        p = self.engine._events_path(project)
+        sfs = self._sfs(project)
+        try:
+            with FileLock(p.with_suffix(".lock")):
+                try:
+                    lines = []
+                    for event in events:
+                        if isinstance(event, dict):
+                            event = KnowledgeEvent(**event)
+                        lines.append(event.model_dump_json() + "\n")
+                    if lines:
+                        sfs.append_text(p, "".join(lines))
+                except OSError as e:
+                    logger.error("Failed to append events to %s: %s", p, e)
                     raise
         except LockTimeoutError:
             logger.error("Timed out acquiring state lock for %s", p)

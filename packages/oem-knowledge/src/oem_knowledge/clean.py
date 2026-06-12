@@ -470,30 +470,60 @@ def _dedupe_runtime_event_lines(path: Path, mutate: bool) -> dict[str, Any]:
 
 
 def _update_status(report: dict[str, Any]) -> None:
-    if report["warnings"] and any(
+    if report.get("warnings") and any(
         str(w).lower().startswith("error") for w in report["warnings"]
     ):
         report["status"] = "error"
         return
 
-    structure = report.get("structure", {})
     issue_count = (
-        report["self_ingestion"]["suspect_events"]
-        + report["self_ingestion"]["suspect_concepts"]
-        + report["duplicates"]["duplicate_runtime_events"]
-        + report["structure"]["orphan_wiki_files"]
-        + report["structure"]["missing_wiki_files"]
-        + report["structure"]["duplicate_slugs"]
-        + sum(
-            1
-            for warning in report["warnings"]
-            if str(warning).startswith("Missing expected .oem dirs:")
-        )
+        report.get("self_ingestion", {}).get("suspect_events", 0)
+        + report.get("self_ingestion", {}).get("suspect_concepts", 0)
+        + report.get("duplicates", {}).get("duplicate_runtime_events", 0)
+        + report.get("structure", {}).get("orphan_wiki_files", 0)
+        + report.get("structure", {}).get("missing_wiki_files", 0)
+        + report.get("structure", {}).get("duplicate_slugs", 0)
     )
-    if report["changed_files"]:
+
+    if report.get("changed_files"):
         report["status"] = "repaired_partial" if issue_count else "repaired"
     else:
         report["status"] = "issues_found" if issue_count else "clean"
+
+    # Populate issues list
+    issues = []
+    se = report.get("self_ingestion", {}).get("suspect_events", 0)
+    if se:
+        issues.append(f"{se} suspected self-ingestion events")
+    sc = report.get("self_ingestion", {}).get("suspect_concepts", 0)
+    if sc:
+        issues.append(f"{sc} suspected self-ingestion concepts")
+    de = report.get("duplicates", {}).get("duplicate_runtime_events", 0)
+    if de:
+        issues.append(f"{de} duplicate runtime events")
+    ow = report.get("structure", {}).get("orphan_wiki_files", 0)
+    if ow:
+        issues.append(f"{ow} orphan wiki files")
+    mw = report.get("structure", {}).get("missing_wiki_files", 0)
+    if mw:
+        issues.append(f"{mw} missing wiki files")
+    ds = report.get("structure", {}).get("duplicate_slugs", 0)
+    if ds:
+        issues.append(f"{ds} duplicate concept slugs")
+    report["issues"] = issues
+
+    # Populate repairs list
+    repairs = []
+    rd = report.get("duplicates", {}).get("removed_duplicate_runtime_events", 0)
+    if rd:
+        repairs.append(f"removed {rd} duplicate runtime events")
+    rie = report.get("self_ingestion", {}).get("repaired_events", 0)
+    ric = report.get("self_ingestion", {}).get("repaired_concepts", 0)
+    if rie:
+        repairs.append(f"removed {rie} self-ingestion events")
+    if ric:
+        repairs.append(f"removed {ric} self-ingestion concepts")
+    report["repairs"] = repairs
 
 
 def analyze_project(
