@@ -69,15 +69,14 @@ def test_no_task_steering(tmp_proj):
         assert word not in memory_ctx.lower()
 
 def test_search_is_optional(tmp_proj):
-    # Test 4: Verify search is presented as optional context retrieval
-    # and does not direct the agent to call it immediately.
+    # Test 4: Verify search is presented as the second memory call after knowledge_read,
+    # not as an immediate/optional action. Agents should read first, then search.
     eng = KnowledgeEngine(tmp_proj)
     eng.init_project(tmp_proj)
     
     context = _compile_oem_context(eng)
     memory_ctx = context["memory_context"]
     
-    # Expected: "Use OEM search when additional project context is needed."
-    assert "use oem search" in memory_ctx.lower()
-    assert "additional project context is needed" in memory_ctx.lower()
+    # Expected: knowledge_search is listed as step 2, after knowledge_read
+    assert "knowledge_search" in memory_ctx
     assert "immediately" not in memory_ctx.lower()

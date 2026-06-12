@@ -45,6 +45,7 @@ def main():
         run_session_command(args)
     elif args.command in (
         "search",
+        "read",
         "concept",
         "merge",
         "status",

@@ -71,6 +71,44 @@ def _run_knowledge_command_impl(args):
             lines = [f"No matches for: '{args.query}'"]
         print(render_panel("Search Results", lines, status="search"))
 
+    elif args.command == "read":
+        limit = getattr(args, "limit", 10)
+        scope = getattr(args, "scope", "project")
+        res = eng.knowledge_read(project, scope=scope, limit=limit)
+
+        if res.get("status") in ("error", "not_implemented"):
+            panel_lines = [res.get("message", "Unknown error.")]
+            if res.get("suggestion"):
+                panel_lines += ["", f"Suggestion: {res['suggestion']}"]
+            print(render_panel("Read Error", panel_lines, status="error"))
+            sys.exit(1)
+
+        sections = res.get("sections", {})
+
+        def _section_lines(title: str, key: str) -> list[str]:
+            items = sections.get(key, [])
+            if not items:
+                return [f"{title}:", "  (none)", ""]
+            return [f"{title}:"] + [f"  - {item}" for item in items[:limit]] + [""]
+
+        lines = [
+            res.get("message", "OEM project memory baseline loaded."),
+            "",
+        ]
+        lines += _section_lines("Project", "project")
+        lines += _section_lines("Runtime", "runtime_status")
+        lines += _section_lines("Recent memory", "recent_sessions")
+        lines += _section_lines("Important concepts", "important_concepts")
+        lines += _section_lines("Approved skills", "approved_skills")
+        lines += _section_lines("Suggested next searches", "suggested_next_searches")
+
+        if res.get("warnings"):
+            lines += ["Warnings:"] + [f"  ⚠ {w}" for w in res["warnings"]] + [""]
+        if res.get("suggestion"):
+            lines += [f"Tip: {res['suggestion']}"]
+
+        print(render_panel("Project Memory Baseline", lines, status="ok"))
+
     elif args.command == "rebuild":
         res = eng.state.rebuild_registry(project)
         print(

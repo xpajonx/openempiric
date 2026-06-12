@@ -90,6 +90,21 @@ def _setup_parser() -> argparse.ArgumentParser:
     search_p.add_argument("--k", type=int, default=3)
     search_p.add_argument("--project", type=str, default="")
 
+    read_p = sub.add_parser("read", help="[User] Read the project memory baseline")
+    read_p.add_argument(
+        "--scope",
+        choices=["project", "recent", "skills", "health"],
+        default="project",
+        help="Scope of memory to read (default: project)",
+    )
+    read_p.add_argument(
+        "--limit",
+        type=int,
+        default=10,
+        help="Max items per section (default: 10)",
+    )
+    read_p.add_argument("--project", type=str, default="")
+
     index_p = sub.add_parser("index", help="[Advanced] Rebuild derived search index for the project")
     index_p.add_argument("--project", type=str, default="")
 

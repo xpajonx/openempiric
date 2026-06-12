@@ -84,19 +84,12 @@ def cmd_setup_opencode(eng, project: str | None = None, repair: bool = False) ->
         should_write_inst = repair or migrated_inst or not inst_dest.exists()
         inst_content = (
             "# OpenEmpiric Project Memory\n\n"
-            "When working in a project that contains `.oem`, use OpenEmpiric as the project memory runtime.\n\n"
-            "At session start:\n"
-            "1. Call `knowledge_read` to load the project memory baseline.\n"
+            "When working in an OEM-enabled project:\n\n"
+            "1. Call `knowledge_read` first to load the project memory baseline.\n"
             "2. Call `knowledge_search` for task-specific memory before planning.\n"
-            "3. Use retrieved project memory to avoid repeating old mistakes.\n\n"
-            "During work:\n"
-            "1. Record important decisions, failures, constraints, and outcomes through OEM.\n"
-            "2. Prefer `knowledge_reflect` with structured events or explicit markers.\n"
-            "3. Do not manually edit `.oem` files.\n\n"
-            "Before finishing:\n"
-            "1. Reflect important work through OEM.\n"
-            "2. End the OEM session.\n"
-            "3. If OEM reports degraded health, mention it and suggest `oem doctor` or `oem recover`.\n"
+            "3. Use `knowledge_reflect` to record important decisions, failures, constraints, and outcomes.\n"
+            "4. Call `knowledge_session_end` before finishing.\n"
+            "5. Do not manually edit `.oem` files.\n"
         )
         if should_write_inst:
             inst_dest.write_text(inst_content, encoding="utf-8")

@@ -45,4 +45,5 @@ def test_runtime_notice_contains_guidelines(temp_project):
     notice = ctx.get("memory_context", "")
     
     assert "Project memory is already active" in notice
-    assert "Use OEM search" in notice
+    # Updated: the new instructions use knowledge_read as step 1
+    assert "knowledge_read" in notice

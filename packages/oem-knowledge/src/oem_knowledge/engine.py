@@ -995,9 +995,9 @@ project: {project or "default"}
     def session_commit(self, *args, **kwargs) -> dict:
         return self.session_end(*args, **kwargs)
 
-    def knowledge_read(self, project: str | None = None, scope: str = "project") -> dict:
+    def knowledge_read(self, project: str | None = None, scope: str = "project", limit: int = 10) -> dict:
         from oem_knowledge.runtime.read import execute_knowledge_read
-        return execute_knowledge_read(self, project, scope)
+        return execute_knowledge_read(self, project, scope, limit)
 
 
 

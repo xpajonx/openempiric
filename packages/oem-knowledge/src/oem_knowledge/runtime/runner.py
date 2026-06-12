@@ -187,19 +187,12 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None,
     if args and getattr(args, "print_instructions", False):
         inst_content = (
             "# OpenEmpiric Project Memory\n\n"
-            "When working in a project that contains `.oem`, use OpenEmpiric as the project memory runtime.\n\n"
-            "At session start:\n"
-            "1. Call `knowledge_read` to load the project memory baseline.\n"
+            "When working in an OEM-enabled project:\n\n"
+            "1. Call `knowledge_read` first to load the project memory baseline.\n"
             "2. Call `knowledge_search` for task-specific memory before planning.\n"
-            "3. Use retrieved project memory to avoid repeating old mistakes.\n\n"
-            "During work:\n"
-            "1. Record important decisions, failures, constraints, and outcomes through OEM.\n"
-            "2. Prefer `knowledge_reflect` with structured events or explicit markers.\n"
-            "3. Do not manually edit `.oem` files.\n\n"
-            "Before finishing:\n"
-            "1. Reflect important work through OEM.\n"
-            "2. End the OEM session.\n"
-            "3. If OEM reports degraded health, mention it and suggest `oem doctor` or `oem recover`.\n"
+            "3. Use `knowledge_reflect` to record important decisions, failures, constraints, and outcomes.\n"
+            "4. Call `knowledge_session_end` before finishing.\n"
+            "5. Do not manually edit `.oem` files.\n"
         )
         print(inst_content)
         sys.exit(0)
@@ -400,11 +393,13 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None,
                     "# OEM Runtime Notice\n"
                     "Project memory is already active. Relevant project memory has been restored automatically. "
                     "OEM memory serves as a persistent knowledge layer.\n"
-                    "To align with project history and gather project context, you MUST do the following:\n"
-                    "1. Call `knowledge_read` at session start to establish a memory baseline.\n"
-                    "2. Call `knowledge_search` for task-specific planning before modifying code. Use OEM search when additional project context is needed.\n"
-                    "3. Review active concepts and past failures below to avoid repeat mistakes.\n"
-                    "Your utilization of memory is tracked automatically."
+                    "To align with project history and gather project context, follow these steps:\n"
+                    "1. Call `knowledge_read` first to load the project memory baseline.\n"
+                    "2. Call `knowledge_search` for task-specific planning before modifying code.\n"
+                    "3. Use `knowledge_reflect` to record important decisions, failures, constraints, and outcomes.\n"
+                    "4. Call `knowledge_session_end` before finishing.\n"
+                    "5. Do not manually edit `.oem` files.\n"
+                    "Your memory utilization is tracked automatically."
                 )
             }
 

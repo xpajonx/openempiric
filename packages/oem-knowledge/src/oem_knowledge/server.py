@@ -146,25 +146,28 @@ def mount_tools(mcp: object) -> None:
         return render_panel("Session Reflection", lines, status="ok")
 
     @mcp.tool()
-    def knowledge_read(scope: str = "project", project: str = "") -> str:
+    def knowledge_read(scope: str = "project", project: str = "", limit: int = 10) -> str:
         """Read the project memory baseline before planning.
 
+        Call this first at the start of any session in an OEM-enabled project.
+        Returns a bounded, read-only summary of project identity, runtime status,
+        recent sessions, important concepts, approved skills, and suggested searches.
+
         Args:
-            scope: The scope of memory to read (defaults to 'project').
+            scope: The scope of memory to read. Only 'project' is fully implemented.
             project: Project directory path. Defaults to current directory.
+            limit: Max items per section (default 10).
         """
         try:
             with KnowledgeEngine(project or None) as eng:
-                res = eng.knowledge_read(project or None, scope)
+                res = eng.knowledge_read(project or None, scope, limit)
         except Exception as e:
             return json.dumps({
                 "status": "error",
                 "operation": "knowledge_read",
                 "message": str(e),
-                "failed_step": "read",
+                "suggestion": "Check the tool arguments or workspace lock status.",
                 "warnings": [str(e)],
-                "errors": [str(e)],
-                "suggestion": "Check the tool arguments or workspace lock status."
             }, indent=2)
 
         return json.dumps(res, indent=2)

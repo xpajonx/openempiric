@@ -55,7 +55,7 @@ def test_setup_opencode_basic(temp_home, tmp_proj):
     assert "oem session-start" not in plugin_content
     
     inst_content = inst_file.read_text(encoding="utf-8")
-    assert "When working in a project that contains `.oem`, use OpenEmpiric" in inst_content
+    assert "When working in an OEM-enabled project:" in inst_content
     assert "knowledge_session_start" not in inst_content
 
     # Check opencode.jsonc registers instructions path and MCP server
