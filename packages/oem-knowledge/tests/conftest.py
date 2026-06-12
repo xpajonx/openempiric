@@ -34,3 +34,10 @@ def mock_fastembed_session():
     class DummyFastembed:
         TextEmbedding = MockTextEmbedding
     sys.modules["fastembed"] = DummyFastembed
+
+
+@pytest.fixture(autouse=True, scope="session")
+def setup_mock_llm_env():
+    import os
+    os.environ["OEM_MOCK_LLM"] = "true"
+

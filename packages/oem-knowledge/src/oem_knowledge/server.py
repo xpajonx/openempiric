@@ -243,6 +243,26 @@ def mount_tools(mcp: object) -> None:
         warnings = res.get("warnings", [])
         timings = res.get("phase_timings", {})
 
+        if status == "warn":
+            lines = [
+                "# Session End / Commit Complete with Warnings",
+                "",
+                res.get("message", "Session closed, but dense LLM reflection was skipped because no LLM provider is configured."),
+            ]
+            if res.get("suggestion"):
+                lines.extend([
+                    "",
+                    "### Suggestion:",
+                    res["suggestion"]
+                ])
+            if warnings:
+                lines.extend([
+                    "",
+                    "### Warnings:",
+                    *[f"- ⚠ {w}" for w in warnings]
+                ])
+            return "\n".join(lines)
+
         if status == "empty":
             lines = [
                 "# Session End / Commit Empty",

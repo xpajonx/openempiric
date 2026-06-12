@@ -622,8 +622,96 @@ class KnowledgeEngine:
                         timeout_seconds=timeout_seconds,
                     )
 
-                if res.get("status") == "empty" or (res.get("status") == "partial" and res.get("failed_step") == "llm_extraction"):
-                    progress.update_step("reflection", "failed")
+                status_val = res.get("status")
+                failed_step_val = res.get("failed_step")
+                is_non_fatal = status_val in ("warn", "empty") or (
+                    status_val == "partial" and failed_step_val == "llm_extraction"
+                )
+
+                if is_non_fatal:
+                    # Close the session safely
+                    harness = self._resolve_harness(project)
+                    active_session_file = harness / "state" / "active_session.json"
+                    
+                    try:
+                        self.state.record_outcome(
+                            "success_with_warnings" if status_val == "warn" else ("partial" if status_val == "partial" else "success"),
+                            session_id=session_id,
+                            project=project
+                        )
+                    except Exception as e:
+                        logger.warning("Outcome recording failed: %s", e)
+
+                    try:
+                        metrics_file = harness / "state" / "metrics.json"
+                        from oem_knowledge.tools.metrics import update_metrics_file
+                        update_metrics_file(metrics_file, {
+                            "sessions_completed": 1,
+                        })
+                    except Exception:
+                        pass
+
+                    session_state = None
+                    try:
+                        from oem_knowledge.runtime import SessionState
+                        session_state = SessionState.load(active_session_file)
+                        if session_state:
+                            for path_str in (session_state.context_path, session_state.temp_instructions):
+                                if path_str:
+                                    p = Path(path_str)
+                                    if p.exists():
+                                        try:
+                                            p.unlink()
+                                        except Exception:
+                                            pass
+                    except Exception:
+                        pass
+
+                    try:
+                        if active_session_file.exists():
+                            if session_state:
+                                session_state.status = "completed"
+                            active_session_file.unlink()
+                    except Exception:
+                        pass
+
+                    # Update progress steps
+                    if status_val == "warn":
+                        progress.update_step(
+                            "reflection",
+                            "warn",
+                            name="Dense LLM Reflection Skipped",
+                            detail="No local/remote LLM provider configured"
+                        )
+                    elif status_val == "empty":
+                        progress.update_step(
+                            "reflection",
+                            "warn",
+                            name="Reflection Skipped/Empty",
+                            detail="No markers or structured events"
+                        )
+                    elif status_val == "partial" and failed_step_val == "llm_extraction":
+                        progress.update_step(
+                            "reflection",
+                            "warn",
+                            name="Reflection Degraded",
+                            detail="LLM extraction timed out"
+                        )
+
+                    progress.update_step(
+                        "materialization",
+                        "skipped",
+                        name="Materialization Skipped",
+                        detail="No reflection events produced"
+                    )
+                    progress.update_step(
+                        "index",
+                        "skipped",
+                        name="Search Index Skipped",
+                        detail="No memory changes to index"
+                    )
+                    progress.update_step("session_close", "success")
+
                     timer.timings["total"] = time.perf_counter() - start_time
                     p_timings = {
                         "load_state": timer.timings.get("load_state", 0.0),
@@ -637,13 +725,16 @@ class KnowledgeEngine:
                     }
                     from oem_knowledge.runtime.result import make_result
                     return make_result(
-                        status=res.get("status"),
+                        status=status_val,
                         operation="session_end",
                         project=str(self.project_path or project or ""),
                         message=res.get("message", "Reflection did not complete successfully."),
                         suggestion=res.get("suggestion"),
-                        failed_step=res.get("failed_step"),
+                        failed_step=failed_step_val,
                         warnings=res.get("warnings", []),
+                        events_written=0,
+                        materialization_skipped=True,
+                        index_skipped=True,
                         data={
                             "events_written": 0,
                             "phase_timings": p_timings,
@@ -652,7 +743,7 @@ class KnowledgeEngine:
                             "materialized_log": [],
                             "links_updated": 0,
                             "index_stats": {},
-                            "explainability": {},
+                            "explainability": res.get("explainability", {}),
                         }
                     )
 
@@ -756,43 +847,54 @@ project: {project or "default"}
                 logger.warning("Failed to emit reflection metrics: %s", e)
 
             # Materialization
-            progress.update_step("materialization", "running")
-            with timer.phase("materialization", progress_callback):
-                mat_res = self.materialization.materialize_concepts(project)
-                if mat_res.get("status") == "error":
-                    progress.update_step("materialization", "failed")
-                    timer.timings["total"] = time.perf_counter() - start_time
-                    p_timings = {
-                        "load_state": timer.timings.get("load_state", 0.0),
-                        "reflection": timer.timings.get("reflection", 0.0),
-                        "append_events": timer.timings.get("append_events", 0.0),
-                        "materialization": timer.timings.get("materialization", 0.0),
-                        "search_index": 0.0,
-                        "write_report": timer.timings.get("write_report", 0.0),
-                        "cleanup": 0.0,
-                        "total": timer.timings["total"],
-                    }
-                    from oem_knowledge.runtime.result import error
-                    return error(
-                        operation="session_end",
-                        message=mat_res.get("message", "Materialization failed"),
-                        failed_step="materialization",
-                        data={
-                            "report_path": str(report_file),
-                            "knowledge_events": res.get("knowledge_events", []),
-                            "materialized_log": [],
-                            "links_updated": 0,
-                            "index_stats": {},
-                            "explainability": res.get("explainability", {}),
-                            "warnings": warnings + mat_res.get("warnings", []),
-                            "phase_timings": p_timings,
+            events_written = len(canonical_events)
+            if events_written == 0:
+                progress.update_step(
+                    "materialization",
+                    "skipped",
+                    name="Materialization Skipped",
+                    detail="No reflection events produced"
+                )
+                mat_log = []
+                links_updated = 0
+            else:
+                progress.update_step("materialization", "running")
+                with timer.phase("materialization", progress_callback):
+                    mat_res = self.materialization.materialize_concepts(project)
+                    if mat_res.get("status") == "error":
+                        progress.update_step("materialization", "failed")
+                        timer.timings["total"] = time.perf_counter() - start_time
+                        p_timings = {
+                            "load_state": timer.timings.get("load_state", 0.0),
+                            "reflection": timer.timings.get("reflection", 0.0),
+                            "append_events": timer.timings.get("append_events", 0.0),
+                            "materialization": timer.timings.get("materialization", 0.0),
+                            "search_index": 0.0,
+                            "write_report": timer.timings.get("write_report", 0.0),
+                            "cleanup": 0.0,
+                            "total": timer.timings["total"],
                         }
-                    )
-                mat_log = mat_res.get("materialized", [])
-                warnings.extend(mat_res.get("warnings", []))
-            progress.update_step("materialization", "success")
+                        from oem_knowledge.runtime.result import error
+                        return error(
+                            operation="session_end",
+                            message=mat_res.get("message", "Materialization failed"),
+                            failed_step="materialization",
+                            data={
+                                "report_path": str(report_file),
+                                "knowledge_events": res.get("knowledge_events", []),
+                                "materialized_log": [],
+                                "links_updated": 0,
+                                "index_stats": {},
+                                "explainability": res.get("explainability", {}),
+                                "warnings": warnings + mat_res.get("warnings", []),
+                                "phase_timings": p_timings,
+                            }
+                        )
+                    mat_log = mat_res.get("materialized", [])
+                    warnings.extend(mat_res.get("warnings", []))
+                progress.update_step("materialization", "success")
 
-            links_updated = self.materialization.update_graph(project).get("links_updated", 0)
+                links_updated = self.materialization.update_graph(project).get("links_updated", 0)
 
             idx_res = {
                 "status": "success",
@@ -809,77 +911,85 @@ project: {project or "default"}
             }
             index_failed_reason = None
             
-            progress.update_step("index", "running")
-            if not update_index or index_budget_seconds == 0:
-                progress.update_step("index", "success")
-                warnings.append("Search indexing skipped after budget; run `oem index --project ...` to rebuild derived search index.")
+            if events_written == 0:
+                progress.update_step(
+                    "index",
+                    "skipped",
+                    name="Search Index Skipped",
+                    detail="No memory changes to index"
+                )
             else:
-                with timer.phase("search_index", progress_callback):
-                    try:
-                        def index_progress(current, total):
-                            mode_str = "embeddings" if self.search.resolve_retrieval_mode() == "hybrid" else "files"
-                            progress.update_step("index", "running", detail=f"{current} / {total} {mode_str}")
-                        
-                        idx_res = self.search.index_all(
-                            progress_callback=index_progress,
-                            budget_seconds=index_budget_seconds
-                        )
-                        
-                        if idx_res.get("status") == "error":
-                            progress.update_step("index", "failed")
-                            timer.timings["total"] = time.perf_counter() - start_time
-                            p_timings = {
-                                "load_state": timer.timings.get("load_state", 0.0),
-                                "reflection": timer.timings.get("reflection", 0.0),
-                                "append_events": timer.timings.get("append_events", 0.0),
-                                "materialization": timer.timings.get("materialization", 0.0),
-                                "search_index": timer.timings.get("search_index", 0.0),
-                                "write_report": timer.timings.get("write_report", 0.0),
-                                "cleanup": 0.0,
-                                "total": timer.timings["total"],
-                            }
-                            from oem_knowledge.runtime.result import error
-                            return error(
-                                operation="session_end",
-                                message=idx_res.get("error", "Indexing failed"),
-                                failed_step="indexing",
-                                data={
-                                    "report_path": str(report_file),
-                                    "knowledge_events": res.get("knowledge_events", []),
-                                    "materialized_log": mat_log,
-                                    "links_updated": links_updated,
-                                    "index_stats": idx_res,
-                                    "explainability": res.get("explainability", {}),
-                                    "warnings": warnings + [f"indexing failed: {idx_res.get('error')}"],
-                                    "phase_timings": p_timings,
-                                }
+                progress.update_step("index", "running")
+                if not update_index or index_budget_seconds == 0:
+                    progress.update_step("index", "success")
+                    warnings.append("Search indexing skipped after budget; run `oem index --project ...` to rebuild derived search index.")
+                else:
+                    with timer.phase("search_index", progress_callback):
+                        try:
+                            def index_progress(current, total):
+                                mode_str = "embeddings" if self.search.resolve_retrieval_mode() == "hybrid" else "files"
+                                progress.update_step("index", "running", detail=f"{current} / {total} {mode_str}")
+                            
+                            idx_res = self.search.index_all(
+                                progress_callback=index_progress,
+                                budget_seconds=index_budget_seconds
                             )
-                        elif idx_res.get("status") == "partial" and idx_res.get("error") == "Indexing budget exceeded":
-                            index_failed_reason = "Indexing budget exceeded"
+                            
+                            if idx_res.get("status") == "error":
+                                progress.update_step("index", "failed")
+                                timer.timings["total"] = time.perf_counter() - start_time
+                                p_timings = {
+                                    "load_state": timer.timings.get("load_state", 0.0),
+                                    "reflection": timer.timings.get("reflection", 0.0),
+                                    "append_events": timer.timings.get("append_events", 0.0),
+                                    "materialization": timer.timings.get("materialization", 0.0),
+                                    "search_index": timer.timings.get("search_index", 0.0),
+                                    "write_report": timer.timings.get("write_report", 0.0),
+                                    "cleanup": 0.0,
+                                    "total": timer.timings["total"],
+                                }
+                                from oem_knowledge.runtime.result import error
+                                return error(
+                                    operation="session_end",
+                                    message=idx_res.get("error", "Indexing failed"),
+                                    failed_step="indexing",
+                                    data={
+                                        "report_path": str(report_file),
+                                        "knowledge_events": res.get("knowledge_events", []),
+                                        "materialized_log": mat_log,
+                                        "links_updated": links_updated,
+                                        "index_stats": idx_res,
+                                        "explainability": res.get("explainability", {}),
+                                        "warnings": warnings + [f"indexing failed: {idx_res.get('error')}"],
+                                        "phase_timings": p_timings,
+                                    }
+                                )
+                            elif idx_res.get("status") == "partial" and idx_res.get("error") == "Indexing budget exceeded":
+                                index_failed_reason = "Indexing budget exceeded"
+                                failed_step = "indexing"
+                                status = "partial"
+                                warnings.append("Search indexing skipped after timeout budget; run `oem index --project ...` to rebuild derived search index.")
+                                progress.update_step("index", "failed")
+                            elif idx_res.get("status") == "partial":
+                                index_failed_reason = idx_res.get("error") or f"Some files failed to index: {', '.join(idx_res.get('failed_files', []))}"
+                                failed_step = "indexing"
+                                status = "partial"
+                                progress.update_step("index", "failed")
+                            else:
+                                progress.update_step("index", "success")
+                        except Exception as e:
+                            index_failed_reason = str(e)
+                            progress.update_step("index", "failed")
                             failed_step = "indexing"
                             status = "partial"
-                            warnings.append("Search indexing skipped after timeout budget; run `oem index --project ...` to rebuild derived search index.")
-                            progress.update_step("index", "failed")
-                        elif idx_res.get("status") == "partial":
-                            index_failed_reason = idx_res.get("error") or f"Some files failed to index: {', '.join(idx_res.get('failed_files', []))}"
-                            failed_step = "indexing"
-                            status = "partial"
-                            progress.update_step("index", "failed")
-                        else:
-                            progress.update_step("index", "success")
-                    except Exception as e:
-                        index_failed_reason = str(e)
-                        progress.update_step("index", "failed")
-                        failed_step = "indexing"
-                        status = "partial"
-                        idx_res = {
-                            "status": "error",
-                            "new": 0, "updated": 0, "scanned": 0, "unchanged": 0, "failed": 0,
-                            "new_chunks": 0, "updated_chunks": 0, "unchanged_chunks": 0, "failed_chunks": 0,
-                            "failed_files": [],
-                            "error": str(e),
-                        }
-                        warnings.append(f"Indexing error: {e}")
+                            idx_res = {
+                                "status": "error",
+                                "new": 0, "updated": 0, "scanned": 0, "unchanged": 0, "failed": 0,
+                                "new_chunks": 0, "updated_chunks": 0, "unchanged_chunks": 0, "failed_chunks": 0,
+                                "failed_files": [],
+                                "error": str(e),
+                            }
+                            warnings.append(f"Indexing error: {e}")
 
         except LockTimeoutError as e:
             timer.timings["total"] = time.perf_counter() - start_time
@@ -991,7 +1101,10 @@ project: {project or "default"}
             report_path=str(report_file),
             items_processed=len(res.get("knowledge_events", [])),
             items_written=len(canonical_events),
+            events_written=events_written,
             items_rejected=res.get("events_rejected", 0),
+            materialization_skipped=(events_written == 0),
+            index_skipped=(events_written == 0),
             data={
                 "knowledge_events": res.get("knowledge_events", []),
                 "materialized_log": mat_log,
@@ -1012,6 +1125,9 @@ project: {project or "default"}
             "explainability": explainability,
             "phase_timings": p_timings,
             "notification": notification,
+            "materialization_skipped": (events_written == 0),
+            "index_skipped": (events_written == 0),
+            "events_written": events_written,
         })
         return standard_res
 

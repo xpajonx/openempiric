@@ -624,6 +624,28 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None,
                         ],
                         status="error"
                     ))
+                elif commit_res.get("status") == "warn":
+                    from oem_knowledge.ui import render_panel
+                    print(render_panel(
+                        "Session Closed with Warnings",
+                        [
+                            commit_res.get("message", "Session closed, but dense LLM reflection was skipped because no LLM provider is configured."),
+                            commit_res.get("suggestion") or "Use explicit markers or pass structured events."
+                        ],
+                        status="info"
+                    ))
+                    committed = True
+                elif commit_res.get("status") == "partial" and commit_res.get("failed_step") == "llm_extraction":
+                    from oem_knowledge.ui import render_panel
+                    print(render_panel(
+                        "Session Closed (Timeout)",
+                        [
+                            commit_res.get("message", "Session closed with partial reflection; LLM extraction timed out."),
+                            commit_res.get("suggestion") or "Retry with structured events or explicit markers."
+                        ],
+                        status="info"
+                    ))
+                    committed = True
                 elif commit_res.get("status") == "empty":
                     from oem_knowledge.ui import render_panel
                     print(render_panel(

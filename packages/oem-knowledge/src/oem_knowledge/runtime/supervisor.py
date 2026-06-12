@@ -109,6 +109,7 @@ class CommitProgressSupervisor:
             {"id": "reflection", "name": "Reflection Complete", "status": "pending"},
             {"id": "materialization", "name": "Materialization Complete", "status": "pending"},
             {"id": "index", "name": "Updating Search Index", "status": "pending"},
+            {"id": "session_close", "name": "Session Closed", "status": "pending"},
         ]
         self.is_tty = sys.stdout.isatty() or force_tty
         self.started = False
@@ -119,12 +120,14 @@ class CommitProgressSupervisor:
         self.started = True
         self.render()
 
-    def update_step(self, step_id: str, status: str, detail: str | None = None):
+    def update_step(self, step_id: str, status: str, detail: str | None = None, name: str | None = None):
         for s in self.steps:
             if s["id"] == step_id:
                 s["status"] = status
                 if detail is not None:
                     s["detail"] = detail
+                if name is not None:
+                    s["name"] = name
                 break
         if self.started:
             self.render()
@@ -147,13 +150,17 @@ class CommitProgressSupervisor:
                     symbol = "⟳"
                 elif s["status"] == "failed":
                     symbol = "✗"
+                elif s["status"] == "warn":
+                    symbol = "!"
+                elif s["status"] == "skipped":
+                    symbol = "-"
                 else:
                     symbol = " "
                 
                 line_text = f" {symbol} {s['name']}"
                 lines.append(f"║ {line_text:<{self.width - 4}} ║")
-                if "detail" in s and s["status"] == "running":
-                    detail_text = f"   {s['detail']}"
+                if "detail" in s and s["detail"]:
+                    detail_text = f"    {s['detail']}"
                     lines.append(f"║ {detail_text:<{self.width - 4}} ║")
                     
             lines.append(border_bot)
@@ -179,11 +186,22 @@ class CommitProgressSupervisor:
                     key = (s["id"], s["status"], detail_val)
                     if key not in self.printed_non_tty_steps:
                         self.printed_non_tty_steps.add(key)
-                        symbol = "✓" if s["status"] == "success" else ("⟳" if s["status"] == "running" else "✗")
-                        detail_str = f" ({detail_val})" if detail_val and s["status"] == "running" else ""
+                        if s["status"] == "success":
+                            symbol = "✓"
+                        elif s["status"] == "running":
+                            symbol = "⟳"
+                        elif s["status"] == "failed":
+                            symbol = "✗"
+                        elif s["status"] == "warn":
+                            symbol = "!"
+                        elif s["status"] == "skipped":
+                            symbol = "-"
+                        else:
+                            symbol = " "
+                        detail_str = f"\n║    {detail_val}" if detail_val else ""
                         print(f"║ {symbol} {s['name']}{detail_str}")
             
-            all_done = all(s["status"] in ("success", "failed") for s in self.steps)
+            all_done = all(s["status"] in ("success", "failed", "warn", "skipped") for s in self.steps)
             if all_done and not hasattr(self, "non_tty_finished"):
                 self.non_tty_finished = True
                 print(border_bot)

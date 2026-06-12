@@ -346,11 +346,11 @@ def build_runtime_health(project: str | None = None) -> dict:
             runtime_status = "warn"
     else:
         # Check environment/config keys for LLM
-        has_api_key = any(os.environ.get(k) for k in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY"))
-        if has_api_key or os.environ.get("OEM_MOCK_LLM") == "true":
+        from oem_knowledge.services.reflection import llm_extraction_available
+        if llm_extraction_available():
             runtime_checks.append({"name": "LLM Reflection Ready", "status": "success"})
         else:
-            runtime_checks.append({"name": "LLM Reflection Degraded (No API key found)", "status": "warn"})
+            runtime_checks.append({"name": "LLM Reflection Degraded (No API key or provider found)", "status": "warn"})
             if runtime_status == "success":
                 runtime_status = "warn"
 

@@ -9,6 +9,17 @@ from oem_knowledge.source_classifier import classify_source
 
 logger = logging.getLogger(__name__)
 
+
+def llm_extraction_available() -> bool:
+    import os
+    if os.environ.get("OEM_MOCK_LLM") == "true":
+        return True
+    if any(os.environ.get(k) for k in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY")):
+        return True
+    if os.environ.get("OEM_LOCAL_LLM_PROVIDER") or os.environ.get("LOCAL_LLM_URL"):
+        return True
+    return False
+
 if TYPE_CHECKING:
     from oem_knowledge.engine import KnowledgeEngine
 
@@ -493,6 +504,24 @@ class ReflectionService:
                     }
 
         if resolved_mode == "llm":
+            if not llm_extraction_available():
+                return {
+                    "status": "warn",
+                    "mode": resolved_mode,
+                    "events_written": 0,
+                    "events_rejected": 0,
+                    "message": "Session closed, but dense LLM reflection was skipped because no LLM provider is configured.",
+                    "suggestion": "Use structured events or Observation:/Decision:/Outcome: markers to record memory without LLM.",
+                    "warnings": [
+                        "LLM extraction unavailable.",
+                        "No reflection events were produced."
+                    ],
+                    "report_path": None,
+                    "knowledge_events": [],
+                    "canonical_events": [],
+                    "explainability": make_explainability(),
+                    "phase_timings": {}
+                }
             try:
                 extracted_llm = self._run_llm_extraction(conversation_text, timeout_seconds)
                 if extracted_llm:
@@ -506,9 +535,9 @@ class ReflectionService:
                     "mode": resolved_mode,
                     "events_written": 0,
                     "events_rejected": 0,
-                    "message": "LLM extraction timed out. No events were written.",
-                    "suggestion": "Retry with structured events or Observation:/Decision:/Outcome: markers.",
-                    "warnings": ["Extraction timed out before producing validated events."],
+                    "message": "Session closed with partial reflection; LLM extraction timed out.",
+                    "suggestion": "Retry with structured events or explicit markers.",
+                    "warnings": ["LLM extraction timed out before producing validated events."],
                     "report_path": None,
                     "knowledge_events": [],
                     "canonical_events": [],
@@ -662,7 +691,7 @@ class ReflectionService:
         )
 
         status_val = res.get("status")
-        if status_val == "error" or status_val == "empty" or (status_val == "partial" and res.get("failed_step") == "llm_extraction"):
+        if status_val in ("error", "empty", "warn") or (status_val == "partial" and res.get("failed_step") == "llm_extraction"):
             return res
 
         canonical_events = res.get("canonical_events", [])

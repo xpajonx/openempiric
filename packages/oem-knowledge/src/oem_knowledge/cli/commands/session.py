@@ -127,6 +127,17 @@ def _run_session_command_impl(args):
             ))
             sys.exit(1)
 
+        if res.get("status") == "warn":
+            print(render_panel(
+                "Session Closed with Warnings",
+                [
+                    res.get("message", "Session closed, but dense LLM reflection was skipped because no LLM provider is configured."),
+                    res.get("suggestion") or "Use explicit markers or pass structured events."
+                ],
+                status="info"
+            ))
+            sys.exit(0)
+
         if res.get("status") == "empty":
             print(render_panel(
                 "Session End Complete",
@@ -161,7 +172,7 @@ def _run_session_command_impl(args):
                     print(f"Warning: {w}")
 
         from oem_knowledge.runtime.supervisor import render_commit_complete_panel
-        report_name = Path(res['report_path']).name
+        report_name = Path(res['report_path']).name if res.get('report_path') else "session_report.md"
         concepts_count = len(res.get('materialized_log', []))
         exp = res.get("explainability", {})
         obs_count = exp.get("file_observations", 0)
