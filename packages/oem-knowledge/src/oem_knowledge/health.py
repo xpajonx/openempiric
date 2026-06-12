@@ -237,8 +237,8 @@ def build_runtime_health(project: str | None = None) -> dict:
         else:
             try:
                 text = jsonc_file.read_text(encoding="utf-8")
-                # Remove comments
-                cleaned = re.sub(r"//.*$", "", text, flags=re.MULTILINE)
+                # Remove comments safely without matching protocol URLs (e.g., https://)
+                cleaned = re.sub(r"(?<!:)\/\/.*$", "", text, flags=re.MULTILINE)
                 cleaned = re.sub(r"/\*.*?\*/", "", cleaned, flags=re.DOTALL)
                 config_data = json.loads(cleaned, strict=False)
                 opencode_checks.append({"name": "OpenCode Config verified", "status": "success"})
