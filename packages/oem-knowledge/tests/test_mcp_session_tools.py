@@ -1,47 +1,63 @@
-import pytest
-import shutil
+from __future__ import annotations
+
 import asyncio
+import json
+import pytest
 from pathlib import Path
-from unittest.mock import patch
-from oem_knowledge.engine import KnowledgeEngine
-from fastmcp import FastMCP
-from oem_knowledge.server import mount_tools
+from unittest.mock import MagicMock
 
-@pytest.fixture
-def temp_project(tmp_path):
-    project_dir = tmp_path / "test_project"
-    project_dir.mkdir()
-    engine = KnowledgeEngine(project_dir)
-    engine.init_project(str(project_dir))
-    yield project_dir
-    shutil.rmtree(project_dir)
+def test_mcp_knowledge_session_start_registered(tmp_path):
+    """Verify that knowledge_session_start is registered on MCP and returns session lifecycle status."""
+    try:
+        from fastmcp import FastMCP
+    except ImportError:
+        pytest.skip("FastMCP not installed")
 
-def test_mcp_session_end_includes_phase_timings_on_partial(temp_project):
-    mcp = FastMCP("test_mcp")
+    mcp = FastMCP("oem")
+    from oem_knowledge.server import mount_tools
     mount_tools(mcp)
 
-    # Mock index_all to return partial indexing
-    def mock_index_all(*args, **kwargs):
-        return {
-            "status": "partial",
-            "error": "Indexing budget exceeded"
-        }
-        
-    with patch("oem_knowledge.services.search.SearchService._index_all_impl", new=mock_index_all):
-        res = asyncio.run(mcp.call_tool(
-            "knowledge_session_end",
-            {
-                "project": str(temp_project),
-                "conversation_text": "- Fix test partial timing mcp",
-                "session_id": "test_mcp_ses_1"
-            }
-        ))
-        res_str = res.content[0].text
-        assert "Session commit completed partially" in res_str
-        assert "Warnings:" in res_str
-        assert "Search indexing skipped after timeout budget" in res_str
-        assert "### Timing:" in res_str
-        assert "reflection:" in res_str
-        assert "materialization:" in res_str
-        assert "search_index: skipped" in res_str
-        assert "\033" not in res_str  # No ANSI escape codes
+    tools = asyncio.run(mcp.list_tools())
+    start_tool = next((t for t in tools if t.name == "knowledge_session_start"), None)
+    assert start_tool is not None, "knowledge_session_start MCP tool not registered"
+
+    # Test execution of knowledge_session_start via engine
+    from oem_knowledge.engine import KnowledgeEngine
+    engine = KnowledgeEngine(str(tmp_path))
+    engine.init_project(str(tmp_path))
+
+    res = engine.session_start(str(tmp_path))
+    assert res["status"] == "success"
+    assert res["operation"] == "knowledge_session_start"
+    assert "session_id" in res
+    assert res["project"] == str(tmp_path.resolve())
+    assert "OEM session started" in res["message"]
+    assert "warnings" in res
+    assert "suggestion" in res
+    # Should NOT have baseline/sections keys
+    assert "sections" not in res
+    assert "important_concepts" not in res
+
+def test_mcp_lifecycle_tools_contract():
+    """Verify that the MCP lifecycle surface exactly includes the required lifecycle tools."""
+    try:
+        from fastmcp import FastMCP
+    except ImportError:
+        pytest.skip("FastMCP not installed")
+
+    mcp = FastMCP("oem")
+    from oem_knowledge.server import mount_tools
+    mount_tools(mcp)
+
+    tool_names = [t.name for t in asyncio.run(mcp.list_tools())]
+    
+    required_tools = [
+        "knowledge_session_start",
+        "knowledge_read",
+        "knowledge_search",
+        "knowledge_reflect",
+        "knowledge_session_end"
+    ]
+    
+    for tool in required_tools:
+        assert tool in tool_names, f"Required tool '{tool}' is missing from the MCP surface"

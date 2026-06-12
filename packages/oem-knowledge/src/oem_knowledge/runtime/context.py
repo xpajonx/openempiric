@@ -3,6 +3,7 @@ import json
 import logging
 import re
 from typing import TYPE_CHECKING
+from oem_knowledge.runtime.instructions import OEM_MEMORY_INSTRUCTIONS
 
 if TYPE_CHECKING:
     from oem_knowledge.engine import KnowledgeEngine
@@ -114,13 +115,7 @@ def _compile_oem_context(eng: KnowledgeEngine) -> dict:
         "memory_context": (
             "# OEM Runtime Notice\n"
             "Project memory is already active. Relevant project memory has been restored automatically. "
-            "OEM memory serves as a persistent knowledge layer.\n"
-            "To align with project history and gather project context, follow these steps:\n"
-            "1. Call `knowledge_read` first to load the project memory baseline.\n"
-            "2. Call `knowledge_search` for task-specific planning before modifying code.\n"
-            "3. Use `knowledge_reflect` to record important decisions, failures, constraints, and outcomes.\n"
-            "4. Call `knowledge_session_end` before finishing.\n"
-            "5. Do not manually edit `.oem` files.\n"
-            "Your memory utilization is tracked automatically."
+            "OEM memory serves as a persistent knowledge layer.\n\n"
+            f"{OEM_MEMORY_INSTRUCTIONS}"
         ),
     }

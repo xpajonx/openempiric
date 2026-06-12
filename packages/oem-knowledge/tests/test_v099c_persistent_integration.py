@@ -314,16 +314,41 @@ class TestKnowledgeReadErrorPaths:
         # Must NOT have created .oem
         assert not (project_dir / ".oem").exists()
 
-    def test_knowledge_read_unsupported_scope_returns_not_implemented(self, initialized_project):
-        """Scopes other than 'project' must return not_implemented cleanly."""
+    def test_knowledge_read_no_public_scope_returns_not_implemented(self, initialized_project):
+        """Unsupported read scopes return a structured error with status 'error'."""
         project_dir, engine = initialized_project
-        for scope in ("recent", "skills", "health"):
+        res = engine.knowledge_read(project=str(project_dir), scope="invalid_scope")
+        assert res["status"] == "error"
+        assert "Unsupported read scope" in res["message"]
+
+    def test_knowledge_read_all_public_scopes_are_read_only(self, initialized_project):
+        """All public scopes (project, recent, skills, health) must be read-only."""
+        project_dir, engine = initialized_project
+        
+        # Snapshot directory state
+        files_before = set(project_dir.rglob("*"))
+        mtimes_before = {f: f.stat().st_mtime for f in files_before if f.is_file()}
+
+        for scope in ("project", "recent", "skills", "health"):
             res = engine.knowledge_read(project=str(project_dir), scope=scope)
-            assert res["status"] == "not_implemented", (
-                f"Expected not_implemented for scope={scope}, got {res['status']}"
-            )
-            assert res["operation"] == "knowledge_read"
-            assert "suggestion" in res
+            assert res["status"] == "success"
+
+        files_after = set(project_dir.rglob("*"))
+        assert files_before == files_after, "Files were created or deleted during read"
+        for f in files_before:
+            if f.is_file():
+                assert f.stat().st_mtime == mtimes_before[f], f"File {f} was mutated"
+
+    def test_knowledge_read_can_be_used_mid_task_without_mutation(self, initialized_project):
+        """knowledge_read can be called mid-task without mutating project state or running indexing."""
+        project_dir, engine = initialized_project
+        files_before = set(project_dir.rglob("*"))
+        
+        res = engine.knowledge_read(project=str(project_dir), scope="project")
+        assert res["status"] == "success"
+        
+        files_after = set(project_dir.rglob("*"))
+        assert files_before == files_after
 
 
 class TestKnowledgeReadCLIAndMCP:
@@ -333,9 +358,10 @@ class TestKnowledgeReadCLIAndMCP:
         try:
             from fastmcp import FastMCP
         except ImportError:
-            pytest.skip("fastmcp not installed")
+            pytest.skip("FastMCP not installed")
+
+        mcp = FastMCP("oem")
         from oem_knowledge.server import mount_tools
-        mcp = FastMCP("test-oem")
         mount_tools(mcp)
         tool_names = [t.name for t in asyncio.run(mcp.list_tools())]
         assert "knowledge_read" in tool_names, (
@@ -353,26 +379,29 @@ class TestKnowledgeReadCLIAndMCP:
 
 class TestKnowledgeReadInstructions:
     def test_opencode_instructions_call_knowledge_read_first(self):
-        """The persistent instructions must list knowledge_read as step 1."""
-        inst_content = (
-            "# OpenEmpiric Project Memory\n\n"
-            "When working in an OEM-enabled project:\n\n"
-            "1. Call `knowledge_read` first to load the project memory baseline.\n"
-            "2. Call `knowledge_search` for task-specific memory before planning.\n"
-            "3. Use `knowledge_reflect` to record important decisions, failures, constraints, and outcomes.\n"
-            "4. Call `knowledge_session_end` before finishing.\n"
-            "5. Do not manually edit `.oem` files.\n"
-        )
-        assert "knowledge_read" in inst_content
-        # Step 1 must mention knowledge_read
-        lines = inst_content.splitlines()
+        """The persistent instructions must list knowledge_session_start as step 1 and knowledge_read as step 2."""
+        from oem_knowledge.runtime.instructions import OEM_MEMORY_INSTRUCTIONS
+        assert "knowledge_session_start" in OEM_MEMORY_INSTRUCTIONS
+        assert "knowledge_read" in OEM_MEMORY_INSTRUCTIONS
+        lines = OEM_MEMORY_INSTRUCTIONS.splitlines()
         step_1 = next((l for l in lines if l.strip().startswith("1.")), "")
-        assert "knowledge_read" in step_1, (
-            f"Step 1 must mention knowledge_read, got: {step_1!r}"
-        )
+        step_2 = next((l for l in lines if l.strip().startswith("2.")), "")
+        assert "knowledge_session_start" in step_1
+        assert "knowledge_read" in step_2
 
-    def test_oem_run_print_instructions_mentions_knowledge_read(self, temp_project):
-        """oem run opencode --print-instructions must mention knowledge_read as step 1."""
+    def test_opencode_instructions_include_session_start(self):
+        """The instructions must call knowledge_session_start as step 1."""
+        from oem_knowledge.runtime.instructions import OEM_MEMORY_INSTRUCTIONS
+        assert "1. Call `knowledge_session_start`" in OEM_MEMORY_INSTRUCTIONS
+
+    def test_opencode_instructions_describe_knowledge_read_as_learning_primitive(self):
+        """The instructions must describe knowledge_read as a learning/orientation primitive."""
+        from oem_knowledge.runtime.instructions import OEM_MEMORY_INSTRUCTIONS
+        assert "Use `knowledge_read` whenever you need orientation" in OEM_MEMORY_INSTRUCTIONS
+        assert "- `knowledge_read` teaches broad project context" in OEM_MEMORY_INSTRUCTIONS
+
+    def test_oem_run_print_instructions_mentions_read_as_orientation_not_startup_only(self, temp_project):
+        """oem run opencode --print-instructions must print the orientation description for knowledge_read."""
         project_dir, engine = temp_project
         engine.init_project(str(project_dir))
 
@@ -388,23 +417,51 @@ class TestKnowledgeReadInstructions:
         assert exc.value.code == 0
 
         output = "\n".join(captured)
-        assert "knowledge_read" in output
-        # Step 1 must mention knowledge_read (use raw backtick, not escaped)
-        assert "1. Call `knowledge_read`" in output
+        assert "Use `knowledge_read` whenever you need orientation" in output
+
+    def test_oem_run_print_instructions_mentions_knowledge_read(self, temp_project):
+        """oem run opencode --print-instructions must print the instructions template."""
+        project_dir, engine = temp_project
+        engine.init_project(str(project_dir))
+
+        parser = _setup_parser()
+        args = parser.parse_args([
+            "run", "opencode", "--print-instructions", "--project", str(project_dir)
+        ])
+
+        captured = []
+        with patch("builtins.print", side_effect=lambda *a, **kw: captured.append(" ".join(str(x) for x in a))):
+            with pytest.raises(SystemExit) as exc:
+                run_agent("opencode", engine, str(project_dir), args)
+        assert exc.value.code == 0
+
+        output = "\n".join(captured)
+        assert "1. Call `knowledge_session_start`" in output
+        assert "2. Use `knowledge_read`" in output
 
     def test_context_memory_context_calls_knowledge_read_first(self, initialized_project):
-        """Compiled runtime context must list knowledge_read as step 1."""
+        """Compiled runtime context must include OEM_MEMORY_INSTRUCTIONS."""
         project_dir, engine = initialized_project
         from oem_knowledge.runtime.context import _compile_oem_context
         ctx = _compile_oem_context(engine)
 
         mc = ctx["memory_context"]
+        assert "knowledge_session_start" in mc
         assert "knowledge_read" in mc
-        # Step 1 line in the text must mention knowledge_read
-        step1_line = next(
-            (l.strip() for l in mc.splitlines() if l.strip().startswith("1.")),
-            ""
-        )
-        assert "knowledge_read" in step1_line, (
-            f"Step 1 of memory_context must mention knowledge_read, got: {step1_line!r}"
-        )
+
+    def test_knowledge_search_instruction_is_specific_query_only(self):
+        """The instructions must suggest knowledge_search for specific queries."""
+        from oem_knowledge.runtime.instructions import OEM_MEMORY_INSTRUCTIONS
+        assert "Use `knowledge_search` when you have a specific memory query" in OEM_MEMORY_INSTRUCTIONS
+        assert "- `knowledge_search` retrieves specific memory" in OEM_MEMORY_INSTRUCTIONS
+
+    def test_reflect_instruction_mentions_structured_events_or_markers(self):
+        """The instructions must suggest structured events or explicit markers for reflection."""
+        from oem_knowledge.runtime.instructions import OEM_MEMORY_INSTRUCTIONS
+        assert "Use `knowledge_reflect` to record important decisions" in OEM_MEMORY_INSTRUCTIONS
+        assert "- Prefer structured events or explicit markers for reflection" in OEM_MEMORY_INSTRUCTIONS
+
+    def test_session_end_instruction_required_before_finishing(self):
+        """The instructions must state session_end is required before finishing."""
+        from oem_knowledge.runtime.instructions import OEM_MEMORY_INSTRUCTIONS
+        assert "Call `knowledge_session_end` before finishing" in OEM_MEMORY_INSTRUCTIONS

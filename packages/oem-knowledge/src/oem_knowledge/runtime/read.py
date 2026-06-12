@@ -7,9 +7,6 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from oem_knowledge.engine import KnowledgeEngine
 
-# Scopes that are not yet fully implemented
-_UNIMPLEMENTED_SCOPES = {"recent", "skills", "health"}
-
 _LIGHTWEIGHT_STATUS_CHECKS = [
     ("manifest.json", ".oem/manifest.json"),
     ("events.jsonl", ".oem/events.jsonl"),
@@ -80,13 +77,12 @@ def execute_knowledge_read(
     - Call full doctor
     """
     # --- Unsupported scope guard ---
-    if scope in _UNIMPLEMENTED_SCOPES:
+    if scope not in {"project", "recent", "skills", "health"}:
         return {
-            "status": "not_implemented",
+            "status": "error",
             "operation": "knowledge_read",
-            "scope": scope,
-            "message": f"scope='{scope}' is not yet implemented. Use scope='project'.",
-            "suggestion": "Call knowledge_read(scope='project') for the full baseline.",
+            "message": "Unsupported read scope.",
+            "suggestion": "Use one of: project, recent, skills, health."
         }
 
     proj_path = Path(project or getattr(eng, "project_path", None) or ".").resolve()
@@ -162,13 +158,8 @@ def execute_knowledge_read(
     # Aggregate warnings
     all_warnings = path_warnings + registry_warnings + skills_warnings
 
-    return {
-        "status": "success",
-        "operation": "knowledge_read",
-        "scope": scope,
-        "project": str(proj_path),
-        "message": "OEM project memory baseline loaded.",
-        "sections": {
+    if scope == "project":
+        sections = {
             "project": project_section,
             "runtime_status": runtime_status,
             "recent_sessions": recent_sessions,
@@ -176,7 +167,45 @@ def execute_knowledge_read(
             "approved_skills": approved_skills,
             "warnings": all_warnings,
             "suggested_next_searches": suggested_searches[:limit],
-        },
+        }
+        msg = "OEM project memory baseline loaded."
+        suggestion = "Run `oem doctor` for full health diagnostics." if all_warnings else None
+    elif scope == "recent":
+        sections = {
+            "recent_sessions": recent_sessions,
+            "warnings": all_warnings,
+        }
+        msg = "OEM project memory recent sessions loaded."
+        suggestion = None
+    elif scope == "skills":
+        sections = {
+            "approved_skills": approved_skills,
+            "warnings": all_warnings,
+        }
+        msg = "OEM project memory approved skills loaded."
+        suggestion = None
+    elif scope == "health":
+        sections = {
+            "runtime_status": runtime_status,
+            "warnings": all_warnings,
+        }
+        msg = "OEM project memory health status loaded."
+        suggestion = "Run `oem doctor` for full health diagnostics." if all_warnings else None
+    else:
+        return {
+            "status": "error",
+            "operation": "knowledge_read",
+            "message": "Unsupported read scope.",
+            "suggestion": "Use one of: project, recent, skills, health."
+        }
+
+    return {
+        "status": "success",
+        "operation": "knowledge_read",
+        "scope": scope,
+        "project": str(proj_path),
+        "message": msg,
+        "sections": sections,
         "warnings": all_warnings,
-        "suggestion": "Run `oem doctor` for full health diagnostics." if all_warnings else None,
+        "suggestion": suggestion,
     }

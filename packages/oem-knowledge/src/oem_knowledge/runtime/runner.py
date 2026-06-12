@@ -185,16 +185,8 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None,
 
     # Print instructions check
     if args and getattr(args, "print_instructions", False):
-        inst_content = (
-            "# OpenEmpiric Project Memory\n\n"
-            "When working in an OEM-enabled project:\n\n"
-            "1. Call `knowledge_read` first to load the project memory baseline.\n"
-            "2. Call `knowledge_search` for task-specific memory before planning.\n"
-            "3. Use `knowledge_reflect` to record important decisions, failures, constraints, and outcomes.\n"
-            "4. Call `knowledge_session_end` before finishing.\n"
-            "5. Do not manually edit `.oem` files.\n"
-        )
-        print(inst_content)
+        from oem_knowledge.runtime.instructions import OEM_MEMORY_INSTRUCTIONS
+        print(OEM_MEMORY_INSTRUCTIONS)
         sys.exit(0)
 
     # Check if initialized, handle auto-init/prompting

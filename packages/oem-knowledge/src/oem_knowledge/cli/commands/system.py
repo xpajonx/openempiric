@@ -82,15 +82,8 @@ def cmd_setup_opencode(eng, project: str | None = None, repair: bool = False) ->
     inst_installed = False
     try:
         should_write_inst = repair or migrated_inst or not inst_dest.exists()
-        inst_content = (
-            "# OpenEmpiric Project Memory\n\n"
-            "When working in an OEM-enabled project:\n\n"
-            "1. Call `knowledge_read` first to load the project memory baseline.\n"
-            "2. Call `knowledge_search` for task-specific memory before planning.\n"
-            "3. Use `knowledge_reflect` to record important decisions, failures, constraints, and outcomes.\n"
-            "4. Call `knowledge_session_end` before finishing.\n"
-            "5. Do not manually edit `.oem` files.\n"
-        )
+        from oem_knowledge.runtime.instructions import OEM_MEMORY_INSTRUCTIONS
+        inst_content = OEM_MEMORY_INSTRUCTIONS
         if should_write_inst:
             inst_dest.write_text(inst_content, encoding="utf-8")
             inst_installed = True

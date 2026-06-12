@@ -514,14 +514,37 @@ class KnowledgeEngine:
 
 
     def session_start(self, project: str | None = None) -> dict:
-        res = self.restore_session_state(project)
-        from oem_knowledge.runtime.result import success
-        return success(
-            operation="session_start",
-            project=str(self.project_path or project or ""),
-            message="Session started successfully.",
-            data=res,
-        )
+        from oem_knowledge.runtime.session import SessionState
+        import uuid
+        
+        harness = self._resolve_harness(project)
+        active_session_file = harness / "state" / "active_session.json"
+        
+        session_id = None
+        session_state = SessionState.load(active_session_file)
+        if session_state:
+            session_id = session_state.session_id
+        else:
+            session_id = uuid.uuid4().hex[:12]
+            session_state = SessionState.create(
+                session_id=session_id,
+                agent="mcp-agent",
+                project=project or ".",
+                transcript_path=str((harness / "state" / f"chat_{session_id}.md").resolve()),
+                context_path=str((harness / "state" / "oem_runtime_context.json").resolve()),
+                temp_instructions=str((harness / "state" / "oem_temp_instructions.md").resolve()),
+            )
+            session_state.save(active_session_file)
+
+        return {
+            "status": "success",
+            "operation": "knowledge_session_start",
+            "session_id": session_id,
+            "project": str(self.project_path or project or ""),
+            "message": "OEM session started.",
+            "warnings": [],
+            "suggestion": "Use knowledge_read when you need orientation, then knowledge_search for specific memory."
+        }
 
     def session_end(
         self,

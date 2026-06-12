@@ -146,15 +146,35 @@ def mount_tools(mcp: object) -> None:
         return render_panel("Session Reflection", lines, status="ok")
 
     @mcp.tool()
-    def knowledge_read(scope: str = "project", project: str = "", limit: int = 10) -> str:
-        """Read the project memory baseline before planning.
-
-        Call this first at the start of any session in an OEM-enabled project.
-        Returns a bounded, read-only summary of project identity, runtime status,
-        recent sessions, important concepts, approved skills, and suggested searches.
+    def knowledge_session_start(project: str = "") -> str:
+        """Start or restore an OpenEmpiric session lifecycle.
 
         Args:
-            scope: The scope of memory to read. Only 'project' is fully implemented.
+            project: Project directory path. Defaults to current directory.
+        """
+        try:
+            with KnowledgeEngine(project or None) as eng:
+                res = eng.session_start(project or None)
+        except Exception as e:
+            return json.dumps({
+                "status": "error",
+                "operation": "knowledge_session_start",
+                "message": str(e),
+                "suggestion": "Check the tool arguments or workspace lock status.",
+                "warnings": [str(e)],
+            }, indent=2)
+
+        return json.dumps(res, indent=2)
+
+    @mcp.tool()
+    def knowledge_read(scope: str = "project", project: str = "", limit: int = 10) -> str:
+        """Read the project memory baseline to learn or orient from project memory.
+
+        Use this whenever you need broad understanding (e.g. at startup or when confused about conventions).
+        Returns a bounded, read-only summary based on the requested scope.
+
+        Args:
+            scope: The scope of memory to read: 'project', 'recent', 'skills', or 'health'.
             project: Project directory path. Defaults to current directory.
             limit: Max items per section (default 10).
         """

@@ -95,12 +95,18 @@ def _run_knowledge_command_impl(args):
             res.get("message", "OEM project memory baseline loaded."),
             "",
         ]
-        lines += _section_lines("Project", "project")
-        lines += _section_lines("Runtime", "runtime_status")
-        lines += _section_lines("Recent memory", "recent_sessions")
-        lines += _section_lines("Important concepts", "important_concepts")
-        lines += _section_lines("Approved skills", "approved_skills")
-        lines += _section_lines("Suggested next searches", "suggested_next_searches")
+        if "project" in sections:
+            lines += _section_lines("Project", "project")
+        if "runtime_status" in sections:
+            lines += _section_lines("Runtime", "runtime_status")
+        if "recent_sessions" in sections:
+            lines += _section_lines("Recent memory", "recent_sessions")
+        if "important_concepts" in sections:
+            lines += _section_lines("Important concepts", "important_concepts")
+        if "approved_skills" in sections:
+            lines += _section_lines("Approved skills", "approved_skills")
+        if "suggested_next_searches" in sections:
+            lines += _section_lines("Suggested next searches", "suggested_next_searches")
 
         if res.get("warnings"):
             lines += ["Warnings:"] + [f"  ⚠ {w}" for w in res["warnings"]] + [""]
