@@ -214,7 +214,7 @@ class CodexAppAdapter(BaseAdapter):
 
             updated_data = dict(existing_data)
             updated_data["name"] = existing_data.get("name", "openempiric")
-            updated_data["version"] = existing_data.get("version", "0.97")
+            updated_data["version"] = existing_data.get("version", "1.0.0")
             updated_data["schema_version"] = existing_data.get("schema_version", 1)
             updated_data["adapters"] = adapters
             

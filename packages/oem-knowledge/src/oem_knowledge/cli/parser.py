@@ -22,7 +22,7 @@ try:
 
     _VERSION = _pkg_version("oem-knowledge")
 except Exception:
-    _VERSION = "0.97"
+    _VERSION = "1.0.0"
 
 
 def _resolve_project(args) -> str | None:

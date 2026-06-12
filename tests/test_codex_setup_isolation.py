@@ -230,7 +230,7 @@ def test_legacy_skill_migration_to_adapters(temp_env):
     # Write legacy format
     legacy_data = {
         "name": "openempiric",
-        "version": "0.97",
+        "version": "1.0.0",
         "schema_version": 1,
         "adapter": "opencode"
     }
