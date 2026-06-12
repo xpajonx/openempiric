@@ -158,60 +158,110 @@ class MyCustomAgentAdapter(BaseAdapter):
 
 Refer to the [Adapter Architecture Guide](docs/adapter-architecture.md) and [Adapter Specification](docs/adapter-spec.md) for details.
 
+## The Agent Lifecycle Model
+
+The core mental model of OpenEmpiric revolves around the 5-step agent lifecycle contract. Agents must understand and transition through these steps:
+
+```text
+knowledge_session_start
+ └─► knowledge_read (Orientation & Learning)
+      └─► knowledge_search (Specific Retrieval)
+           └─► knowledge_reflect (Capturing Decisions & Failures)
+                └─► knowledge_session_end (Finalize & Commit)
+```
+
+- **`knowledge_session_start`** — Begin or restore a managed workspace session.
+- **`knowledge_read`** — Learn and orient from broad project context, background, recent sessions, and conventions (use at start or when orientation is needed).
+- **`knowledge_search`** — Query the vector/keyword database for a specific project memory or concept.
+- **`knowledge_reflect`** — Record structured events (hypotheses, experiments, validations, decisions, failures) during development.
+- **`knowledge_session_end`** — Finalize, generate session report, update derived indexes, and close/commit the session.
+
+---
+
+## Recommended `.gitignore` Default Policy
+
+To keep project repositories clean while preserving valuable knowledge, follow this default `.gitignore` configuration:
+
+```gitignore
+# Commit-friendly project memory
+# (Do NOT ignore these)
+! .oem/wiki/**
+! .oem/concept_registry.json
+! .oem/skills/**
+
+# Local runtime state and caches
+# (Usually ignore these)
+.oem/state/**
+.oem/reports/**
+.oem/backups/**
+.oem/**/*.sqlite
+.oem/**/*.db
+.oem/.cache/**
+.oem/.runtime/**
+
+# Project-policy dependent (may contain private agent transcript traces)
+.oem/runtime_events.jsonl
+.oem/outcomes.jsonl
+```
+
 ---
 
 ## CLI Command Reference
 
+### Expected Public CLI Surface (v1.0 Frozen)
 
-| Command                       | Category     | Description                                                                     |
-| ------------------------------- | -------------- | --------------------------------------------------------------------------------- |
-| `oem run <agent>`             | **User**     | Run a managed coding agent session with context injection.                      |
-| `oem setup <target>`          | **User**     | Configure and register integrations (`opencode` or `codex-app`).                |
-| `oem doctor`                  | **User**     | Verify workspace health, plugin links, model warmup, and agent integrations.    |
-| `oem search <query>`          | **User**     | Search the project knowledge base using automatic/BM25/hybrid retrieval.        |
-| `oem health`                  | **User**     | Scan the workspace for stale concepts, duplicates, and contradicting knowledge. |
-| `oem clean`                   | **User**     | Analyze or apply safe OEM cleanup actions.                                      |
-| `oem config retrieval <mode>` | **User**     | View or set retrieval strategy to `auto`, `bm25`, or `hybrid`.                  |
-| `oem init`                    | **Admin**    | Initialize the `.oem/` memory repository in the current workspace.               |
-| `oem mcp`                     | **Admin**    | Start the background MCP tool server for non-terminal runtimes.                 |
-| `oem index`                   | **Advanced** | Rebuild derived search index for the project.                                   |
-| `oem merge <id1> <id2>`       | **Advanced** | Manually merge two overlapping or duplicate concepts.                           |
-| `oem rebuild`                 | **Advanced** | Replay the event store log to rebuild the entire concept registry.              |
-| `oem reflect`                 | **Advanced** | Dry-run reflection and concept extraction from raw transcripts.                 |
+| Command | Category | Description |
+| ------- | -------- | ----------- |
+| `oem init` | **User** | Initialize the `.oem/` memory repository in the current workspace. |
+| `oem setup opencode` | **User** | Configure and register OpenCode workstation-level integration. |
+| `oem setup codex-app` | **User** | Configure and register Codex App bridge integration. |
+| `oem run opencode` | **User** | Launch a managed OpenCode agent session with dynamic config injection. |
+| `oem doctor` | **User** | Verify workspace health, plugin links, and agent integration state. |
+| `oem read` | **User** | Read the project memory baseline based on scope (`project`, `recent`, `skills`, `health`). |
+| `oem search` | **User** | Search the project knowledge base with keyword or hybrid search. |
+| `oem reflect` | **User** | Dry-run reflection and concept extraction from conversation transcript. |
+| `oem session-start` | **Internal** | Restore pre-injection context and prepare workspace before agent run. |
+| `oem session-end` | **Internal** | Finalize context, run extraction, and commit learnings. |
+| `oem index` | **Advanced** | Rebuild derived search index for the project. |
+| `oem clean` | **Advanced** | Analyze or apply safe `.oem` cleanup actions (dry-run supported). |
+| `oem recover` | **Advanced** | Recover, commit, or abort crashed or unfinished agent sessions (dry-run supported). |
+| `oem mcp` | **Advanced** | Start the background FastMCP server. |
+| `oem skills` | **Advanced** | Review, list, approve, or reject skill candidates. |
+
+*Note on other commands: Commands like `health`, `config`, `merge`, `rebuild`, `events`, `explain`, `identity`, `concept`, `contradictions`, `outcome`, `todo` are classified as `internal`, `advanced`, `hidden`, `deprecated`, or `post-v1.0` and are suppressed in help outputs.*
 
 ---
 
 ## MCP Tool Reference
 
-When integrated as an MCP server, OpenEmpiric exposes the following tools to the AI agent to support context injection, memory retrieval, task tracking, and session commitment:
+The OpenEmpiric MCP server exposes the following tools categorized by target role:
 
-### Core Retrieval & Exploration
+### 1. Core Lifecycle Tools (Must Remain Stable)
+- **`knowledge_session_start`** — Start or restore an OpenEmpiric session lifecycle.
+- **`knowledge_read`** — Read the project memory baseline for orientation.
+- **`knowledge_search`** — Fast lookup and search across concepts.
+- **`knowledge_reflect`** — Extract structured events and write a session report.
+- **`knowledge_session_end`** — End session, commit learnings, and update indexes.
 
-* **`knowledge_search(query: str, k: int, project: str)`**: Perform hybrid semantic and keyword search across concepts.
-* **`knowledge_explain_concept(concept_id: str, project: str)`**: Retrieve full markdown documentation, canonical name, and recent learnings/evidence for a concept.
-* **`knowledge_stats(project: str)`**: View high-level statistics of the knowledge base and local vector database size.
-* **`knowledge_get_events(project: str, concept: str, event_type: str, session_id: str)`**: Query knowledge events filtered by concept, event type, or session ID.
-* **`knowledge_get_event(project: str, event_id: str)`**: Retrieve a single knowledge event details by its UUID.
+### 2. Core Tools
+- **`knowledge_init`** — Bootstrap the `.oem/` memory structure.
+- **`knowledge_index`** — Re-index markdown files in the project's concept tree.
+- **`knowledge_explain_concept`** — Explain concept details and recent evidence.
+- **`knowledge_stats`** — Show project memory stats (concepts count, DB size).
 
-### Session Lifecycle & Telemetry
+### 3. Advanced Tools
+- **`knowledge_materialize`** — Promote candidates to canonical status and write wiki markdown.
+- **`knowledge_health_check`** — Scan for duplicate concepts, staleness, or contradictions.
+- **`knowledge_get_events`** / **`knowledge_get_event`** — Retrieve events from the ledger.
+- **`knowledge_merge_concepts`** — Merge duplicate concepts.
+- **`knowledge_skill_candidates`** / **`knowledge_skill_candidate_show`** / **`knowledge_skill_candidate_approve`** / **`knowledge_skill_candidate_reject`** / **`knowledge_skill_candidate_defer`** — Review and promote skill candidates.
 
-* **`knowledge_init(project: str)`**: Bootstrap the `.oem/` memory framework in a project directory.
-* **`knowledge_index(force: bool, project: str)`**: Re-index all markdown files in the project's concept tree.
-* **`knowledge_reflect(project: str, conversation_text: str, session_id: str)`**: Extract candidate knowledge events from conversation transcript text.
-* **`knowledge_materialize(project: str)`**: Promote emerging concepts to canonical status and write markdown nodes in `.oem/wiki/`.
-* **`knowledge_session_end(project: str, conversation_text: str, session_id: str)`**: Ends the session, runs transcript analysis and git diff extraction to update concept records, and commits all changes. Returns a clean markdown summary report.
-* **`knowledge_usage_report(concepts_used: list[str], concepts_ignored: list[str], decisions: list[str], project: str)`**: Reports telemetry regarding concept usage and decision alignment during a session.
-* **`knowledge_health_check(stale_sessions: int, similarity_threshold: float, project: str)`**: Propose duplicate merges, find stale concepts, and detect contradictions.
+### 4. Optional / Tasks / Telemetry Tools
+- **`oem_todo_read`** / **`oem_todo_write`** / **`oem_todo_advance`** — Tasks/todos management.
+- **`knowledge_usage_report`** — Experimental telemetry report.
 
-### Task / TODO Management
-
-* **`oem_todo_read(workdir: str)`**: View the active session task checklist from `.oem/state/todos.json`.
-* **`oem_todo_write(items: str, workdir: str)`**: Overwrite the todo list with a new JSON list of items.
-* **`oem_todo_advance(item_id: str, status: str, workdir: str)`**: Update a task's status (`pending`, `in_progress`, `completed`) and automatically cycle next items.
-
-### Concept Management & Verification
-
-* **`knowledge_merge_concepts(project: str, primary_id: str, secondary_id: str)`**: Manually merge a secondary concept into a primary concept.
+### 5. Deprecated Tools
+- **`knowledge_session_commit`** — Deprecated alias; forwards to `session_end` and returns warning.
 
 ---
 

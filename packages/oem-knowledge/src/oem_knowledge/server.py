@@ -24,7 +24,7 @@ def mount_tools(mcp: object) -> None:
 
     @mcp.tool()
     def knowledge_init(project: str = "") -> str:
-        """Bootstrap the .harness/ framework in a project directory. If project is empty, uses current directory."""
+        """Bootstrap the .oem/ memory in a project directory. If project is empty, uses current directory."""
         target = project or "."
         try:
             res = engine.init_project(target)
@@ -46,7 +46,7 @@ def mount_tools(mcp: object) -> None:
 
     @mcp.tool()
     def knowledge_index(force: bool = False, project: str = "") -> str:
-        """Re-index all markdown files in the project's .harness/directives/ tree.
+        """Re-index all markdown files in the project's .oem/ concept wiki/registry/skills trees.
 
         Args:
             force: If True, re-index everything. If False, only new/changed files.
@@ -403,7 +403,7 @@ def mount_tools(mcp: object) -> None:
         """
         try:
             with KnowledgeEngine(project or None) as eng:
-                return _commit_session_from_tool(
+                res = _commit_session_from_tool(
                     eng,
                     project,
                     conversation_text,
@@ -411,6 +411,24 @@ def mount_tools(mcp: object) -> None:
                     events=events,
                     extraction_mode=extraction_mode,
                     timeout_seconds=timeout_seconds,
+                )
+                warning_msg = "knowledge_session_commit is deprecated. Use knowledge_session_end instead."
+                if res.strip().startswith("{"):
+                    try:
+                        data = json.loads(res)
+                        if isinstance(data, dict):
+                            data["deprecated"] = True
+                            warnings = data.get("warnings", [])
+                            if warning_msg not in warnings:
+                                warnings.append(warning_msg)
+                            data["warnings"] = warnings
+                            return json.dumps(data, indent=2)
+                    except Exception:
+                        pass
+                return (
+                    f"> [!WARNING]\n"
+                    f"> {warning_msg}\n\n"
+                    f"{res}"
                 )
         except Exception as e:
             return f"# Session Commit Failure\n\nError: {e}"
