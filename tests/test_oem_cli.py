@@ -117,7 +117,7 @@ def test_oem_run_opencode_safe_bootstrap(tmp_proj):
         assert (Path(tmp_proj) / ".oem").is_dir()
         assert (Path(tmp_proj) / ".oem" / "skills" / "openempiric.yaml").exists()
         assert (plugins_dir / "openempiric.ts").exists()
-        assert not (home_path / ".config" / "opencode" / "opencode.jsonc").exists()
+        assert (home_path / ".config" / "opencode" / "opencode.jsonc").exists()
     finally:
         shutil.rmtree(temp_home)
 

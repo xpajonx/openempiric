@@ -119,11 +119,11 @@ def classify_source(
             source_path,
         )
 
-    if name in {"AGENTS.generated.md", "memory-start.md"}:
+    if name in {"AGENTS.generated.md", "memory-start.md", "oem.md", "manifest.json", "init.sh", "oem-init.sh"}:
         return _classification(
             SourceType.GENERATED_SUMMARY,
             False,
-            "OpenEmpiric generated summary files are not ingestion sources",
+            "OpenEmpiric generated summary, manifest, setup, or instruction files are not ingestion sources",
             source_path,
         )
 
@@ -200,6 +200,13 @@ def classify_source(
                 "OpenEmpiric concept registry is generated knowledge state",
                 source_path,
             )
+
+        return _classification(
+            SourceType.OEM_CONFIG,
+            False,
+            "OpenEmpiric internal files are not ingestion sources",
+            source_path,
+        )
 
     if _has_oem_metadata(content):
         return _classification(

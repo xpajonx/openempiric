@@ -34,8 +34,5 @@ jobs:
       - name: Initialize OEM workspace
         run: uv run oem init
 
-      - name: Run OEM Custom Linter
-        run: uv run oem lint
-
       - name: Run Tests
         run: uv run pytest

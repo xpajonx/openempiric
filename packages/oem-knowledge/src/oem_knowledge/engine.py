@@ -330,6 +330,36 @@ class KnowledgeEngine:
                 fp.write_text(content)
                 created_files.append(fname)
 
+        # Write manifest.json
+        try:
+            from oem_knowledge.runtime.manifest import ensure_manifest
+            ensure_manifest(project_dir)
+            created_files.append("manifest.json")
+        except Exception:
+            pass
+
+        # Write init.sh
+        try:
+            init_sh = harness / "init.sh"
+            if not init_sh.exists():
+                init_content = (
+                    "#!/bin/bash\n"
+                    "# generated_by: openempiric\n"
+                    "# source_type: oem_generated\n\n"
+                    "echo \"Initializing OpenEmpiric workspace...\"\n"
+                    "oem init\n"
+                    "oem setup opencode\n"
+                    "oem doctor\n"
+                )
+                init_sh.write_text(init_content, encoding="utf-8")
+                try:
+                    init_sh.chmod(0o755)
+                except Exception:
+                    pass
+                created_files.append("init.sh")
+        except Exception:
+            pass
+
         # Install adapter skills
         try:
             from oem_knowledge.adapters import get_adapter
@@ -964,6 +994,10 @@ project: {project or "default"}
 
     def session_commit(self, *args, **kwargs) -> dict:
         return self.session_end(*args, **kwargs)
+
+    def knowledge_read(self, project: str | None = None, scope: str = "project") -> dict:
+        from oem_knowledge.runtime.read import execute_knowledge_read
+        return execute_knowledge_read(self, project, scope)
 
 
 

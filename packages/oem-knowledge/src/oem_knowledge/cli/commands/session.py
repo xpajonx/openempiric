@@ -284,7 +284,7 @@ def _run_session_command_impl(args):
             print(render_panel("Session Status", lines, status="stats"))
 
     elif args.command == "run":
-        run_agent(args.agent, eng, project)
+        run_agent(args.agent, eng, project, args)
 
     elif args.command == "recover":
         scope = getattr(args, "scope", None)

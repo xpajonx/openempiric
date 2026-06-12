@@ -146,6 +146,30 @@ def mount_tools(mcp: object) -> None:
         return render_panel("Session Reflection", lines, status="ok")
 
     @mcp.tool()
+    def knowledge_read(scope: str = "project", project: str = "") -> str:
+        """Read the project memory baseline before planning.
+
+        Args:
+            scope: The scope of memory to read (defaults to 'project').
+            project: Project directory path. Defaults to current directory.
+        """
+        try:
+            with KnowledgeEngine(project or None) as eng:
+                res = eng.knowledge_read(project or None, scope)
+        except Exception as e:
+            return json.dumps({
+                "status": "error",
+                "operation": "knowledge_read",
+                "message": str(e),
+                "failed_step": "read",
+                "warnings": [str(e)],
+                "errors": [str(e)],
+                "suggestion": "Check the tool arguments or workspace lock status."
+            }, indent=2)
+
+        return json.dumps(res, indent=2)
+
+    @mcp.tool()
     def knowledge_materialize(project: str = "") -> str:
         """Promote candidate/emerging concepts to validated/canonical status and materialize markdown nodes.
 

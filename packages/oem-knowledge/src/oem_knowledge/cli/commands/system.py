@@ -13,7 +13,7 @@ from oem_knowledge.ui import render_panel
 from ..helpers import check_mcp_server, Spinner, _strip_jsonc_comments, _update_jsonc_mcp
 
 
-def cmd_setup_opencode(repair: bool = False) -> None:
+def cmd_setup_opencode(eng, project: str | None = None, repair: bool = False) -> None:
     print("OEM OpenCode Setup\n")
     
     opencode_dir = Path.home() / ".config" / "opencode"
@@ -45,7 +45,7 @@ def cmd_setup_opencode(repair: bool = False) -> None:
                 migrated_plugin = True
         except Exception:
             pass
-
+ 
     # Check legacy instructions
     if inst_dest.exists() and not repair:
         try:
@@ -54,7 +54,7 @@ def cmd_setup_opencode(repair: bool = False) -> None:
                 migrated_inst = True
         except Exception:
             pass
-
+ 
     # 2. Install/update plugin
     plugin_installed = False
     try:
@@ -83,16 +83,20 @@ def cmd_setup_opencode(repair: bool = False) -> None:
     try:
         should_write_inst = repair or migrated_inst or not inst_dest.exists()
         inst_content = (
-            "## OpenEmpiric Session Status\n\n"
-            "OpenEmpiric is already active for this session.\n\n"
-            "Relevant project memory has been restored automatically.\n\n"
-            "### Tool Usage Guidelines:\n"
-            "- **Prefer calling OEM MCP tools directly** (e.g. `knowledge_search`) instead of executing shell commands (e.g. running `oem search` or `uv run ... oem search` in bash).\n"
-            "- **Do not use shell execution** when a corresponding OEM tool is available.\n"
-            "- Refer to active concepts and past failures during planning to align with existing decisions.\n"
-            "- Report referenced memory concepts at session end using the `knowledge_usage_report` tool.\n"
-            "- Use `knowledge_search` when additional project context is needed (such as reviewing project history, understanding prior decisions, or investigating known failures).\n"
-            "- **Fallback Strategy**: If the MCP server is unreachable or a tool call fails, fall back to the OEM CLI (`oem search`), and only fall back to raw shell execution if the CLI is unavailable.\n"
+            "# OpenEmpiric Project Memory\n\n"
+            "When working in a project that contains `.oem`, use OpenEmpiric as the project memory runtime.\n\n"
+            "At session start:\n"
+            "1. Call `knowledge_read` to load the project memory baseline.\n"
+            "2. Call `knowledge_search` for task-specific memory before planning.\n"
+            "3. Use retrieved project memory to avoid repeating old mistakes.\n\n"
+            "During work:\n"
+            "1. Record important decisions, failures, constraints, and outcomes through OEM.\n"
+            "2. Prefer `knowledge_reflect` with structured events or explicit markers.\n"
+            "3. Do not manually edit `.oem` files.\n\n"
+            "Before finishing:\n"
+            "1. Reflect important work through OEM.\n"
+            "2. End the OEM session.\n"
+            "3. If OEM reports degraded health, mention it and suggest `oem doctor` or `oem recover`.\n"
         )
         if should_write_inst:
             inst_dest.write_text(inst_content, encoding="utf-8")
@@ -284,6 +288,13 @@ def cmd_setup_opencode(repair: bool = False) -> None:
     if plugin_installed and inst_installed and config_verified and mcp_verified:
         lines.append("")
         lines.append("OpenCode integration ready.")
+        if eng.is_initialized(project):
+            try:
+                from oem_knowledge.runtime.manifest import update_manifest_integration
+                update_manifest_integration(project or ".", "opencode", enabled=True)
+                lines.append("✓ Manifest integration updated")
+            except Exception as e:
+                lines.append(f"⚠ Failed to update manifest integration: {e}")
         print(render_panel("OEM OpenCode Setup", lines, status="ok"))
     else:
         print(render_panel("OEM OpenCode Setup Failed", lines, status="error"))
@@ -336,7 +347,7 @@ def run_system_command(args):
 
     if args.command == "setup":
         if args.setup_target == "opencode":
-            cmd_setup_opencode(repair=args.repair)
+            cmd_setup_opencode(eng, project=project, repair=args.repair)
         elif args.setup_target == "codex-app":
             cmd_setup_codex_app(eng, project=project, repair=args.repair)
 

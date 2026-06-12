@@ -225,7 +225,7 @@ class TestMemoryContext:
         from oem_knowledge.runtime.context import _compile_oem_context
         ctx = _compile_oem_context(engine)
         mc = ctx["memory_context"].lower()
-        assert "do not assume work should proceed" in mc
+        assert "knowledge_read" in mc
 
 
 class TestCorruptedDatabaseRecovery:

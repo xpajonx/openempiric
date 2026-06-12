@@ -188,6 +188,36 @@ def _setup_parser() -> argparse.ArgumentParser:
         "agent", type=str, help="opencode, claude-code, cursor, or custom command"
     )
     run_p.add_argument("--project", type=str, default="")
+    run_p.add_argument(
+        "--init-if-missing",
+        action="store_true",
+        help="Automatically initialize OEM project memory if missing",
+    )
+    run_p.add_argument(
+        "--no-init",
+        action="store_true",
+        help="Fail if OEM project memory is missing instead of prompting",
+    )
+    run_p.add_argument(
+        "--skip-doctor",
+        action="store_true",
+        help="Skip executing workspace doctor checks before starting",
+    )
+    run_p.add_argument(
+        "--skip-session-start",
+        action="store_true",
+        help="Skip starting a session and preparing workspace context",
+    )
+    run_p.add_argument(
+        "--skip-session-end",
+        action="store_true",
+        help="Skip committing learnings and closing the session on exit",
+    )
+    run_p.add_argument(
+        "--print-instructions",
+        action="store_true",
+        help="Print persistent guidelines to stdout and exit",
+    )
 
     recover_p = sub.add_parser(
         "recover",
