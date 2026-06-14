@@ -16,8 +16,13 @@ from ..helpers import check_mcp_server, Spinner, _strip_jsonc_comments, _update_
 def cmd_setup_opencode(eng, project: str | None = None, repair: bool = False) -> None:
     print("OEM OpenCode Setup\n")
     
-    opencode_dir = Path.home() / ".config" / "opencode"
-    plugins_dir = opencode_dir / "plugins"
+    env_plugins_dir = os.environ.get("OPENCODE_PLUGINS_DIR")
+    if env_plugins_dir:
+        plugins_dir = Path(env_plugins_dir)
+        opencode_dir = plugins_dir.parent
+    else:
+        opencode_dir = Path.home() / ".config" / "opencode"
+        plugins_dir = opencode_dir / "plugins"
     instructions_dir = opencode_dir / "instructions"
     skills_dir = opencode_dir / "skills"
     
@@ -96,7 +101,7 @@ def cmd_setup_opencode(eng, project: str | None = None, repair: bool = False) ->
     config_verified = False
     try:
         inst_path_str = str(inst_dest.resolve())
-        
+        plugin_path_str = str(plugin_dest.resolve())
         # Determine if dev workspace
         is_dev_workspace = False
         workspace_root = Path.cwd()
@@ -149,11 +154,14 @@ def cmd_setup_opencode(eng, project: str | None = None, repair: bool = False) ->
             
             inst_list = config_data.get("instructions", [])
             existing_mcp = config_data.get("mcp", {}).get("openempiric")
+            plugin_list = config_data.get("plugins", [])
+            plugin_path_str = str(plugin_dest.resolve())
             
             need_inst_change = inst_path_str not in inst_list
             need_mcp_change = existing_mcp != mcp_config
+            need_plugin_change = plugin_path_str not in plugin_list
             
-            if not need_inst_change and not need_mcp_change:
+            if not need_inst_change and not need_mcp_change and not need_plugin_change:
                 config_verified = True
             else:
                 # Backup the file before writing
@@ -200,6 +208,42 @@ def cmd_setup_opencode(eng, project: str | None = None, repair: bool = False) ->
                             new_entry = f'{comma}\n  "instructions": [\n    "{inst_path_str}"\n  ]\n'
                             new_text = new_text[:r_pos] + new_entry + new_text[r_pos:]
                 
+                # 1b. Update plugins path if needed
+                if need_plugin_change:
+                    comment_spans = []
+                    for m_comment in re.finditer(r'//[^\r\n]*|/\*[\s\S]*?\*/', new_text):
+                        comment_spans.append(m_comment.span())
+                    
+                    def in_comment(pos):
+                        return any(start <= pos < end for start, end in comment_spans)
+                    
+                    match = None
+                    for m_plugins in re.finditer(r'"plugins"\s*:\s*\[', new_text):
+                        if not in_comment(m_plugins.start()):
+                            match = m_plugins
+                            break
+                    
+                    if match:
+                        pos = match.end()
+                        rest = new_text[pos:]
+                        next_char_match = re.search(r'\S', rest)
+                        if next_char_match and next_char_match.group(0) == ']':
+                            new_text = new_text[:pos] + f'\n    "{plugin_path_str}"\n  ' + new_text[pos:]
+                        else:
+                            new_text = new_text[:pos] + f'\n    "{plugin_path_str}",' + new_text[pos:]
+                    else:
+                        r_pos = new_text.rfind('}')
+                        if r_pos != -1:
+                            before_brace = new_text[:r_pos]
+                            last_char_match = re.search(r'\S\s*$', before_brace)
+                            comma = ""
+                            if last_char_match:
+                                last_char = last_char_match.group(0).strip()
+                                if last_char not in ("{", ",", "["):
+                                    comma = ","
+                            new_entry = f'{comma}\n  "plugins": [\n    "{plugin_path_str}"\n  ]\n'
+                            new_text = new_text[:r_pos] + new_entry + new_text[r_pos:]
+                
                 # 2. Update mcp server registration if needed
                 if need_mcp_change:
                     new_text = _update_jsonc_mcp(new_text, mcp_config)
@@ -207,9 +251,10 @@ def cmd_setup_opencode(eng, project: str | None = None, repair: bool = False) ->
                 jsonc_file.write_text(new_text, encoding="utf-8")
                 config_verified = True
         else:
-            # File doesn't exist, create a new config with both fields
+            # File doesn't exist, create a new config with all fields
             config_data = {
                 "instructions": [inst_path_str],
+                "plugins": [plugin_path_str],
                 "mcp": {
                     "openempiric": mcp_config
                 }

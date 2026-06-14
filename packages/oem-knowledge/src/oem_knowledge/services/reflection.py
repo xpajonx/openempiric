@@ -269,6 +269,32 @@ class ReflectionService:
         self.engine._resolve_harness(project)
         concepts_dir = self.engine._concepts_dir(project)
 
+        # Load pending events staged by the hook runtime
+        pending_events = []
+        try:
+            harness = self.engine._resolve_harness(project)
+            pending_file = harness / ".runtime" / "pending_events.jsonl"
+            if pending_file.exists():
+                with open(pending_file, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            try:
+                                pending_events.append(json.loads(line))
+                            except Exception as e:
+                                warnings_list.append(f"Failed to parse pending event: {e}")
+                try:
+                    pending_file.unlink()
+                except Exception as e:
+                    logger.warning("Failed to unlink pending events file: %s", e)
+        except Exception as e:
+            logger.warning("Failed to load pending events: %s", e)
+
+        all_events = []
+        if events:
+            all_events.extend(events)
+        all_events.extend(pending_events)
+
         modified_files = []
         if concepts_dir.exists():
             for fp in concepts_dir.rglob("*.md"):
@@ -432,8 +458,30 @@ class ReflectionService:
                 "source": "orchestrator",
             })
 
+        # Process any structured/pending events
+        for ev in all_events:
+            norm_ev = self._validate_and_normalize_event(ev, warnings_list)
+            if norm_ev:
+                knowledge_events.append({
+                    "type": norm_ev["event_type"],
+                    "concept": norm_ev["concept_candidates"][0] if norm_ev["concept_candidates"] else "General Learning",
+                    "evidence": norm_ev["evidence"],
+                    "confidence": norm_ev["confidence"],
+                    "source": norm_ev["source"] if norm_ev["source"] != "chat" else "opencode_hook",
+                    "event_id": norm_ev["event_id"],
+                    "timestamp": norm_ev["timestamp"],
+                    "concept_candidates": norm_ev["concept_candidates"],
+                    "summary": norm_ev["summary"],
+                    "source_type": "agent_runtime_signal",
+                    "ingestion_eligible": True,
+                })
+                structured_events_found += 1
+            else:
+                events_rejected += 1
+
         if resolved_mode == "structured":
-            if not isinstance(events, list):
+            # Already processed all_events in the shared block above
+            if not isinstance(events, list) and not pending_events:
                 return {
                     "status": "error",
                     "mode": resolved_mode,
@@ -447,25 +495,6 @@ class ReflectionService:
                     "explainability": make_explainability(),
                     "phase_timings": {}
                 }
-            for ev in events:
-                norm_ev = self._validate_and_normalize_event(ev, warnings_list)
-                if norm_ev:
-                    knowledge_events.append({
-                        "type": norm_ev["event_type"],
-                        "concept": norm_ev["concept_candidates"][0] if norm_ev["concept_candidates"] else "General Learning",
-                        "evidence": norm_ev["evidence"],
-                        "confidence": norm_ev["confidence"],
-                        "source": norm_ev["source"],
-                        "event_id": norm_ev["event_id"],
-                        "timestamp": norm_ev["timestamp"],
-                        "concept_candidates": norm_ev["concept_candidates"],
-                        "summary": norm_ev["summary"],
-                        "source_type": norm_ev.get("source_type"),
-                        "ingestion_eligible": norm_ev.get("ingestion_eligible"),
-                    })
-                    structured_events_found += 1
-                else:
-                    events_rejected += 1
 
         elif resolved_mode == "markers":
             extracted_markers = self._parse_markers(conversation_text)
@@ -503,25 +532,14 @@ class ReflectionService:
                         "phase_timings": {}
                     }
 
+        llm_skipped = False
         if resolved_mode == "llm":
             if not llm_extraction_available():
-                return {
-                    "status": "warn",
-                    "mode": resolved_mode,
-                    "events_written": 0,
-                    "events_rejected": 0,
-                    "message": "Session closed, but dense LLM reflection was skipped because no LLM provider is configured.",
-                    "suggestion": "Use structured events or Observation:/Decision:/Outcome: markers to record memory without LLM.",
-                    "warnings": [
-                        "LLM extraction unavailable.",
-                        "No reflection events were produced."
-                    ],
-                    "report_path": None,
-                    "knowledge_events": [],
-                    "canonical_events": [],
-                    "explainability": make_explainability(),
-                    "phase_timings": {}
-                }
+                llm_skipped = True
+                warnings_list.append("LLM extraction unavailable.")
+                warnings_list.append("No reflection events were produced.")
+                # Suggest structured events or markers
+                warnings_list.append("Use structured events or Observation:/Decision:/Outcome: markers to record memory without LLM.")
             try:
                 extracted_llm = self._run_llm_extraction(conversation_text, timeout_seconds)
                 if extracted_llm:
@@ -547,7 +565,7 @@ class ReflectionService:
 
         if not knowledge_events:
             return {
-                "status": "empty",
+                "status": "warn" if llm_skipped else "empty",
                 "mode": resolved_mode,
                 "events_written": 0,
                 "events_rejected": events_rejected,
@@ -647,7 +665,7 @@ class ReflectionService:
             ),
         }
 
-        status_val = "partial" if (resolved_mode == "structured" and events_rejected > 0) else "success"
+        status_val = "warn" if llm_skipped else ("partial" if (resolved_mode == "structured" and events_rejected > 0) else "success")
 
         return {
             "status": status_val,

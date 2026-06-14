@@ -119,11 +119,15 @@ def classify_source(
             source_path,
         )
 
-    if name in {"AGENTS.generated.md", "memory-start.md", "oem.md", "manifest.json", "init.sh", "oem-init.sh"}:
+    if name in {
+        "AGENTS.generated.md", "memory-start.md", "oem.md", "manifest.json", "init.sh", "oem-init.sh",
+        "context.md", "pending_events.jsonl", "hook_state.json",
+        ".openempiric_temp_instructions.md", "temp_instructions.md"
+    }:
         return _classification(
             SourceType.GENERATED_SUMMARY,
             False,
-            "OpenEmpiric generated summary, manifest, setup, or instruction files are not ingestion sources",
+            "OpenEmpiric generated summary, manifest, setup, instruction, or hook runtime files are not ingestion sources",
             source_path,
         )
 

@@ -127,8 +127,8 @@ def test_setup_opencode_legacy_migration(temp_home, tmp_proj):
             main()
 
     # Legacy content should be overwritten even without --repair
-    assert "knowledge_session_start" not in plugin_file.read_text(encoding="utf-8")
-    assert "verify plugin array" not in inst_file.read_text(encoding="utf-8")
+    assert "references" not in plugin_file.read_text(encoding="utf-8")
+    assert "references" not in inst_file.read_text(encoding="utf-8")
 
 
 def test_doctor_integration_diagnostics(temp_home, tmp_proj):

@@ -240,7 +240,7 @@ class TestRuntimeReadinessAndSupervisor:
         readiness = RuntimeReadiness()
         checks = readiness.check(
             eng=engine,
-            agent_name="opencode",
+            agent_name="generic",
             project=str(tmp_path),
             harness=harness,
             adapter=adapter,

@@ -624,9 +624,9 @@ class KnowledgeEngine:
 
                 status_val = res.get("status")
                 failed_step_val = res.get("failed_step")
-                is_non_fatal = status_val in ("warn", "empty") or (
+                is_non_fatal = (status_val in ("warn", "empty") or (
                     status_val == "partial" and failed_step_val == "llm_extraction"
-                )
+                )) and res.get("events_written", 0) == 0
 
                 if is_non_fatal:
                     # Close the session safely
@@ -777,6 +777,8 @@ class KnowledgeEngine:
                         }
                     )
             progress.update_step("reflection", "success")
+            if status_val in ("warn", "partial"):
+                status = status_val
 
             # Persist events using public append_events
             with timer.phase("append_events", progress_callback):
