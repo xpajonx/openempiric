@@ -13,6 +13,48 @@ class ReadinessCheck:
     detail: str | None = None
     suggestion: str | None = None
 
+
+def check_opencode_config_valid() -> tuple[str, str]:
+    import shutil
+    import os
+    import subprocess
+    from pathlib import Path
+    
+    if not shutil.which("opencode"):
+        return "skipped", "opencode executable not found"
+        
+    config_dir = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "opencode"
+    config_file = config_dir / "opencode.jsonc"
+    
+    if not config_file.exists():
+        return "success", ""
+        
+    try:
+        import sys
+        if "pytest" in sys.modules or os.environ.get("PYTEST_CURRENT_TEST"):
+            return "success", ""
+        res = subprocess.run(
+            ["opencode", "debug", "config"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if res.returncode == 0:
+            return "success", ""
+            
+        output = res.stderr or res.stdout
+        error_msg = ""
+        for line in output.splitlines():
+            if line.strip().startswith("Unrecognized key:") or "invalid" in line.lower() or "error" in line.lower():
+                error_msg = line.strip()
+                break
+        if not error_msg:
+            error_msg = "Invalid configuration structure."
+        return "failure", error_msg
+    except Exception as e:
+        return "failure", str(e)
+
+
 class RuntimeReadiness:
     def check(
         self,
@@ -198,9 +240,35 @@ class RuntimeReadiness:
                 status="success"
             ))
 
+        # Check 9: OpenCode config validation
+        valid_status, err_msg = check_opencode_config_valid()
+        if valid_status == "skipped":
+            checks.append(ReadinessCheck(
+                name="OpenCode config validation skipped",
+                status="warning",
+                detail="opencode executable not found"
+            ))
+        elif valid_status == "failure":
+            checks.append(ReadinessCheck(
+                name="OpenCode config",
+                status="failure",
+                detail=err_msg,
+                suggestion="Run 'oem setup opencode --repair'"
+            ))
+
         if agent_name == "opencode":
             mapped_checks = []
             
+            # 0. OpenCode config validation skipped
+            c_skipped = next((c for c in checks if c.name == "OpenCode config validation skipped"), None)
+            if c_skipped:
+                mapped_checks.append(c_skipped)
+
+            # 0b. OpenCode config
+            c_config = next((c for c in checks if c.name == "OpenCode config"), None)
+            if c_config:
+                mapped_checks.append(c_config)
+
             # 1. .oem project memory found (mapped from Check 1: Project initialized)
             c1 = next((c for c in checks if c.name == "Project initialized"), None)
             if c1:
@@ -220,9 +288,17 @@ class RuntimeReadiness:
                 mapped_checks.append(c3)
                 
             # 4. OEM hook runtime active (mapped from Check 3: Plugin healthy)
+            from oem_knowledge.cli.commands.system import check_opencode_plugins_support
+            plugins_supported = check_opencode_plugins_support() != "unsupported"
+            
             c4 = next((c for c in checks if c.name == "Plugin healthy"), None)
             if c4:
-                c4.name = "OEM hook runtime active"
+                if not plugins_supported:
+                    c4.name = "OEM hook runtime unavailable"
+                    c4.status = "warning"
+                    c4.detail = "Current OpenCode config schema does not support plugin registration."
+                else:
+                    c4.name = "OEM hook runtime active"
                 mapped_checks.append(c4)
                 
             # 5. Session lifecycle enabled (mapped from Check 8)

@@ -266,6 +266,26 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None,
             cmd_setup_opencode(eng, project=proj, repair=False)
         except Exception as e:
             logging.warning("Auto OpenCode setup failed: %s", e)
+            
+        try:
+            from oem_knowledge.runtime.readiness import check_opencode_config_valid
+            valid_status, err_msg = check_opencode_config_valid()
+            if valid_status == "failure":
+                from oem_knowledge.ui import render_panel
+                print(render_panel(
+                    "OpenCode Integration Failed",
+                    [
+                        "OpenCode config is invalid.",
+                        err_msg,
+                        "",
+                        "Suggested fix:",
+                        "  oem setup opencode --repair"
+                    ],
+                    status="error"
+                ))
+                sys.exit(1)
+        except Exception as e:
+            logging.warning("OpenCode configuration validation failed: %s", e)
 
     # Execute lightweight doctor checks
     if args and not getattr(args, "skip_doctor", False):

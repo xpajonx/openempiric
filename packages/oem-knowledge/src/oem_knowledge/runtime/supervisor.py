@@ -41,7 +41,7 @@ def render_supervisor_panel(project: str | None, agent_name: str, checks: list[R
         if check.status == "success":
             symbol = "✓"
         elif check.status == "warning":
-            symbol = "⚠"
+            symbol = "!" if agent_name == "opencode" else "⚠"
             has_warning = True
             if check.suggestion:
                 suggestions.append(f"  • {check.name}: {check.suggestion}")
@@ -53,6 +53,9 @@ def render_supervisor_panel(project: str | None, agent_name: str, checks: list[R
         
         line_content = f"{symbol} {check.name}"
         lines.append(f"║ {line_content:<43} ║")
+        if check.status == "warning" and agent_name == "opencode" and check.detail:
+            detail_line = f"  {check.detail}"
+            lines.append(f"║ {detail_line:<43} ║")
         
     lines.append(border_mid)
     
@@ -60,6 +63,9 @@ def render_supervisor_panel(project: str | None, agent_name: str, checks: list[R
     if has_failure:
         ready_symbol = "✗"
         ready_name = "Runtime not ready"
+    elif has_warning and agent_name == "opencode":
+        ready_symbol = "✓"
+        ready_name = "Runtime ready via MCP + instructions fallback"
     elif has_warning:
         ready_symbol = "⚠"
         ready_name = "Runtime degraded"

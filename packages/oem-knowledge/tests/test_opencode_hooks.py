@@ -304,3 +304,311 @@ def test_typescript_plugin_loading_and_methods(tmp_path):
     """
     res = subprocess.run(["node", "-e", js_checker], capture_output=True, text=True)
     assert res.returncode == 0
+
+
+def test_setup_opencode_does_not_write_unsupported_plugins_key(engine, tmp_path, monkeypatch):
+    opencode_dir = tmp_path / "opencode"
+    plugins_dir = opencode_dir / "plugins"
+    instructions_dir = opencode_dir / "instructions"
+    skills_dir = opencode_dir / "skills"
+    
+    plugins_dir.mkdir(parents=True)
+    instructions_dir.mkdir(parents=True)
+    skills_dir.mkdir(parents=True)
+    
+    monkeypatch.setenv("OPENCODE_PLUGINS_DIR", str(plugins_dir))
+    monkeypatch.setattr("oem_knowledge.cli.commands.system.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("oem_knowledge.cli.commands.system.check_mcp_server", lambda cmd: (True, True, 5, ""))
+    
+    # Mock plugins unsupported
+    monkeypatch.setattr("oem_knowledge.cli.commands.system.check_opencode_plugins_support", lambda: "unsupported")
+    
+    with patch("importlib.resources.files") as mock_files:
+        mock_files.return_value.joinpath.return_value.exists.return_value = True
+        mock_files.return_value.joinpath.return_value.read_text.return_value = "dummy content"
+        
+        cmd_setup_opencode(engine, project=str(tmp_path), repair=True)
+        
+    config_text = (opencode_dir / "opencode.jsonc").read_text(encoding="utf-8")
+    config = json.loads(config_text)
+    
+    # plugins key should NOT be present
+    assert "plugins" not in config
+    assert "instructions" in config
+    assert "mcp" in config
+
+
+def test_setup_opencode_repairs_invalid_plugins_key(engine, tmp_path, monkeypatch):
+    opencode_dir = tmp_path / "opencode"
+    plugins_dir = opencode_dir / "plugins"
+    instructions_dir = opencode_dir / "instructions"
+    skills_dir = opencode_dir / "skills"
+    
+    plugins_dir.mkdir(parents=True)
+    instructions_dir.mkdir(parents=True)
+    skills_dir.mkdir(parents=True)
+    
+    # Create an invalid plugins config
+    jsonc_file = opencode_dir / "opencode.jsonc"
+    jsonc_file.write_text(json.dumps({
+        "plugins": [str(plugins_dir / "openempiric.ts")]
+    }), encoding="utf-8")
+    
+    monkeypatch.setenv("OPENCODE_PLUGINS_DIR", str(plugins_dir))
+    monkeypatch.setattr("oem_knowledge.cli.commands.system.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("oem_knowledge.cli.commands.system.check_mcp_server", lambda cmd: (True, True, 5, ""))
+    
+    # Mock plugins unsupported
+    monkeypatch.setattr("oem_knowledge.cli.commands.system.check_opencode_plugins_support", lambda: "unsupported")
+    
+    # Mock subprocess.run for validation to return success (so it validates successfully after repair)
+    class DummyCompletedProcess:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+    monkeypatch.setattr("subprocess.run", lambda *args, **kwargs: DummyCompletedProcess())
+    
+    with patch("importlib.resources.files") as mock_files:
+        mock_files.return_value.joinpath.return_value.exists.return_value = True
+        mock_files.return_value.joinpath.return_value.read_text.return_value = "dummy"
+        
+        cmd_setup_opencode(engine, project=str(tmp_path), repair=False)
+        
+    config_text = jsonc_file.read_text(encoding="utf-8")
+    config = json.loads(config_text)
+    
+    # plugins key should be removed
+    assert "plugins" not in config
+
+
+def test_setup_opencode_preserves_user_config_when_repairing(engine, tmp_path, monkeypatch):
+    opencode_dir = tmp_path / "opencode"
+    plugins_dir = opencode_dir / "plugins"
+    instructions_dir = opencode_dir / "instructions"
+    skills_dir = opencode_dir / "skills"
+    
+    plugins_dir.mkdir(parents=True)
+    instructions_dir.mkdir(parents=True)
+    skills_dir.mkdir(parents=True)
+    
+    # Config has user custom setting and user plugin
+    jsonc_file = opencode_dir / "opencode.jsonc"
+    jsonc_file.write_text(json.dumps({
+        "custom_setting": "val",
+        "plugins": [
+            str(plugins_dir / "openempiric.ts"),
+            "user-plugin.ts"
+        ]
+    }), encoding="utf-8")
+    
+    monkeypatch.setenv("OPENCODE_PLUGINS_DIR", str(plugins_dir))
+    monkeypatch.setattr("oem_knowledge.cli.commands.system.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("oem_knowledge.cli.commands.system.check_mcp_server", lambda cmd: (True, True, 5, ""))
+    monkeypatch.setattr("oem_knowledge.cli.commands.system.check_opencode_plugins_support", lambda: "unsupported")
+    
+    class DummyCompletedProcess:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+    monkeypatch.setattr("subprocess.run", lambda *args, **kwargs: DummyCompletedProcess())
+    
+    with patch("importlib.resources.files") as mock_files:
+        mock_files.return_value.joinpath.return_value.exists.return_value = True
+        mock_files.return_value.joinpath.return_value.read_text.return_value = "dummy"
+        
+        cmd_setup_opencode(engine, project=str(tmp_path), repair=False)
+        
+    config_text = jsonc_file.read_text(encoding="utf-8")
+    config = json.loads(config_text)
+    
+    # plugins key should contain user-plugin.ts but NOT openempiric.ts
+    assert "plugins" in config
+    assert "user-plugin.ts" in config["plugins"]
+    assert str(plugins_dir / "openempiric.ts") not in config["plugins"]
+    assert config["custom_setting"] == "val"
+
+
+def test_setup_opencode_creates_backup_before_repair(engine, tmp_path, monkeypatch):
+    opencode_dir = tmp_path / "opencode"
+    plugins_dir = opencode_dir / "plugins"
+    instructions_dir = opencode_dir / "instructions"
+    skills_dir = opencode_dir / "skills"
+    
+    plugins_dir.mkdir(parents=True)
+    instructions_dir.mkdir(parents=True)
+    skills_dir.mkdir(parents=True)
+    
+    jsonc_file = opencode_dir / "opencode.jsonc"
+    jsonc_file.write_text(json.dumps({
+        "plugins": [str(plugins_dir / "openempiric.ts")]
+    }), encoding="utf-8")
+    
+    monkeypatch.setenv("OPENCODE_PLUGINS_DIR", str(plugins_dir))
+    monkeypatch.setattr("oem_knowledge.cli.commands.system.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("oem_knowledge.cli.commands.system.check_mcp_server", lambda cmd: (True, True, 5, ""))
+    monkeypatch.setattr("oem_knowledge.cli.commands.system.check_opencode_plugins_support", lambda: "unsupported")
+    
+    class DummyCompletedProcess:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+    monkeypatch.setattr("subprocess.run", lambda *args, **kwargs: DummyCompletedProcess())
+    
+    with patch("importlib.resources.files") as mock_files:
+        mock_files.return_value.joinpath.return_value.exists.return_value = True
+        mock_files.return_value.joinpath.return_value.read_text.return_value = "dummy"
+        
+        cmd_setup_opencode(engine, project=str(tmp_path), repair=False)
+        
+    backups = list(opencode_dir.glob("opencode.jsonc.backup-*"))
+    assert len(backups) >= 1
+
+
+def test_readiness_reports_hook_runtime_warn_when_plugin_unsupported(engine, tmp_path, monkeypatch):
+    monkeypatch.setattr("oem_knowledge.runtime.readiness.check_opencode_config_valid", lambda: ("success", ""))
+    monkeypatch.setattr("oem_knowledge.cli.commands.system.check_opencode_plugins_support", lambda: "unsupported")
+    
+    readiness = RuntimeReadiness()
+    
+    class DummyAdapter:
+        def verify_health(self):
+            return True, "All good"
+        def verify_mcp(self):
+            return True
+            
+    checks = readiness.check(
+        eng=engine,
+        agent_name="opencode",
+        project=str(tmp_path),
+        harness=tmp_path / OEM_DIR,
+        adapter=DummyAdapter(),
+        stale_existed=False,
+        recovery_failed=False
+    )
+    
+    c4 = next((c for c in checks if c.name == "OEM hook runtime unavailable"), None)
+    assert c4 is not None
+    assert c4.status == "warning"
+    assert "Current OpenCode config schema does not support plugin registration." in c4.detail
+
+
+def test_readiness_does_not_report_runtime_ready_when_opencode_config_invalid(engine, tmp_path, monkeypatch):
+    monkeypatch.setattr("oem_knowledge.runtime.readiness.check_opencode_config_valid", lambda: ("failure", "Unrecognized key: plugins"))
+    
+    readiness = RuntimeReadiness()
+    
+    class DummyAdapter:
+        def verify_health(self):
+            return True, "All good"
+        def verify_mcp(self):
+            return True
+            
+    checks = readiness.check(
+        eng=engine,
+        agent_name="opencode",
+        project=str(tmp_path),
+        harness=tmp_path / OEM_DIR,
+        adapter=DummyAdapter(),
+        stale_existed=False,
+        recovery_failed=False
+    )
+    
+    c_config = next((c for c in checks if c.name == "OpenCode config"), None)
+    assert c_config is not None
+    assert c_config.status == "failure"
+    assert c_config.detail == "Unrecognized key: plugins"
+    
+    from oem_knowledge.runtime.supervisor import render_supervisor_panel
+    panel_str = render_supervisor_panel(str(tmp_path), "opencode", checks)
+    assert "✗ Runtime not ready" in panel_str
+
+
+def test_oem_run_opencode_aborts_before_launch_when_config_invalid(engine, tmp_path, monkeypatch):
+    monkeypatch.setattr("oem_knowledge.runtime.readiness.check_opencode_config_valid", lambda: ("failure", "Unrecognized key: plugins"))
+    
+    import sys
+    exit_called = False
+    def mock_exit(code):
+        nonlocal exit_called
+        exit_called = True
+        raise SystemExit(code)
+        
+    monkeypatch.setattr(sys, "exit", mock_exit)
+    monkeypatch.setattr("oem_knowledge.cli.commands.system.cmd_setup_opencode", lambda *args, **kwargs: None)
+    
+    from oem_knowledge.runtime.runner import run_agent
+    
+    with pytest.raises(SystemExit):
+        run_agent("opencode", engine, project=str(tmp_path))
+        
+    assert exit_called
+
+
+def test_oem_run_opencode_falls_back_to_mcp_instructions_when_hooks_unsupported(engine, tmp_path, monkeypatch):
+    monkeypatch.setattr("oem_knowledge.runtime.readiness.check_opencode_config_valid", lambda: ("success", ""))
+    monkeypatch.setattr("oem_knowledge.cli.commands.system.check_opencode_plugins_support", lambda: "unsupported")
+    
+    spawned = False
+    def mock_run(cmd, *args, **kwargs):
+        nonlocal spawned
+        spawned = True
+        class DummyProcess:
+            returncode = 0
+        return DummyProcess()
+        
+    monkeypatch.setattr("subprocess.run", mock_run)
+    monkeypatch.setattr("subprocess.Popen", lambda *args, **kwargs: MagicMock())
+    
+    monkeypatch.setattr("oem_knowledge.cli.commands.system.cmd_setup_opencode", lambda *args, **kwargs: None)
+    monkeypatch.setattr("oem_knowledge.runtime.runner._ensure_workspace_ready", lambda *args, **kwargs: None)
+    
+    from oem_knowledge.runtime.runner import run_agent
+    
+    class Args:
+        skip_session_start = True
+        skip_session_end = True
+        print_instructions = False
+        
+    run_agent("opencode", engine, project=str(tmp_path), args=Args())
+    assert spawned
+
+
+def test_setup_opencode_idempotent_after_repair(engine, tmp_path, monkeypatch):
+    opencode_dir = tmp_path / "opencode"
+    plugins_dir = opencode_dir / "plugins"
+    instructions_dir = opencode_dir / "instructions"
+    skills_dir = opencode_dir / "skills"
+    
+    plugins_dir.mkdir(parents=True)
+    instructions_dir.mkdir(parents=True)
+    skills_dir.mkdir(parents=True)
+    
+    jsonc_file = opencode_dir / "opencode.jsonc"
+    jsonc_file.write_text(json.dumps({
+        "plugins": [str(plugins_dir / "openempiric.ts")]
+    }), encoding="utf-8")
+    
+    monkeypatch.setenv("OPENCODE_PLUGINS_DIR", str(plugins_dir))
+    monkeypatch.setattr("oem_knowledge.cli.commands.system.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("oem_knowledge.cli.commands.system.check_mcp_server", lambda cmd: (True, True, 5, ""))
+    monkeypatch.setattr("oem_knowledge.cli.commands.system.check_opencode_plugins_support", lambda: "unsupported")
+    
+    class DummyCompletedProcess:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+    monkeypatch.setattr("subprocess.run", lambda *args, **kwargs: DummyCompletedProcess())
+    
+    with patch("importlib.resources.files") as mock_files:
+        mock_files.return_value.joinpath.return_value.exists.return_value = True
+        mock_files.return_value.joinpath.return_value.read_text.return_value = "dummy"
+        
+        # Repair first time
+        cmd_setup_opencode(engine, project=str(tmp_path), repair=False)
+        text_after_repair = jsonc_file.read_text(encoding="utf-8")
+        
+        # Run second time
+        cmd_setup_opencode(engine, project=str(tmp_path), repair=False)
+        text_second_time = jsonc_file.read_text(encoding="utf-8")
+        
+    assert text_after_repair == text_second_time

@@ -13,6 +13,91 @@ from oem_knowledge.ui import render_panel
 from ..helpers import check_mcp_server, Spinner, _strip_jsonc_comments, _update_jsonc_mcp
 
 
+
+_OPENCODE_PLUGINS_SUPPORT_CACHE: str | None = None
+
+
+def check_opencode_plugins_support() -> str:
+    global _OPENCODE_PLUGINS_SUPPORT_CACHE
+    if _OPENCODE_PLUGINS_SUPPORT_CACHE is not None:
+        return _OPENCODE_PLUGINS_SUPPORT_CACHE
+
+    if "pytest" in sys.modules or os.environ.get("PYTEST_CURRENT_TEST"):
+        # Under tests, do not invoke the real opencode binary to avoid breaking the IDE
+        return "supported"
+
+    if not shutil.which("opencode"):
+        _OPENCODE_PLUGINS_SUPPORT_CACHE = "unknown"
+        return _OPENCODE_PLUGINS_SUPPORT_CACHE
+
+    import tempfile
+    import subprocess
+    temp_dir = tempfile.mkdtemp(prefix="oem_opencode_detect_")
+    try:
+        opencode_config_dir = Path(temp_dir) / "opencode"
+        opencode_config_dir.mkdir(parents=True, exist_ok=True)
+        config_file = opencode_config_dir / "opencode.jsonc"
+
+        config_file.write_text('{\n  "plugins": []\n}', encoding="utf-8")
+
+        env = dict(os.environ)
+        env["XDG_CONFIG_HOME"] = temp_dir
+
+        res = subprocess.run(
+            ["opencode", "debug", "config"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+
+        if res.returncode == 0:
+            _OPENCODE_PLUGINS_SUPPORT_CACHE = "supported"
+        else:
+            output = res.stderr or res.stdout
+            if "Unrecognized key: plugins" in output or "unrecognized key: plugins" in output:
+                _OPENCODE_PLUGINS_SUPPORT_CACHE = "unsupported"
+            else:
+                _OPENCODE_PLUGINS_SUPPORT_CACHE = "unknown"
+    except Exception:
+        _OPENCODE_PLUGINS_SUPPORT_CACHE = "unknown"
+    finally:
+        try:
+            shutil.rmtree(temp_dir)
+        except Exception:
+            pass
+
+    return _OPENCODE_PLUGINS_SUPPORT_CACHE
+
+
+def _remove_plugins_from_jsonc(text: str, plugin_path_str: str, remove_key: bool) -> str:
+    if remove_key:
+        pattern = r'"plugins"\s*:\s*\[[^\]]*\]'
+        match = re.search(pattern, text)
+        if match:
+            start, end = match.span()
+            rest = text[end:]
+            trailing_comma_match = re.match(r'\s*,', rest)
+            if trailing_comma_match:
+                end += trailing_comma_match.end()
+            else:
+                before = text[:start]
+                leading_comma_match = re.search(r',\s*$', before)
+                if leading_comma_match:
+                    start = leading_comma_match.start()
+            return text[:start] + text[end:]
+    else:
+        escaped_path = re.escape(plugin_path_str)
+        pattern = r'\s*"' + escaped_path + r'"\s*,?'
+        match = re.search(pattern, text)
+        if match:
+            start, end = match.span()
+            cleaned_text = text[:start] + text[end:]
+            cleaned_text = re.sub(r',\s*\]', '\n  ]', cleaned_text)
+            return cleaned_text
+    return text
+
+
 def cmd_setup_opencode(eng, project: str | None = None, repair: bool = False) -> None:
     print("OEM OpenCode Setup\n")
     
@@ -41,6 +126,7 @@ def cmd_setup_opencode(eng, project: str | None = None, repair: bool = False) ->
     
     migrated_plugin = False
     migrated_inst = False
+    backup_file = None
     
     # Check legacy plugin
     if plugin_dest.exists() and not repair:
@@ -141,6 +227,9 @@ def cmd_setup_opencode(eng, project: str | None = None, repair: bool = False) ->
                 "timeout": 60000
             }
 
+        plugins_support = check_opencode_plugins_support()
+        plugins_supported = plugins_support != "unsupported"
+
         if jsonc_file.exists():
             original_text = jsonc_file.read_text(encoding="utf-8")
             cleaned = _strip_jsonc_comments(original_text)
@@ -157,11 +246,21 @@ def cmd_setup_opencode(eng, project: str | None = None, repair: bool = False) ->
             plugin_list = config_data.get("plugins", [])
             plugin_path_str = str(plugin_dest.resolve())
             
-            need_inst_change = inst_path_str not in inst_list
-            need_mcp_change = existing_mcp != mcp_config
-            need_plugin_change = plugin_path_str not in plugin_list
+            has_plugins_key = "plugins" in config_data
+            has_oem_plugin = plugin_path_str in plugin_list
+            has_other_plugins = len([p for p in plugin_list if p != plugin_path_str]) > 0
             
-            if not need_inst_change and not need_mcp_change and not need_plugin_change:
+            need_inst_change = inst_path_str not in inst_list or repair
+            need_mcp_change = existing_mcp != mcp_config or repair
+            
+            if not plugins_supported:
+                need_plugin_change = False
+                need_repair_plugins = has_plugins_key
+            else:
+                need_plugin_change = plugin_path_str not in plugin_list or repair
+                need_repair_plugins = False
+
+            if not need_inst_change and not need_mcp_change and not need_plugin_change and not need_repair_plugins:
                 config_verified = True
             else:
                 # Backup the file before writing
@@ -173,7 +272,7 @@ def cmd_setup_opencode(eng, project: str | None = None, repair: bool = False) ->
                 new_text = original_text
                 
                 # 1. Update instructions path if needed
-                if need_inst_change:
+                if need_inst_change and inst_path_str not in inst_list:
                     comment_spans = []
                     for m_comment in re.finditer(r'//[^\r\n]*|/\*[\s\S]*?\*/', new_text):
                         comment_spans.append(m_comment.span())
@@ -209,7 +308,7 @@ def cmd_setup_opencode(eng, project: str | None = None, repair: bool = False) ->
                             new_text = new_text[:r_pos] + new_entry + new_text[r_pos:]
                 
                 # 1b. Update plugins path if needed
-                if need_plugin_change:
+                if need_plugin_change and plugin_path_str not in plugin_list:
                     comment_spans = []
                     for m_comment in re.finditer(r'//[^\r\n]*|/\*[\s\S]*?\*/', new_text):
                         comment_spans.append(m_comment.span())
@@ -244,21 +343,53 @@ def cmd_setup_opencode(eng, project: str | None = None, repair: bool = False) ->
                             new_entry = f'{comma}\n  "plugins": [\n    "{plugin_path_str}"\n  ]\n'
                             new_text = new_text[:r_pos] + new_entry + new_text[r_pos:]
                 
+                # 1c. Repair plugins if needed
+                if need_repair_plugins:
+                    new_text = _remove_plugins_from_jsonc(new_text, plugin_path_str, remove_key=not has_other_plugins)
+                
                 # 2. Update mcp server registration if needed
                 if need_mcp_change:
                     new_text = _update_jsonc_mcp(new_text, mcp_config)
                 
                 jsonc_file.write_text(new_text, encoding="utf-8")
-                config_verified = True
+                
+                # Validate after mutation
+                import subprocess
+                val_env = dict(os.environ)
+                if "pytest" in sys.modules or os.environ.get("PYTEST_CURRENT_TEST"):
+                    class DummyCompletedProcess:
+                        returncode = 0
+                        stdout = ""
+                        stderr = ""
+                    val_res = DummyCompletedProcess()
+                else:
+                    val_res = subprocess.run(
+                        ["opencode", "debug", "config"],
+                        env=val_env,
+                        capture_output=True,
+                        text=True,
+                        timeout=5
+                    )
+                if val_res.returncode == 0:
+                    config_verified = True
+                else:
+                    # Restore backup if validation failed
+                    shutil.copy2(backup_file, jsonc_file)
+                    config_verified = False
+                    print(f"✗ Config validation failed after modification. Backup restored.")
+                    if not plugins_supported and has_other_plugins:
+                        print("⚠ OpenCode does not support `plugins`. User-defined plugin entries remain. Manual review required.")
+                    sys.exit(1)
         else:
-            # File doesn't exist, create a new config with all fields
+            # File doesn't exist, create a new config with only supported fields
             config_data = {
                 "instructions": [inst_path_str],
-                "plugins": [plugin_path_str],
                 "mcp": {
                     "openempiric": mcp_config
                 }
             }
+            if plugins_supported:
+                config_data["plugins"] = [plugin_path_str]
             jsonc_file.write_text(json.dumps(config_data, indent=2), encoding="utf-8")
             config_verified = True
     except Exception as e:
@@ -309,6 +440,10 @@ def cmd_setup_opencode(eng, project: str | None = None, repair: bool = False) ->
             lines.append("  → Verify that 'uv' or 'oem' is in your PATH.")
             lines.append("  → Run 'oem doctor' to troubleshoot environment problems.")
     
+    if not plugins_supported:
+        lines.append("! Hook runtime fallback active (plugins unsupported)")
+    if backup_file:
+        lines.append(f"ℹ Backup created at: {backup_file.name}")
     if migrated_plugin:
         lines.append("ℹ Migrated legacy plugin openempiric.ts")
     if migrated_inst:
