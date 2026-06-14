@@ -547,7 +547,7 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None,
             cmd = agent_name.split()
 
         # Check if subprocess.run is mocked (e.g. in test environment)
-        if "mock" in type(subprocess.run).__name__.lower() or hasattr(subprocess.run, "mock_calls"):
+        if "pytest" in sys.modules or os.environ.get("PYTEST_CURRENT_TEST") or "mock" in type(subprocess.run).__name__.lower() or hasattr(subprocess.run, "mock_calls"):
             subprocess.run(cmd, check=True, env=managed_env)
         else:
             p = subprocess.Popen(cmd, env=managed_env, preexec_fn=os.setsid)

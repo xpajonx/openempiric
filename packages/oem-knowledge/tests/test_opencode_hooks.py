@@ -284,26 +284,12 @@ def test_hook_runtime_does_not_mutate_agents_md(engine, tmp_path, monkeypatch):
     assert agents_md.read_text(encoding="utf-8") == original_content
 
 def test_typescript_plugin_loading_and_methods(tmp_path):
-    # Test TypeScript compilation/loading using Node.js subprocess to Spike hook exports
+    # Test TypeScript compilation/loading by directly reading and asserting exports
     plugin_path = Path(__file__).resolve().parent.parent / "src" / "oem_knowledge" / "plugins" / "openempiric.ts"
     assert plugin_path.exists()
     
-    # We test that the file can be parsed for exports using a quick check or ts-node spike if available
-    # Check if ts-node is installed in local openempiric-dev
-    opencode_dir = Path.home() / ".config" / "opencode"
-    node_modules = opencode_dir / "node_modules"
-    
-    # We check if we can run syntax check on it
-    js_checker = f"""
-    const fs = require('fs');
-    const content = fs.readFileSync('{plugin_path.as_posix()}', 'utf-8');
-    if (!content.includes('export const OpenempiricPlugin')) {{
-        process.exit(1);
-    }}
-    console.log('TS Plugin syntax check passed');
-    """
-    res = subprocess.run(["node", "-e", js_checker], capture_output=True, text=True)
-    assert res.returncode == 0
+    content = plugin_path.read_text(encoding="utf-8")
+    assert "export const OpenempiricPlugin" in content
 
 
 def test_setup_opencode_does_not_write_unsupported_plugins_key(engine, tmp_path, monkeypatch):
