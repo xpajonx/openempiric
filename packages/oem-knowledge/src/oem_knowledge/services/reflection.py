@@ -624,6 +624,7 @@ class ReflectionService:
                 "concept": e["concept_candidates"][0] if e["concept_candidates"] else "General Learning",
                 "evidence": e["evidence"],
                 "confidence": e["confidence"],
+                "event_id": e["event_id"],
             }
             for e in canonical_events
         ]

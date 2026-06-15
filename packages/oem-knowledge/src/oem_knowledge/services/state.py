@@ -450,6 +450,13 @@ class StateService:
             if event.get("evidence"):
                 cdata["evidence_count"] = cdata.get("evidence_count", 0) + 1
 
+            event_id = event.get("event_id") or event.get("id")
+            if event_id:
+                if "source_event_ids" not in cdata:
+                    cdata["source_event_ids"] = []
+                if event_id not in cdata["source_event_ids"]:
+                    cdata["source_event_ids"].append(event_id)
+
             cdata = self.evaluate_concept_status(
                 cdata=cdata,
                 e_type=event.get("event_type", "observation"),
@@ -470,7 +477,7 @@ class StateService:
                 else:
                     body = f"# {cdata['canonical_name'].replace('-', ' ').title()}\n\nThis concept is a validated organizational knowledge node.\n\n## Learnings\n"
 
-                concept_content = f"---\nconcept_id: {cid}\ncanonical_name: {cdata['canonical_name']}\nstatus: {cdata['status']}\nconfidence: {cdata['confidence']}\nevidence_count: {cdata['evidence_count']}\nsession_count: {cdata.get('session_count', 0)}\naliases: {json.dumps(cdata.get('aliases', []))}\n---\n{body}"
+                concept_content = f"---\nconcept_id: {cid}\ncanonical_name: {cdata['canonical_name']}\nstatus: {cdata['status']}\nconfidence: {cdata['confidence']}\nevidence_count: {cdata['evidence_count']}\nsession_count: {cdata.get('session_count', 0)}\naliases: {json.dumps(cdata.get('aliases', []))}\nsource_event_ids: {json.dumps(cdata.get('source_event_ids', []))}\n---\n{body}"
                 self.engine.materialization._safe_write_concept_file(concept_file, concept_content, project)
                 self.engine.materialization._sync_index(cdata["canonical_name"], cid, project)
                 materialized_log.append(cid)

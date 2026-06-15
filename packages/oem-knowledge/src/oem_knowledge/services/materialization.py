@@ -354,6 +354,13 @@ class MaterializationService:
                     if evidence:
                         cdata["evidence_count"] = cdata.get("evidence_count", 0) + 1
 
+                    event_id = event.get("event_id") or event.get("id")
+                    if event_id:
+                        if "source_event_ids" not in cdata:
+                            cdata["source_event_ids"] = []
+                        if event_id not in cdata["source_event_ids"]:
+                            cdata["source_event_ids"].append(event_id)
+
                     cdata = self.engine.state.evaluate_concept_status(cdata, e_type, session_id=session_id, fitness_data=fitness_data)
                     new_status = cdata["status"]
                     registry[cid] = cdata
@@ -364,10 +371,38 @@ class MaterializationService:
                         if new_status in ("validated", "canonical", "needs_review"):
                             existing_body = ""
                             is_new_concept = cid not in initial_registry_keys
+                            
+                            retries = 0
+                            max_allocation_retries = 3
+                            while is_new_concept and concept_file.exists() and retries < max_allocation_retries:
+                                retries += 1
+                                from oem_knowledge.concept_id import allocate_concept_id
+                                new_cid = allocate_concept_id(registry, concepts_dir, reserved_ids)
+                                logger.warning(
+                                    "Concept ID collision detected for %s. Reallocating to %s (retry %d/%d)",
+                                    cid, new_cid, retries, max_allocation_retries
+                                )
+                                # Clean up old cid from registry and reserved_ids
+                                if cid in registry:
+                                    del registry[cid]
+                                if cid in reserved_ids:
+                                    reserved_ids.remove(cid)
+                                    
+                                cid = new_cid
+                                cdata["concept_id"] = cid
+                                registry[cid] = cdata
+                                reserved_ids.add(cid)
+                                concept_file = concepts_dir / f"{cid}.md"
+                                
                             if is_new_concept and concept_file.exists():
                                 from oem_knowledge.concept_id import ConceptIdCollisionError
                                 raise ConceptIdCollisionError(
-                                    f"Concept ID collision: wiki file {concept_file} already exists for new concept {cid}"
+                                    message=f"Concept ID collision: wiki file {concept_file} already exists for new concept {cid}",
+                                    concept_id=cid,
+                                    target_path=concept_file,
+                                    in_registry=False,
+                                    in_wiki=True,
+                                    suggested_next_id=None
                                 )
                             is_new_file = not concept_file.exists()
                             if not is_new_file:
@@ -397,6 +432,7 @@ confidence: {cdata["confidence"]}
 evidence_count: {cdata["evidence_count"]}
 session_count: {cdata["session_count"]}
 aliases: {json.dumps(cdata.get("aliases", []))}
+source_event_ids: {json.dumps(cdata.get("source_event_ids", []))}
 ---
 {body}"""
 

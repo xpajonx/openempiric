@@ -23,6 +23,7 @@ class ConceptData(BaseModel):
     created_at: float = Field(default_factory=time.time)
     updated_at: float = Field(default_factory=time.time)
     relationships: list[ConceptRelation] = Field(default_factory=list)
+    source_event_ids: list[str] = Field(default_factory=list)
 
 
 class KnowledgeEvent(BaseModel):

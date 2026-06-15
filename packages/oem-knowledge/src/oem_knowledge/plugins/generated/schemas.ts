@@ -17,6 +17,7 @@ export interface ConceptData {
   created_at: number;
   updated_at: number;
   relationships: ConceptRelation[];
+  source_event_ids: string[];
 }
 
 export interface KnowledgeEvent {
