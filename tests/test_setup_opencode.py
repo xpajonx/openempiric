@@ -309,3 +309,52 @@ def test_setup_opencode_tool_enumeration():
     assert "knowledge_usage_report" in tool_names
 
 
+def test_setup_opencode_preserves_multiple_mcp_configs(temp_home, tmp_proj):
+    """Verify that updating openempiric config preserves adjacent MCP configurations."""
+    import re
+    opencode_dir = temp_home / ".config" / "opencode"
+    opencode_dir.mkdir(parents=True, exist_ok=True)
+    jsonc_file = opencode_dir / "opencode.jsonc"
+    
+    initial_content = (
+        "{\n"
+        "  \"mcp\": {\n"
+        "    \"openempiric\": {\n"
+        "      \"type\": \"local\",\n"
+        "      \"command\": \"oem\",\n"
+        "      \"args\": [\"mcp\"],\n"
+        "      \"enabled\": true,\n"
+        "      \"timeout\": 60000\n"
+        "    },\n"
+        "    \"grep_app\": {\n"
+        "      \"type\": \"remote\",\n"
+        "      \"url\": \"https://mcp.grep.app\",\n"
+        "      \"enabled\": true\n"
+        "    },\n"
+        "    \"chrome-devtools\": {\n"
+        "      \"type\": \"local\",\n"
+        "      \"command\": [\"npx\", \"-y\", \"chrome-devtools-mcp@latest\"],\n"
+        "      \"enabled\": true,\n"
+        "      \"timeout\": 120000\n"
+        "    }\n"
+        "  }\n"
+        "}"
+    )
+    jsonc_file.write_text(initial_content, encoding="utf-8")
+    
+    with patch("pathlib.Path.home", return_value=temp_home):
+        with patch.object(sys, "argv", ["oem", "setup", "opencode"]):
+            main()
+            
+    text = jsonc_file.read_text(encoding="utf-8")
+    cleaned = re.sub(r'(\"(?:\\\\.|[^\"\\\\])*\")|//[^\\r\\n]*|/\\*[\\s\\S]*?\\*/', lambda m: m.group(1) if m.group(1) else "", text)
+    data = json.loads(cleaned)
+    
+    assert "openempiric" in data["mcp"]
+    assert "grep_app" in data["mcp"]
+    assert "chrome-devtools" in data["mcp"]
+    assert data["mcp"]["grep_app"]["url"] == "https://mcp.grep.app"
+    assert data["mcp"]["chrome-devtools"]["command"] == ["npx", "-y", "chrome-devtools-mcp@latest"]
+
+
+

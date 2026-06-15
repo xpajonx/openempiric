@@ -50,7 +50,7 @@ def _update_jsonc_mcp(original_text: str, mcp_config: dict) -> str:
                     break
             if match_oe:
                 start_pos = match_oe.start()
-                brace_start = original_text.find('{', match_oe.end())
+                brace_start = match_oe.end() - 1
                 if brace_start != -1:
                     depth = 1
                     brace_end = -1
