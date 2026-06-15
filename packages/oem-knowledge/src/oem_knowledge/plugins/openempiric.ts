@@ -218,7 +218,7 @@ Current memory baseline:
   }
 }
 
-function resolveRepoDir(): string {
+function resolveRepoDir(): string | null {
   if (process.env.OPENEMPIRIC_DIR) {
     return process.env.OPENEMPIRIC_DIR
   }
@@ -239,6 +239,7 @@ function resolveRepoDir(): string {
 
   const home = os.homedir()
   const candidates = [
+    path.join(home, ".config", "openempiric-dev"),
     path.join(home, ".config", "opencode", "harness-mcp", "opencode-harness"),
     path.join(home, "openempiric"),
     path.join(home, "projects", "openempiric"),
@@ -251,7 +252,7 @@ function resolveRepoDir(): string {
     }
   }
 
-  return path.join(home, ".config", "opencode", "harness-mcp", "opencode-harness")
+  return null
 }
 
 export const OpenempiricPlugin: Plugin = async (input, options) => {
@@ -263,9 +264,12 @@ export const OpenempiricPlugin: Plugin = async (input, options) => {
       try {
         const existingMcp = config.mcp?.openempiric || {}
         config.mcp = config.mcp || {}
-        config.mcp.openempiric = {
-          type: "local",
-          command: [
+        
+        let mcpCmd: string | string[]
+        let mcpArgs: string[] | undefined
+        
+        if (repoDir && fs.existsSync(path.join(repoDir, "pyproject.toml"))) {
+          mcpCmd = [
             "uv",
             "run",
             "--directory",
@@ -273,7 +277,17 @@ export const OpenempiricPlugin: Plugin = async (input, options) => {
             "python",
             "-m",
             "oem_knowledge.server"
-          ],
+          ]
+          mcpArgs = undefined
+        } else {
+          mcpCmd = "oem"
+          mcpArgs = ["mcp"]
+        }
+
+        config.mcp.openempiric = {
+          type: "local",
+          command: mcpCmd,
+          ...(mcpArgs ? { args: mcpArgs } : {}),
           enabled: true,
           timeout: 60000,
           ...existingMcp,
