@@ -24,16 +24,71 @@ def _update_jsonc_mcp(original_text: str, mcp_config: dict) -> str:
     def in_comment(pos):
         return any(start <= pos < end for start, end in comment_spans)
         
+    new_text = original_text
+
+    # Safe cleanup of legacy oem server key if OEM-managed
+    has_oem = "oem" in config_data.get("mcp", {})
+    if has_oem:
+        oem_entry = config_data["mcp"]["oem"]
+        cmd_str = str(oem_entry.get("command", ""))
+        args_str = str(oem_entry.get("args", []))
+        is_oem_managed = (
+            "oem" in cmd_str.lower() or 
+            "openempiric" in cmd_str.lower() or 
+            "oem_knowledge" in cmd_str.lower() or
+            "oem" in args_str.lower() or
+            "openempiric" in args_str.lower() or
+            "oem_knowledge" in args_str.lower()
+        )
+        if is_oem_managed:
+            match_oem = None
+            for m in re.finditer(r'"oem"\s*:\s*\{', new_text):
+                if not in_comment(m.start()):
+                    match_oem = m
+                    break
+            if match_oem:
+                start_pos = match_oem.start()
+                brace_start = match_oem.end() - 1
+                depth = 1
+                brace_end = -1
+                for idx in range(brace_start + 1, len(new_text)):
+                    if new_text[idx] == '{':
+                        depth += 1
+                    elif new_text[idx] == '}':
+                        depth -= 1
+                        if depth == 0:
+                            brace_end = idx
+                            break
+                if brace_end != -1:
+                    rest = new_text[brace_end + 1:]
+                    trailing_comma = re.match(r'\s*,', rest)
+                    if trailing_comma:
+                        end_pos = brace_end + 1 + trailing_comma.end()
+                        new_text = new_text[:start_pos] + new_text[end_pos:]
+                    else:
+                        before = new_text[:start_pos]
+                        leading_comma = re.search(r',\s*$', before)
+                        if leading_comma:
+                            start_pos = leading_comma.start()
+                        new_text = new_text[:start_pos] + new_text[brace_end + 1:]
+                    
+                    # Re-evaluate config data and comment spans after mutation
+                    cleaned = _strip_jsonc_comments(new_text)
+                    config_data = json.loads(cleaned, strict=False)
+                    comment_spans = []
+                    for m_comment in re.finditer(r'//[^\r\n]*|/\*[\s\S]*?\*/', new_text):
+                        comment_spans.append(m_comment.span())
+        else:
+            print("Warning: Custom user MCP server named 'oem' detected. Preserving user configuration.")
+
     # Check if config already has correct MCP config
     existing_mcp = config_data.get("mcp", {}).get("openempiric")
     if existing_mcp == mcp_config:
-        return original_text
+        return new_text
         
-    new_text = original_text
-    
     # 1. Find "mcp" key
     match_mcp = None
-    for m in re.finditer(r'"mcp"\s*:\s*\{', original_text):
+    for m in re.finditer(r'"mcp"\s*:\s*\{', new_text):
         if not in_comment(m.start()):
             match_mcp = m
             break
@@ -44,7 +99,7 @@ def _update_jsonc_mcp(original_text: str, mcp_config: dict) -> str:
         if has_oe:
             # Replace existing "openempiric" config
             match_oe = None
-            for m in re.finditer(r'"openempiric"\s*:\s*\{', original_text):
+            for m in re.finditer(r'"openempiric"\s*:\s*\{', new_text):
                 if not in_comment(m.start()):
                     match_oe = m
                     break
@@ -54,27 +109,27 @@ def _update_jsonc_mcp(original_text: str, mcp_config: dict) -> str:
                 if brace_start != -1:
                     depth = 1
                     brace_end = -1
-                    for idx in range(brace_start + 1, len(original_text)):
-                        if original_text[idx] == '{':
+                    for idx in range(brace_start + 1, len(new_text)):
+                        if new_text[idx] == '{':
                             depth += 1
-                        elif original_text[idx] == '}':
+                        elif new_text[idx] == '}':
                             depth -= 1
                             if depth == 0:
                                 brace_end = idx
                                 break
                     if brace_end != -1:
                         serialized_oe = f'"openempiric": {json.dumps(mcp_config, indent=4).replace("\n", "\n    ")}'
-                        new_text = original_text[:start_pos] + serialized_oe + original_text[brace_end + 1:]
+                        new_text = new_text[:start_pos] + serialized_oe + new_text[brace_end + 1:]
         else:
             # Insert "openempiric" at the start of the "mcp" object
             pos = match_mcp.end()
             serialized_oe = f'\n    "openempiric": {json.dumps(mcp_config, indent=4).replace("\n", "\n    ")},'
-            new_text = original_text[:pos] + serialized_oe + original_text[pos:]
+            new_text = new_text[:pos] + serialized_oe + new_text[pos:]
     else:
         # "mcp" key does not exist. Append it before the last closing brace
-        r_pos = original_text.rfind('}')
+        r_pos = new_text.rfind('}')
         if r_pos != -1:
-            before_brace = original_text[:r_pos]
+            before_brace = new_text[:r_pos]
             last_char_match = re.search(r'\S\s*$', before_brace)
             comma = ""
             if last_char_match:
@@ -83,7 +138,7 @@ def _update_jsonc_mcp(original_text: str, mcp_config: dict) -> str:
                     comma = ","
             mcp_serialized = json.dumps({"openempiric": mcp_config}, indent=4).replace("\n", "\n  ")
             new_entry = f'{comma}\n  "mcp": {mcp_serialized}\n'
-            new_text = original_text[:r_pos] + new_entry + original_text[r_pos:]
+            new_text = new_text[:r_pos] + new_entry + new_text[r_pos:]
             
     return new_text
 

@@ -17,6 +17,10 @@ def engine(tmp_path):
     eng.init_project(str(tmp_path))
     return eng
 
+@pytest.fixture(autouse=True)
+def mock_xdg_config_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+
 def test_opencode_setup_installs_oem_hook_runtime(engine, tmp_path, monkeypatch):
     opencode_dir = tmp_path / "opencode"
     plugins_dir = opencode_dir / "plugins"
@@ -112,7 +116,7 @@ def test_opencode_setup_preserves_user_config(engine, tmp_path, monkeypatch):
         cmd_setup_opencode(engine, project=str(tmp_path), repair=False)
         
     # Check that a backup file was written because configuration was modified
-    backups = list(opencode_dir.glob("opencode.jsonc.backup-*"))
+    backups = list(opencode_dir.glob("opencode.jsonc.bak-*"))
     assert len(backups) == 1
     
     # Check preservation of custom elements
@@ -399,7 +403,7 @@ def test_setup_opencode_creates_plugins_directory(engine, tmp_path, monkeypatch)
         mock_files.return_value.joinpath.return_value.read_text.return_value = "dummy"
         cmd_setup_opencode(engine, project=str(tmp_path), repair=True)
         
-    assert (tmp_path / ".config" / "opencode" / "plugins").exists()
+    assert (tmp_path / "opencode" / "plugins").exists()
 
 
 def test_setup_opencode_symlink_or_copy_plugin_asset(engine, tmp_path, monkeypatch):
@@ -467,7 +471,7 @@ def test_setup_opencode_backup_before_config_repair(engine, tmp_path, monkeypatc
         mock_files.return_value.joinpath.return_value.read_text.return_value = "dummy"
         cmd_setup_opencode(engine, project=str(tmp_path), repair=False)
         
-    backups = list(opencode_dir.glob("opencode.jsonc.backup-*"))
+    backups = list(opencode_dir.glob("opencode.jsonc.bak-*"))
     assert len(backups) >= 1
 
 
@@ -596,6 +600,10 @@ def test_oem_run_opencode_aborts_if_config_invalid(engine, tmp_path, monkeypatch
 
 def test_oem_run_opencode_launches_with_local_plugin_directory(engine, tmp_path, monkeypatch):
     monkeypatch.setattr("oem_knowledge.runtime.readiness.check_opencode_config_valid", lambda: ("success", ""))
+    
+    opencode_dir = tmp_path / "opencode"
+    opencode_dir.mkdir(parents=True, exist_ok=True)
+    (opencode_dir / "opencode.jsonc").write_text('{"mcp": {"openempiric": {}}}', encoding="utf-8")
     
     spawned = False
     def mock_run(cmd, *args, **kwargs):

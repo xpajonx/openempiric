@@ -262,14 +262,42 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None,
     # Verify OpenCode setup automatically
     if agent_name == "opencode":
         try:
-            from oem_knowledge.cli.commands.system import cmd_setup_opencode
-            cmd_setup_opencode(eng, project=proj, repair=False)
-        except Exception as e:
-            logging.warning("Auto OpenCode setup failed: %s", e)
-            
-        try:
             from oem_knowledge.runtime.readiness import check_opencode_config_valid
             valid_status, err_msg = check_opencode_config_valid()
+            
+            # Resolve config path
+            xdg_config = os.environ.get("XDG_CONFIG_HOME")
+            if xdg_config:
+                opencode_dir = Path(xdg_config) / "opencode"
+            else:
+                opencode_dir = Path.home() / ".config" / "opencode"
+            config_file = opencode_dir / "opencode.jsonc"
+            
+            has_oe = False
+            if config_file.exists():
+                try:
+                    from oem_knowledge.cli.helpers import _strip_jsonc_comments
+                    cleaned = _strip_jsonc_comments(config_file.read_text(encoding="utf-8"))
+                    config_data = json.loads(cleaned, strict=False)
+                    if "openempiric" in config_data.get("mcp", {}):
+                        has_oe = True
+                except Exception:
+                    pass
+            
+            if not config_file.exists() or not has_oe:
+                from oem_knowledge.ui import render_panel
+                print(render_panel(
+                    "OpenCode Integration | NOT CONFIGURED",
+                    [
+                        "OpenCode integration is not configured.",
+                        "",
+                        "Run:",
+                        "  oem setup opencode"
+                    ],
+                    status="error"
+                ))
+                sys.exit(1)
+                
             if valid_status == "failure":
                 from oem_knowledge.ui import render_panel
                 print(render_panel(
@@ -278,12 +306,14 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None,
                         "OpenCode config is invalid.",
                         err_msg,
                         "",
-                        "Suggested fix:",
+                        "Run:",
                         "  oem setup opencode --repair"
                     ],
                     status="error"
                 ))
                 sys.exit(1)
+        except SystemExit:
+            raise
         except Exception as e:
             logging.warning("OpenCode configuration validation failed: %s", e)
 

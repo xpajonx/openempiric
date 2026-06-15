@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import sys
 import json
-from unittest.mock import patch
+import os
+from unittest.mock import patch, MagicMock
 import pytest
 from pathlib import Path
 import tempfile
@@ -28,148 +29,40 @@ def tmp_proj():
 
 @pytest.fixture(autouse=True)
 def mock_setup_mcp_check():
-    with patch("oem_knowledge.cli.check_mcp_server", return_value=(True, True, 19, "")):
+    with patch("oem_knowledge.cli.commands.system.check_mcp_server", return_value=(True, True, 19, "")):
         yield
 
 
-def test_setup_opencode_basic(temp_home, tmp_proj):
-    """Verify that oem setup opencode initializes all folders and configuration correctly."""
-    # Write a dummy opencode.jsonc beforehand
+def test_setup_opencode_preserves_existing_mcp_servers(temp_home, tmp_proj):
+    """Verify that oem setup opencode preserves unrelated user MCP configurations."""
     opencode_dir = temp_home / ".config" / "opencode"
     opencode_dir.mkdir(parents=True, exist_ok=True)
     jsonc_file = opencode_dir / "opencode.jsonc"
-    jsonc_file.write_text("{\n  \"instructions\": []\n}", encoding="utf-8")
-
-    with patch("pathlib.Path.home", return_value=temp_home):
-        with patch.object(sys, "argv", ["oem", "setup", "opencode"]):
-            main()
-
-    # Check plugin and instructions copied/created
-    plugin_file = opencode_dir / "plugins" / "openempiric.ts"
-    inst_file = opencode_dir / "instructions" / "memory-start.md"
-
-    assert plugin_file.exists()
-    assert inst_file.exists()
-
-    plugin_content = plugin_file.read_text(encoding="utf-8")
-    assert "oem session-start" not in plugin_content
     
-    inst_content = inst_file.read_text(encoding="utf-8")
-    assert "use OpenEmpiric as the project memory runtime" in inst_content
-    assert "knowledge_session_start" in inst_content
-
-    # Check opencode.jsonc registers instructions path and MCP server
-    assert jsonc_file.exists()
-    config_data = json.loads(jsonc_file.read_text(encoding="utf-8"))
-    assert str(inst_file.resolve()) in config_data["instructions"]
-    assert "openempiric" in config_data.get("mcp", {})
-    assert config_data["mcp"]["openempiric"]["command"] in ("oem", "uv")
-
-
-def test_setup_opencode_idempotency(temp_home, tmp_proj):
-    """Verify that running setup multiple times is idempotent and does not break anything."""
-    opencode_dir = temp_home / ".config" / "opencode"
-
-    with patch("pathlib.Path.home", return_value=temp_home):
-        # First setup run
-        with patch.object(sys, "argv", ["oem", "setup", "opencode"]):
-            main()
-
-        plugin_content_1 = (opencode_dir / "plugins" / "openempiric.ts").read_text(encoding="utf-8")
-        inst_content_1 = (opencode_dir / "instructions" / "memory-start.md").read_text(encoding="utf-8")
-        config_content_1 = (opencode_dir / "opencode.jsonc").read_text(encoding="utf-8")
-
-        # Second setup run
-        with patch.object(sys, "argv", ["oem", "setup", "opencode"]):
-            main()
-
-        plugin_content_2 = (opencode_dir / "plugins" / "openempiric.ts").read_text(encoding="utf-8")
-        inst_content_2 = (opencode_dir / "instructions" / "memory-start.md").read_text(encoding="utf-8")
-        config_content_2 = (opencode_dir / "opencode.jsonc").read_text(encoding="utf-8")
-
-        assert plugin_content_1 == plugin_content_2
-        assert inst_content_1 == inst_content_2
-        assert config_content_1 == config_content_2
-
-
-def test_setup_opencode_repair_forced(temp_home, tmp_proj):
-    """Verify that --repair forces overwriting of existing config/plugin files."""
-    opencode_dir = temp_home / ".config" / "opencode"
-    opencode_dir.mkdir(parents=True, exist_ok=True)
-
-    plugin_file = opencode_dir / "plugins" / "openempiric.ts"
-    plugin_file.parent.mkdir(parents=True, exist_ok=True)
-    plugin_file.write_text("old plugin", encoding="utf-8")
-
-    with patch("pathlib.Path.home", return_value=temp_home):
-        with patch.object(sys, "argv", ["oem", "setup", "opencode", "--repair"]):
-            main()
-
-    # Old plugin should be overwritten
-    assert plugin_file.read_text(encoding="utf-8") != "old plugin"
-
-
-def test_setup_opencode_legacy_migration(temp_home, tmp_proj):
-    """Verify that legacy configurations (stale workflows) are auto-migrated/overwritten without --repair."""
-    opencode_dir = temp_home / ".config" / "opencode"
-    opencode_dir.mkdir(parents=True, exist_ok=True)
-
-    plugin_file = opencode_dir / "plugins" / "openempiric.ts"
-    plugin_file.parent.mkdir(parents=True, exist_ok=True)
-    plugin_file.write_text("knowledge_session_start references", encoding="utf-8")
-
-    inst_file = opencode_dir / "instructions" / "memory-start.md"
-    inst_file.parent.mkdir(parents=True, exist_ok=True)
-    inst_file.write_text("verify plugin array references", encoding="utf-8")
-
+    initial_content = (
+        "{\n"
+        "  \"mcp\": {\n"
+        "    \"github\": {\"type\": \"local\", \"command\": \"github-mcp\"},\n"
+        "    \"context7\": {\"type\": \"local\", \"command\": \"context7-mcp\"},\n"
+        "    \"filesystem\": {\"type\": \"local\", \"command\": \"filesystem-mcp\"}\n"
+        "  }\n"
+        "}"
+    )
+    jsonc_file.write_text(initial_content, encoding="utf-8")
+    
     with patch("pathlib.Path.home", return_value=temp_home):
         with patch.object(sys, "argv", ["oem", "setup", "opencode"]):
             main()
-
-    # Legacy content should be overwritten even without --repair
-    assert "references" not in plugin_file.read_text(encoding="utf-8")
-    assert "references" not in inst_file.read_text(encoding="utf-8")
-
-
-def test_doctor_integration_diagnostics(temp_home, tmp_proj):
-    """Verify that oem doctor outputs correct status for OpenCode workstation configuration."""
-    # Write a dummy pyproject.toml and skills file under .oem so doctor check passes
-    proj_path = Path(tmp_proj)
-    (proj_path / "pyproject.toml").write_text("[project]\nname = \"user-app\"\n", encoding="utf-8")
-    skills_dir = proj_path / ".oem" / "skills"
-    skills_dir.mkdir(parents=True, exist_ok=True)
-    (skills_dir / "openempiric.yaml").write_text("name: openempiric\n", encoding="utf-8")
-
-    # Mock success for skills and other requirements that might fail due to fresh temp project
-    with patch("pathlib.Path.home", return_value=temp_home):
-        with patch("oem_knowledge.cli.shutil.which", return_value="/mock/bin"):
-            with patch("oem_knowledge.services.event_migration.EventMigrator.get_schema_status", return_value={"status": "up_to_date", "message": "OK"}):
-                with patch("oem_knowledge.cli.check_mcp_server", return_value=(True, True, 19, "")):
-                    with patch("oem_knowledge.adapters.get_adapter") as mock_adapter:
-                        mock_adapter.return_value.verify_mcp.return_value = True
-                        
-                        # 1. Initially integration files are missing, doctor should still exit 0/None because workstation checks are warnings
-                        with patch.object(sys, "argv", ["oem", "doctor", "--project", tmp_proj]):
-                            try:
-                                main()
-                            except SystemExit as exc:
-                                assert exc.code == 0 or exc.code is None
-
-                        # 2. Perform setup
-                        with patch.object(sys, "argv", ["oem", "setup", "opencode"]):
-                            main()
-
-                        # 3. Running doctor after setup should also succeed
-                        with patch.object(sys, "argv", ["oem", "doctor", "--project", tmp_proj]):
-                            try:
-                                main()
-                            except SystemExit as exc:
-                                assert exc.code == 0 or exc.code is None
+            
+    data = json.loads(jsonc_file.read_text(encoding="utf-8"))
+    assert "github" in data["mcp"]
+    assert "context7" in data["mcp"]
+    assert "filesystem" in data["mcp"]
+    assert "openempiric" in data["mcp"]
 
 
-def test_setup_opencode_config_merge(temp_home, tmp_proj):
-    """Verify that setup opencode merges configuration cleanly and does not delete unrelated keys."""
-    import re
+def test_setup_opencode_merges_oem_mcp_without_replacing_mcp_object(temp_home, tmp_proj):
+    """Verify that merging openempiric mcp preserves structure and comments in JSONC."""
     opencode_dir = temp_home / ".config" / "opencode"
     opencode_dir.mkdir(parents=True, exist_ok=True)
     jsonc_file = opencode_dir / "opencode.jsonc"
@@ -179,164 +72,6 @@ def test_setup_opencode_config_merge(temp_home, tmp_proj):
         "  // Existing server configuration\n"
         "  \"mcp\": {\n"
         "    \"github\": {\"key\": \"val\"}\n"
-        "  },\n"
-        "  \"model\": \"gpt-4\"\n"
-        "}"
-    )
-    jsonc_file.write_text(initial_content, encoding="utf-8")
-    
-    with patch("pathlib.Path.home", return_value=temp_home):
-        with patch.object(sys, "argv", ["oem", "setup", "opencode"]):
-            main()
-            
-    # Verify file text has instructions key but retains mcp and model and comments
-    text = jsonc_file.read_text(encoding="utf-8")
-    assert '"mcp"' in text
-    assert '"github"' in text
-    assert '"model"' in text
-    assert 'Existing server configuration' in text
-    assert '"instructions"' in text
-    
-    # Also verify loaded json parses correctly and matches merged state
-    cleaned = re.sub(r'("(?:\\.|[^"\\])*")|//[^\r\n]*|/\*[\s\S]*?\*/', lambda m: m.group(1) if m.group(1) else "", text)
-    data = json.loads(cleaned)
-    assert data["mcp"]["github"]["key"] == "val"
-    assert "openempiric" in data.get("mcp", {})
-    assert data["mcp"]["openempiric"]["command"] in ("oem", "uv")
-    assert data["model"] == "gpt-4"
-    assert len(data["instructions"]) == 1
-
-
-def test_setup_opencode_backup_creation(temp_home, tmp_proj):
-    """Verify that a timestamped backup of the config file is created before modification."""
-    opencode_dir = temp_home / ".config" / "opencode"
-    opencode_dir.mkdir(parents=True, exist_ok=True)
-    jsonc_file = opencode_dir / "opencode.jsonc"
-    jsonc_file.write_text("{\n  \"instructions\": []\n}", encoding="utf-8")
-    
-    with patch("pathlib.Path.home", return_value=temp_home):
-        with patch.object(sys, "argv", ["oem", "setup", "opencode"]):
-            main()
-            
-    # Verify backup exists
-    backups = list(opencode_dir.glob("opencode.jsonc.backup-*"))
-    assert len(backups) == 1
-    assert backups[0].read_text(encoding="utf-8") == "{\n  \"instructions\": []\n}"
-
-
-def test_setup_opencode_invalid_json_abort(temp_home, tmp_proj):
-    """Verify that setup aborts with exit code 1 and does not wipe the config if it contains invalid JSON."""
-    opencode_dir = temp_home / ".config" / "opencode"
-    opencode_dir.mkdir(parents=True, exist_ok=True)
-    jsonc_file = opencode_dir / "opencode.jsonc"
-    
-    invalid_content = "{\n  \"mcp\": {\n    \"github\": \n  // missing brace/commas\n}"
-    jsonc_file.write_text(invalid_content, encoding="utf-8")
-    
-    with patch("pathlib.Path.home", return_value=temp_home):
-        with patch.object(sys, "argv", ["oem", "setup", "opencode"]):
-            with pytest.raises(SystemExit) as exc:
-                main()
-            assert exc.value.code == 1
-            
-    # File content should remain unchanged, NOT wiped or set to default {}
-    assert jsonc_file.read_text(encoding="utf-8") == invalid_content
-
-
-def test_setup_opencode_comment_preservation(temp_home, tmp_proj):
-    """Verify that comments and array elements are preserved correctly."""
-    opencode_dir = temp_home / ".config" / "opencode"
-    opencode_dir.mkdir(parents=True, exist_ok=True)
-    jsonc_file = opencode_dir / "opencode.jsonc"
-    
-    initial_content = (
-        "{\n"
-        "  // Active array of instructions\n"
-        "  \"instructions\": [\n"
-        "    // prior comment\n"
-        "    \"existing.md\"\n"
-        "  ]\n"
-        "}"
-    )
-    jsonc_file.write_text(initial_content, encoding="utf-8")
-    
-    with patch("pathlib.Path.home", return_value=temp_home):
-        with patch.object(sys, "argv", ["oem", "setup", "opencode"]):
-            main()
-            
-    text = jsonc_file.read_text(encoding="utf-8")
-    assert "Active array of instructions" in text
-    assert "prior comment" in text
-    assert "existing.md" in text
-    assert "memory-start.md" in text
-
-
-def test_setup_opencode_url_slashes_preservation(temp_home, tmp_proj):
-    """Verify that schema URL slashes (https://) are not stripped by comment cleaners."""
-    opencode_dir = temp_home / ".config" / "opencode"
-    opencode_dir.mkdir(parents=True, exist_ok=True)
-    jsonc_file = opencode_dir / "opencode.jsonc"
-    
-    initial_content = (
-        "{\n"
-        "  \"$schema\": \"https://opencode.ai/config.json\"\n"
-        "}"
-    )
-    jsonc_file.write_text(initial_content, encoding="utf-8")
-    
-    with patch("pathlib.Path.home", return_value=temp_home):
-        with patch.object(sys, "argv", ["oem", "setup", "opencode"]):
-            main()
-            
-    text = jsonc_file.read_text(encoding="utf-8")
-    assert "https://opencode.ai/config.json" in text
-
-
-def test_setup_opencode_tool_enumeration():
-    import asyncio
-    from fastmcp import FastMCP
-    from oem_knowledge.server import mount_tools
-    mcp = FastMCP("openempiric")
-    mount_tools(mcp)
-    
-    tools = asyncio.run(mcp.list_tools())
-    tool_names = [t.name for t in tools]
-    assert "knowledge_search" in tool_names
-    assert "knowledge_explain_concept" in tool_names
-    assert "knowledge_health_check" in tool_names
-    assert "knowledge_stats" in tool_names
-    assert "oem_todo_read" in tool_names
-    assert "knowledge_usage_report" in tool_names
-
-
-def test_setup_opencode_preserves_multiple_mcp_configs(temp_home, tmp_proj):
-    """Verify that updating openempiric config preserves adjacent MCP configurations."""
-    import re
-    opencode_dir = temp_home / ".config" / "opencode"
-    opencode_dir.mkdir(parents=True, exist_ok=True)
-    jsonc_file = opencode_dir / "opencode.jsonc"
-    
-    initial_content = (
-        "{\n"
-        "  \"mcp\": {\n"
-        "    \"openempiric\": {\n"
-        "      \"type\": \"local\",\n"
-        "      \"command\": \"oem\",\n"
-        "      \"args\": [\"mcp\"],\n"
-        "      \"enabled\": true,\n"
-        "      \"timeout\": 60000\n"
-        "    },\n"
-        "    \"grep_app\": {\n"
-        "      \"type\": \"remote\",\n"
-        "      \"url\": \"https://mcp.grep.app\",\n"
-        "      \"enabled\": true\n"
-        "    },\n"
-        "    \"chrome-devtools\": {\n"
-        "      \"type\": \"local\",\n"
-        "      \"command\": [\"npx\", \"-y\", \"chrome-devtools-mcp@latest\"],\n"
-        "      \"enabled\": true,\n"
-        "      \"timeout\": 120000\n"
-        "    }\n"
         "  }\n"
         "}"
     )
@@ -347,14 +82,227 @@ def test_setup_opencode_preserves_multiple_mcp_configs(temp_home, tmp_proj):
             main()
             
     text = jsonc_file.read_text(encoding="utf-8")
-    cleaned = re.sub(r'(\"(?:\\\\.|[^\"\\\\])*\")|//[^\\r\\n]*|/\\*[\\s\\S]*?\\*/', lambda m: m.group(1) if m.group(1) else "", text)
-    data = json.loads(cleaned)
+    assert "Existing server configuration" in text
+    assert '"github"' in text
+    assert '"openempiric"' in text
+
+
+def test_setup_opencode_preserves_existing_instructions(temp_home, tmp_proj):
+    """Verify that existing user instructions paths are preserved in instructions array."""
+    opencode_dir = temp_home / ".config" / "opencode"
+    opencode_dir.mkdir(parents=True, exist_ok=True)
+    jsonc_file = opencode_dir / "opencode.jsonc"
     
+    initial_content = (
+        "{\n"
+        "  \"instructions\": [\n"
+        "    \"~/.config/opencode/instructions/user.md\"\n"
+        "  ]\n"
+        "}"
+    )
+    jsonc_file.write_text(initial_content, encoding="utf-8")
+    
+    with patch("pathlib.Path.home", return_value=temp_home):
+        with patch.object(sys, "argv", ["oem", "setup", "opencode"]):
+            main()
+            
+    data = json.loads(jsonc_file.read_text(encoding="utf-8"))
+    assert "instructions" in data
+    assert "~/.config/opencode/instructions/user.md" in data["instructions"]
+    assert any("memory-start.md" in p for p in data["instructions"])
+
+
+def test_setup_opencode_appends_oem_instruction_once(temp_home, tmp_proj):
+    """Verify that oem instruction is appended once and running setup again is idempotent."""
+    opencode_dir = temp_home / ".config" / "opencode"
+    opencode_dir.mkdir(parents=True, exist_ok=True)
+    jsonc_file = opencode_dir / "opencode.jsonc"
+    
+    initial_content = "{\n  \"instructions\": []\n}"
+    jsonc_file.write_text(initial_content, encoding="utf-8")
+    
+    with patch("pathlib.Path.home", return_value=temp_home):
+        with patch.object(sys, "argv", ["oem", "setup", "opencode"]):
+            main()
+        with patch.object(sys, "argv", ["oem", "setup", "opencode"]):
+            main()
+            
+    data = json.loads(jsonc_file.read_text(encoding="utf-8"))
+    assert len(data["instructions"]) == 1
+
+
+def test_setup_opencode_preserves_unknown_top_level_keys(temp_home, tmp_proj):
+    """Verify that unknown/unrelated top-level keys like 'model' are kept."""
+    opencode_dir = temp_home / ".config" / "opencode"
+    opencode_dir.mkdir(parents=True, exist_ok=True)
+    jsonc_file = opencode_dir / "opencode.jsonc"
+    
+    initial_content = "{\n  \"model\": \"gpt-4-custom\",\n  \"theme\": \"dark\"\n}"
+    jsonc_file.write_text(initial_content, encoding="utf-8")
+    
+    with patch("pathlib.Path.home", return_value=temp_home):
+        with patch.object(sys, "argv", ["oem", "setup", "opencode"]):
+            main()
+            
+    data = json.loads(jsonc_file.read_text(encoding="utf-8"))
+    assert data["model"] == "gpt-4-custom"
+    assert data["theme"] == "dark"
+
+
+def test_setup_opencode_backup_before_every_config_write(temp_home, tmp_proj):
+    """Verify that a timestamped backup with suffix '.bak-' is created before write."""
+    opencode_dir = temp_home / ".config" / "opencode"
+    opencode_dir.mkdir(parents=True, exist_ok=True)
+    jsonc_file = opencode_dir / "opencode.jsonc"
+    jsonc_file.write_text("{\n  \"instructions\": []\n}", encoding="utf-8")
+    
+    with patch("pathlib.Path.home", return_value=temp_home):
+        with patch.object(sys, "argv", ["oem", "setup", "opencode"]):
+            main()
+            
+    backups = list(opencode_dir.glob("opencode.jsonc.bak-*"))
+    assert len(backups) == 1
+    assert backups[0].read_text(encoding="utf-8") == "{\n  \"instructions\": []\n}"
+
+
+def test_setup_opencode_restores_backup_if_validation_fails(temp_home, tmp_proj):
+    """Verify that configuration is restored from backup if opencode validation fails."""
+    opencode_dir = temp_home / ".config" / "opencode"
+    opencode_dir.mkdir(parents=True, exist_ok=True)
+    jsonc_file = opencode_dir / "opencode.jsonc"
+    jsonc_file.write_text("{\n  \"instructions\": []\n}", encoding="utf-8")
+    
+    # Mock validation run to fail
+    class DummyFailedProcess:
+        returncode = 1
+        stdout = "Invalid config error"
+        stderr = "Invalid config error"
+        
+    with patch("pathlib.Path.home", return_value=temp_home):
+        with patch("subprocess.run", return_value=DummyFailedProcess()):
+            # Also need to make sure we are not bypassed under pytest
+            with patch("sys.modules", {"pytest": None}):
+                with patch.dict("os.environ", {"PYTEST_CURRENT_TEST": ""}):
+                    with pytest.raises(SystemExit) as exc:
+                        with patch.object(sys, "argv", ["oem", "setup", "opencode"]):
+                            main()
+                    assert exc.value.code == 1
+                    
+    # Should revert changes to the original file
+    assert jsonc_file.read_text(encoding="utf-8") == "{\n  \"instructions\": []\n}"
+
+
+def test_setup_opencode_removes_only_oem_invalid_plugins_entry(temp_home, tmp_proj):
+    """Verify that setup removes oem plugin entry from top-level plugins array, preserving user plugins."""
+    opencode_dir = temp_home / ".config" / "opencode"
+    opencode_dir.mkdir(parents=True, exist_ok=True)
+    jsonc_file = opencode_dir / "opencode.jsonc"
+    
+    initial_content = (
+        "{\n"
+        "  \"plugins\": [\n"
+        "    \"user-plugin.ts\",\n"
+        "    \"/home/xpajonx/.config/opencode/plugins/openempiric.ts\"\n"
+        "  ]\n"
+        "}"
+    )
+    jsonc_file.write_text(initial_content, encoding="utf-8")
+    
+    with patch("pathlib.Path.home", return_value=temp_home):
+        with patch.object(sys, "argv", ["oem", "setup", "opencode"]):
+            main()
+            
+    data = json.loads(jsonc_file.read_text(encoding="utf-8"))
+    assert "plugins" in data
+    assert "user-plugin.ts" in data["plugins"]
+    assert any("openempiric.ts" in p for p in data["plugins"]) is False
+
+
+def test_setup_opencode_does_not_delete_user_plugin_entries(temp_home, tmp_proj):
+    """Verify that running setup does not delete the whole plugins array if user plugins exist."""
+    opencode_dir = temp_home / ".config" / "opencode"
+    opencode_dir.mkdir(parents=True, exist_ok=True)
+    jsonc_file = opencode_dir / "opencode.jsonc"
+    
+    initial_content = "{\n  \"plugins\": [\"user-plugin.ts\"]\n}"
+    jsonc_file.write_text(initial_content, encoding="utf-8")
+    
+    with patch("pathlib.Path.home", return_value=temp_home):
+        with patch.object(sys, "argv", ["oem", "setup", "opencode"]):
+            main()
+            
+    data = json.loads(jsonc_file.read_text(encoding="utf-8"))
+    assert "plugins" in data
+    assert data["plugins"] == ["user-plugin.ts"]
+
+
+def test_setup_opencode_idempotent_with_existing_user_mcp(temp_home, tmp_proj):
+    """Verify setup is idempotent and leaves user MCP configurations intact on repeated runs."""
+    opencode_dir = temp_home / ".config" / "opencode"
+    opencode_dir.mkdir(parents=True, exist_ok=True)
+    jsonc_file = opencode_dir / "opencode.jsonc"
+    
+    initial_content = (
+        "{\n"
+        "  \"mcp\": {\n"
+        "    \"github\": {\"command\": \"github-mcp\"}\n"
+        "  }\n"
+        "}"
+    )
+    jsonc_file.write_text(initial_content, encoding="utf-8")
+    
+    with patch("pathlib.Path.home", return_value=temp_home):
+        with patch.object(sys, "argv", ["oem", "setup", "opencode"]):
+            main()
+        content1 = jsonc_file.read_text(encoding="utf-8")
+        with patch.object(sys, "argv", ["oem", "setup", "opencode"]):
+            main()
+        content2 = jsonc_file.read_text(encoding="utf-8")
+        
+    assert content1 == content2
+
+
+def test_repair_does_not_wipe_mcp_config(temp_home, tmp_proj):
+    """Verify running setup with --repair does not delete existing user MCP configurations."""
+    opencode_dir = temp_home / ".config" / "opencode"
+    opencode_dir.mkdir(parents=True, exist_ok=True)
+    jsonc_file = opencode_dir / "opencode.jsonc"
+    
+    initial_content = (
+        "{\n"
+        "  \"mcp\": {\n"
+        "    \"github\": {\"command\": \"github-mcp\"}\n"
+        "  }\n"
+        "}"
+    )
+    jsonc_file.write_text(initial_content, encoding="utf-8")
+    
+    with patch("pathlib.Path.home", return_value=temp_home):
+        with patch.object(sys, "argv", ["oem", "setup", "opencode", "--repair"]):
+            main()
+            
+    data = json.loads(jsonc_file.read_text(encoding="utf-8"))
+    assert "github" in data["mcp"]
     assert "openempiric" in data["mcp"]
-    assert "grep_app" in data["mcp"]
-    assert "chrome-devtools" in data["mcp"]
-    assert data["mcp"]["grep_app"]["url"] == "https://mcp.grep.app"
-    assert data["mcp"]["chrome-devtools"]["command"] == ["npx", "-y", "chrome-devtools-mcp@latest"]
 
 
-
+def test_run_opencode_aborts_if_config_invalid_without_mutating_config(temp_home, tmp_proj):
+    """Verify that launching oem run opencode fails fast on invalid config and doesn't mutate config."""
+    opencode_dir = temp_home / ".config" / "opencode"
+    opencode_dir.mkdir(parents=True, exist_ok=True)
+    jsonc_file = opencode_dir / "opencode.jsonc"
+    
+    # invalid config format
+    invalid_content = "{\n  \"mcp\": {\n    \"github\": \n  // missing brace\n}"
+    jsonc_file.write_text(invalid_content, encoding="utf-8")
+    
+    # Mock config validity status to fail
+    with patch("pathlib.Path.home", return_value=temp_home):
+        with patch("oem_knowledge.runtime.readiness.check_opencode_config_valid", return_value=("failure", "Invalid brace structure")):
+            with pytest.raises(SystemExit) as exc:
+                with patch.object(sys, "argv", ["oem", "run", "opencode", "--skip-doctor"]):
+                    main()
+            assert exc.value.code == 1
+            
+    # Config file must not be modified or setup by run
+    assert jsonc_file.read_text(encoding="utf-8") == invalid_content

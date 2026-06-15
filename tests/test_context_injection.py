@@ -78,9 +78,19 @@ def test_oem_runtime_context_injection(tmp_proj, mock_home):
     handoff_file = Path(tmp_proj) / OEM_DIR / "session-handoff.md"
     handoff_file.write_text("# Session Handoff\n\n## Next Action\nImplement security keys.\n", encoding="utf-8")
 
-    # 4. Create dummy plugins folder in fake home
-    plugins_dir = mock_home / ".config" / "opencode" / "plugins"
+    # 4. Create dummy plugins folder in fake home and mock valid configuration
+    opencode_dir = mock_home / ".config" / "opencode"
+    plugins_dir = opencode_dir / "plugins"
     plugins_dir.mkdir(parents=True)
+    jsonc_file = opencode_dir / "opencode.jsonc"
+    jsonc_file.write_text(json.dumps({
+        "mcp": {
+            "openempiric": {
+                "type": "local",
+                "command": "oem"
+            }
+        }
+    }), encoding="utf-8")
 
     # 5. Mock subprocess.run and capture context file state
     from oem_knowledge.cli import _OEM_RUNTIME_CONTEXT_PATH, _OEM_TEMP_INSTRUCTIONS
@@ -103,7 +113,8 @@ def test_oem_runtime_context_injection(tmp_proj, mock_home):
             assert oem["open_questions"] == []
 
         mock_run.side_effect = capture_context
-        run_agent("opencode", eng)
+        with patch("oem_knowledge.runtime.readiness.check_opencode_config_valid", return_value=("success", "")):
+            run_agent("opencode", eng)
         mock_run.assert_called_once()
 
     # 6. Verify cleanup – transient files should be removed

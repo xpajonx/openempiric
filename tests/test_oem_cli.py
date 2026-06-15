@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import json
 from unittest.mock import patch
 import pytest
 from pathlib import Path
@@ -94,8 +95,8 @@ def test_oem_run(tmp_proj):
     assert not _OEM_TEMP_INSTRUCTIONS.exists()
 
 
-def test_oem_run_opencode_safe_bootstrap(tmp_proj):
-    """Verify that `oem run opencode` bootstraps project-local state without editing global config."""
+def test_oem_run_opencode_fails_when_unconfigured_without_mutating(tmp_proj):
+    """Verify that `oem run opencode` fails fast if unconfigured, recommending setup, without modifying config."""
     import oem_knowledge.runtime.runner as runner
 
     temp_home = tempfile.mkdtemp()
@@ -106,18 +107,62 @@ def test_oem_run_opencode_safe_bootstrap(tmp_proj):
         temp_instructions = plugins_dir / ".openempiric_temp_instructions.md"
 
         with patch("pathlib.Path.home", return_value=home_path):
-            with patch.object(runner, "_OPENCODE_PLUGINS_DIR", plugins_dir):
-                with patch.object(runner, "_OEM_RUNTIME_CONTEXT_PATH", context_path):
-                    with patch.object(runner, "_OEM_TEMP_INSTRUCTIONS", temp_instructions):
-                        with patch("oem_knowledge.cli.subprocess.run") as mock_run:
-                            with patch.object(sys, "argv", ["oem", "run", "opencode", "--project", tmp_proj]):
-                                main()
+            with patch.dict("os.environ", {"XDG_CONFIG_HOME": ""}):
+                with patch.object(runner, "_OPENCODE_PLUGINS_DIR", plugins_dir):
+                    with patch.object(runner, "_OEM_RUNTIME_CONTEXT_PATH", context_path):
+                        with patch.object(runner, "_OEM_TEMP_INSTRUCTIONS", temp_instructions):
+                            with patch("oem_knowledge.cli.subprocess.run") as mock_run:
+                                with patch.object(sys, "argv", ["oem", "run", "opencode", "--project", tmp_proj]):
+                                    with pytest.raises(SystemExit) as exc:
+                                        main()
+                                    assert exc.value.code == 1
+
+        mock_run.assert_not_called()
+        # Config and plugins must NOT be automatically created or mutated
+        assert not (home_path / ".config" / "opencode" / "opencode.jsonc").exists()
+        assert not (plugins_dir / "openempiric.ts").exists()
+    finally:
+        shutil.rmtree(temp_home)
+
+
+def test_oem_run_opencode_succeeds_when_configured(tmp_proj):
+    """Verify that `oem run opencode` executes properly when the configuration is already present and valid."""
+    import oem_knowledge.runtime.runner as runner
+
+    temp_home = tempfile.mkdtemp()
+    try:
+        home_path = Path(temp_home)
+        opencode_dir = home_path / ".config" / "opencode"
+        plugins_dir = opencode_dir / "plugins"
+        plugins_dir.mkdir(parents=True)
+        context_path = plugins_dir / ".oem_runtime_context.json"
+        temp_instructions = plugins_dir / ".openempiric_temp_instructions.md"
+
+        # Write valid config containing openempiric mcp server
+        jsonc_file = opencode_dir / "opencode.jsonc"
+        jsonc_file.write_text(json.dumps({
+            "mcp": {
+                "openempiric": {
+                    "type": "local",
+                    "command": "oem"
+                }
+            }
+        }), encoding="utf-8")
+
+        with patch("pathlib.Path.home", return_value=home_path):
+            with patch.dict("os.environ", {"XDG_CONFIG_HOME": ""}):
+                with patch.object(runner, "_OPENCODE_PLUGINS_DIR", plugins_dir):
+                    with patch.object(runner, "_OEM_RUNTIME_CONTEXT_PATH", context_path):
+                        with patch.object(runner, "_OEM_TEMP_INSTRUCTIONS", temp_instructions):
+                            with patch("oem_knowledge.runtime.readiness.check_opencode_config_valid", return_value=("success", "")):
+                                with patch("oem_knowledge.cli.subprocess.run") as mock_run:
+                                    with patch.object(sys, "argv", ["oem", "run", "opencode", "--project", tmp_proj]):
+                                        main()
 
         mock_run.assert_called_once()
-        assert (Path(tmp_proj) / ".oem").is_dir()
-        assert (Path(tmp_proj) / ".oem" / "skills" / "openempiric.yaml").exists()
-        assert (plugins_dir / "openempiric.ts").exists()
-        assert (home_path / ".config" / "opencode" / "opencode.jsonc").exists()
+        # Config file must remain untouched/not mutated
+        config_data = json.loads(jsonc_file.read_text(encoding="utf-8"))
+        assert "openempiric" in config_data["mcp"]
     finally:
         shutil.rmtree(temp_home)
 

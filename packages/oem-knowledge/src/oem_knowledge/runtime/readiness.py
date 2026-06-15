@@ -294,7 +294,11 @@ class RuntimeReadiness:
             if env_plugins_dir:
                 plugins_dir = Path(env_plugins_dir)
             else:
-                plugins_dir = Path.home() / ".config" / "opencode" / "plugins"
+                xdg_config = os.environ.get("XDG_CONFIG_HOME")
+                if xdg_config:
+                    plugins_dir = Path(xdg_config) / "opencode" / "plugins"
+                else:
+                    plugins_dir = Path.home() / ".config" / "opencode" / "plugins"
             plugin_dest = plugins_dir / "openempiric.ts"
             
             plugin_installed = plugin_dest.exists() and is_oem_managed_plugin(plugin_dest)
