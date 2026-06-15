@@ -104,7 +104,7 @@ def test_session_commit_stable_shape_on_materialization_failure(temp_project):
             conversation_text="Hypothesis: AI safety is important",
             session_id="session_1"
         )
-        assert res["status"] == "error"
+        assert res["status"] == "partial"
         assert res["failed_step"] == "materialization"
         assert res["message"] == "Mock filesystem error"
         # Verify stable shape keys are present
@@ -158,7 +158,7 @@ def test_opencode_exit_commit_truthful_result(temp_project):
             conversation_text="Hypothesis: AI safety is important",
             session_id="session_2"
         )
-        assert res_fail["status"] == "error"
+        assert res_fail["status"] == "partial"
         assert res_fail["failed_step"] == "materialization"
 
 from oem_knowledge.fs import LockTimeoutError
