@@ -144,11 +144,28 @@ class StateService:
         sfs = self._sfs(project)
         try:
             with FileLock(p.with_suffix(".lock")):
+                existing_ids = set()
+                if sfs.exists(p):
+                    try:
+                        for line in sfs.read_text(p).strip().splitlines():
+                            if line.strip():
+                                try:
+                                    ev = json.loads(line)
+                                    ev_id = ev.get("event_id") or ev.get("id")
+                                    if ev_id:
+                                        existing_ids.add(ev_id)
+                                except Exception:
+                                    pass
+                    except Exception as e:
+                        logger.warning("Failed to read events file for deduplication: %s", e)
+
                 try:
                     lines = []
                     for event in events:
                         if isinstance(event, dict):
                             event = KnowledgeEvent(**event)
+                        if event.event_id in existing_ids:
+                            continue
                         lines.append(event.model_dump_json() + "\n")
                     if lines:
                         sfs.append_text(p, "".join(lines))

@@ -275,6 +275,18 @@ class MaterializationService:
                 registry_updated = True
 
                 for event in knowledge_events:
+                    event_id = event.get("event_id") or event.get("id")
+                    if event_id:
+                        already_materialized = False
+                        for cid, cdata in registry.items():
+                            if isinstance(cdata, dict) and event_id in cdata.get("source_event_ids", []):
+                                already_materialized = True
+                                break
+                        if already_materialized:
+                            logger.info("Event %s already materialized, skipping.", event_id)
+                            materialized_log.append(f"skipped_existing: {event_id}")
+                            continue
+
                     concept = event.get("concept", "General Learning")
                     e_type = event.get("type", "observation").lower()
                     evidence = event.get("evidence", "")

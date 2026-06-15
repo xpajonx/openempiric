@@ -864,7 +864,43 @@ project: {project or "default"}
                 with timer.phase("materialization", progress_callback):
                     mat_res = self.materialization.materialize_concepts(project)
                     if mat_res.get("status") == "error":
+                        harness = self._resolve_harness(project)
+                        active_session_file = harness / "state" / "active_session.json"
+                        try:
+                            self.state.record_outcome("partial", session_id=session_id, project=project)
+                        except Exception:
+                            pass
+                        try:
+                            metrics_file = harness / "state" / "metrics.json"
+                            from oem_knowledge.tools.metrics import update_metrics_file
+                            update_metrics_file(metrics_file, {"sessions_completed": 1})
+                        except Exception:
+                            pass
+                        session_state = None
+                        try:
+                            from oem_knowledge.runtime import SessionState
+                            session_state = SessionState.load(active_session_file)
+                            if session_state:
+                                for path_str in (session_state.context_path, session_state.temp_instructions):
+                                    if path_str:
+                                        p = Path(path_str)
+                                        if p.exists():
+                                            try:
+                                                p.unlink()
+                                            except Exception:
+                                                pass
+                        except Exception:
+                            pass
+                        try:
+                            if active_session_file.exists():
+                                active_session_file.unlink()
+                        except Exception:
+                            pass
+
                         progress.update_step("materialization", "failed")
+                        progress.update_step("index", "skipped")
+                        progress.update_step("session_close", "success")
+
                         timer.timings["total"] = time.perf_counter() - start_time
                         p_timings = {
                             "load_state": timer.timings.get("load_state", 0.0),
@@ -876,11 +912,17 @@ project: {project or "default"}
                             "cleanup": 0.0,
                             "total": timer.timings["total"],
                         }
-                        from oem_knowledge.runtime.result import error
-                        return error(
+                        
+                        from oem_knowledge.runtime.result import make_result
+                        res_dict = make_result(
+                            status="partial",
                             operation="session_end",
+                            project=str(self.project_path or project or ""),
                             message=mat_res.get("message", "Materialization failed"),
                             failed_step="materialization",
+                            report_path=str(report_file),
+                            events_written=events_written,
+                            warnings=warnings + mat_res.get("warnings", []),
                             data={
                                 "report_path": str(report_file),
                                 "knowledge_events": res.get("knowledge_events", []),
@@ -888,10 +930,22 @@ project: {project or "default"}
                                 "links_updated": 0,
                                 "index_stats": {},
                                 "explainability": res.get("explainability", {}),
-                                "warnings": warnings + mat_res.get("warnings", []),
                                 "phase_timings": p_timings,
                             }
                         )
+                        res_dict.update({
+                            "status": "partial",
+                            "events_written": events_written,
+                            "materialization": {
+                                "status": "failed",
+                                "reason": mat_res.get("message", "concept_id_collision")
+                            },
+                            "index": {
+                                "status": "skipped"
+                            },
+                            "session_closed": True
+                        })
+                        return res_dict
                     mat_log = mat_res.get("materialized", [])
                     warnings.extend(mat_res.get("warnings", []))
                 progress.update_step("materialization", "success")
