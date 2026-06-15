@@ -17,10 +17,11 @@ from oem_knowledge.engine import KnowledgeEngine
 
 
 @pytest.fixture
-def temp_env():
+def temp_env(monkeypatch):
     """Create a temporary environment directory mimicking the user's home."""
     d = tempfile.mkdtemp()
     home = Path(d)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
     yield home
     shutil.rmtree(d)
 

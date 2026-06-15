@@ -14,7 +14,13 @@ def engine(tmp_path):
     eng.init_project(str(tmp_path))
     return eng
 
-def test_context_compile_fallback(engine, tmp_path):
+def test_context_compile_fallback(engine, tmp_path, monkeypatch):
+    # Set XDG_CONFIG_HOME and write dummy config to satisfy opencode validation checks
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    opencode_dir = tmp_path / "opencode"
+    opencode_dir.mkdir(parents=True, exist_ok=True)
+    (opencode_dir / "opencode.jsonc").write_text('{"mcp": {"openempiric": {}}}', encoding="utf-8")
+
     # Mock _compile_oem_context to fail
     with patch("oem_knowledge.runtime.runner._compile_oem_context", side_effect=RuntimeError("Chroma/Compilation DB error")):
         mock_adapter = MagicMock()
@@ -22,19 +28,20 @@ def test_context_compile_fallback(engine, tmp_path):
         mock_adapter.verify_mcp.return_value = True
         mock_adapter.get_expected_transcript_path.return_value = Path(tmp_path / "chat.md")
 
-        with patch("subprocess.run") as mock_run:
-            with patch("builtins.print") as mock_print:
-                # Should not raise exception
-                run_agent("opencode", engine, str(tmp_path))
-                assert mock_run.called
+        with patch("oem_knowledge.runtime.readiness.check_opencode_config_valid", return_value=("success", "")):
+            with patch("subprocess.run") as mock_run:
+                with patch("builtins.print") as mock_print:
+                    # Should not raise exception
+                    run_agent("opencode", engine, str(tmp_path))
+                    assert mock_run.called
 
-                # Warnings should have been collected and printed
-                printed_warning = False
-                for call in mock_print.call_args_list:
-                    args = call[0]
-                    if args and any("degraded functionality" in str(arg) for arg in args):
-                        printed_warning = True
-                assert printed_warning
+                    # Warnings should have been collected and printed
+                    printed_warning = False
+                    for call in mock_print.call_args_list:
+                        args = call[0]
+                        if args and any("degraded functionality" in str(arg) for arg in args):
+                            printed_warning = True
+                    assert printed_warning
 
 def test_search_fallback_registry_only(engine, tmp_path):
     # Register a concept
