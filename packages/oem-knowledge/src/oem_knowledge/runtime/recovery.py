@@ -515,6 +515,206 @@ def recover_reflection(
         inconsistent_reports=[str(f) for f in inconsistent_reports],
     )
 
+
+def recover_registry(
+    eng: KnowledgeEngine,
+    project: str | None = None,
+    dry_run: bool = False,
+    apply: bool = False,
+    backup: bool | None = None,
+) -> dict:
+    harness = eng._resolve_harness(project)
+    registry_path = eng.layout(project).registry_path
+    wiki_dir = eng.layout(project).concepts_dir
+    events_path = eng.layout(project).events_path
+
+    if not dry_run and not apply:
+        dry_run = True
+
+    if dry_run and apply:
+        raise ValueError("dry_run and apply are mutually exclusive.")
+
+    registry = {}
+    if registry_path.exists():
+        try:
+            registry = eng.state._load_registry(project, lock=False)
+        except Exception:
+            pass
+
+    wiki_files = list(wiki_dir.glob("concept_*.md")) if wiki_dir.exists() else []
+    wiki_stems = {f.stem for f in wiki_files}
+    registry_keys = set(registry.keys())
+    concept_registry_keys = {k for k in registry_keys if k.startswith("concept_")}
+
+    # 1. Orphan wiki concept files
+    orphans = wiki_stems - registry_keys
+
+    # 2. Registry entries missing wiki files
+    missing_wiki = concept_registry_keys - wiki_stems
+
+    # 3. Registry ID gaps
+    gaps = []
+    numeric_values = set()
+    pattern = re.compile(r"^concept_(\d+)$")
+    for cid in concept_registry_keys:
+        m = pattern.match(cid)
+        if m:
+            numeric_values.add(int(m.group(1)))
+    if numeric_values:
+        max_val = max(numeric_values)
+        for i in range(1, max_val + 1):
+            if i not in numeric_values:
+                gaps.append(f"concept_{i:03d}")
+
+    # 4. Duplicate concept titles
+    titles = {}
+    duplicates = {}
+    for cid, cdata in registry.items():
+        if not isinstance(cdata, dict) or not cid.startswith("concept_"):
+            continue
+        title = cdata.get("canonical_name", "").lower()
+        if title:
+            if title in titles:
+                if title not in duplicates:
+                    duplicates[title] = [titles[title]]
+                duplicates[title].append(cid)
+            else:
+                titles[title] = cid
+
+    # 5. Partially materialized events
+    partially_materialized = []
+    all_event_ids = set()
+    if events_path.exists():
+        try:
+            for line in events_path.read_text(encoding="utf-8").strip().splitlines():
+                if line.strip():
+                    ev = json.loads(line)
+                    ev_id = ev.get("event_id") or ev.get("id")
+                    ev_type = ev.get("event_type") or ev.get("type", "observation")
+                    if ev_id and ev_type in ("observation", "validation", "failure", "needs_review", "canonical"):
+                        all_event_ids.add(ev_id)
+        except Exception:
+            pass
+
+    materialized_event_ids = set()
+    for cid, cdata in registry.items():
+        if isinstance(cdata, dict):
+            materialized_event_ids.update(cdata.get("source_event_ids", []))
+
+    partially_materialized = sorted(list(all_event_ids - materialized_event_ids))
+
+    issues = []
+    if orphans:
+        issues.append(f"{len(orphans)} orphan wiki concept files")
+    if missing_wiki:
+        issues.append(f"{len(missing_wiki)} registry entries missing wiki files")
+    if gaps:
+        issues.append(f"{len(gaps)} registry ID gaps")
+    if duplicates:
+        issues.append(f"{len(duplicates)} duplicate concept titles")
+    if partially_materialized:
+        issues.append(f"{len(partially_materialized)} partially materialized events")
+
+    repairs = []
+    if orphans:
+        repairs.append("reattach orphan wiki files to registry or mark as unmanaged")
+    if missing_wiki:
+        repairs.append("remove registry entries with missing wiki files")
+
+    backup_file = None
+    if apply:
+        from oem_knowledge.fs import FileLock
+        lock_path = registry_path.with_suffix(".lock")
+        with FileLock(lock_path):
+            if backup is not False and registry_path.exists():
+                timestamp = time.strftime("%Y%m%d-%H%M%S")
+                backup_file = registry_path.with_name(f"concept_registry.json.bak-{timestamp}")
+                shutil.copy2(registry_path, backup_file)
+
+            # Re-load under lock
+            if registry_path.exists():
+                try:
+                    registry = eng.state._load_registry(project, lock=False)
+                except Exception:
+                    pass
+
+            for cid in orphans:
+                fp = wiki_dir / f"{cid}.md"
+                frontmatter = {}
+                try:
+                    text = fp.read_text(encoding="utf-8")
+                    fm_match = re.match(r"^---\s*\n(.*?)\n---\s*\n", text, re.DOTALL)
+                    if fm_match:
+                        for line in fm_match.group(1).splitlines():
+                            if ":" in line:
+                                k, v = line.split(":", 1)
+                                frontmatter[k.strip()] = v.strip()
+                except Exception:
+                    pass
+
+                c_id = frontmatter.get("concept_id")
+                c_name = frontmatter.get("canonical_name")
+                c_status = frontmatter.get("status")
+
+                if c_id and c_name and c_status:
+                    # Clean aliases
+                    c_aliases = []
+                    raw_aliases = frontmatter.get("aliases", "[]")
+                    try:
+                        c_aliases = json.loads(raw_aliases)
+                    except Exception:
+                        pass
+                    # Clean source_event_ids
+                    c_sevents = []
+                    raw_sevents = frontmatter.get("source_event_ids", "[]")
+                    try:
+                        c_sevents = json.loads(raw_sevents)
+                    except Exception:
+                        pass
+
+                    registry[cid] = {
+                        "concept_id": cid,
+                        "canonical_name": c_name,
+                        "status": c_status,
+                        "confidence": int(frontmatter.get("confidence", 3)),
+                        "evidence_count": int(frontmatter.get("evidence_count", 0)),
+                        "sessions": frontmatter.get("sessions", []),
+                        "aliases": c_aliases,
+                        "source_event_ids": c_sevents,
+                    }
+                else:
+                    registry[cid] = {
+                        "concept_id": cid,
+                        "canonical_name": f"unmanaged-{cid}",
+                        "status": "unmanaged",
+                        "aliases": [],
+                        "evidence_count": 0,
+                    }
+
+            # Remove entries that are missing wiki files
+            for cid in missing_wiki:
+                if cid in registry:
+                    del registry[cid]
+
+            eng.state._save_registry(registry, project, lock=False)
+
+    from oem_knowledge.runtime.result import make_result
+    return make_result(
+        status="success" if not issues else "warn",
+        operation="recover_registry",
+        project=str(project or "."),
+        mode="apply" if apply else "dry_run",
+        orphans=sorted(list(orphans)),
+        missing_wiki=sorted(list(missing_wiki)),
+        gaps=sorted(gaps),
+        duplicates=duplicates,
+        partially_materialized=partially_materialized,
+        issues=issues,
+        repairs=repairs,
+        backup_file=str(backup_file) if backup_file else None,
+    )
+
+
 def cmd_recover(
     eng: KnowledgeEngine,
     project: str | None = None,
@@ -527,6 +727,47 @@ def cmd_recover(
     rebuild_reports: bool = False,
 ):
     harness = eng._resolve_harness(project)
+
+    if scope == "registry":
+        try:
+            res = recover_registry(
+                eng, project, dry_run=dry_run, apply=apply, backup=backup
+            )
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
+
+        print("Registry / Wiki Drift Status:")
+        print(f"- {len(res['orphans'])} orphan wiki concept files")
+        print(f"- {len(res['missing_wiki'])} registry entries missing wiki files")
+        print(f"- {len(res['gaps'])} registry ID gaps")
+        print(f"- {len(res['duplicates'])} duplicate concept titles")
+        print(f"- {len(res['partially_materialized'])} partially materialized events")
+        print()
+
+        if not res.get("issues"):
+            print("No repairs needed.")
+            return res
+
+        print("Suggested repairs:")
+        for r in res.get("repairs", []):
+            if r:
+                print(f"- {r}")
+        if apply and backup is not False:
+            print("- create backup before apply")
+        print()
+
+        if apply:
+            if res.get("backup_file"):
+                p = Path(res["backup_file"])
+                try:
+                    rel_print = p.relative_to(harness.parent)
+                except Exception:
+                    rel_print = p
+                print(f"Backup created at: {rel_print}")
+            print("Repairs applied successfully.")
+
+        return res
 
     if scope == "reflection":
         try:

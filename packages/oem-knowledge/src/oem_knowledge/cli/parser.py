@@ -247,7 +247,7 @@ def _setup_parser() -> argparse.ArgumentParser:
     )
     recover_p.add_argument(
         "--scope",
-        choices=["reflection"],
+        choices=["reflection", "registry"],
         default=None,
         help="Scope of recovery"
     )
