@@ -13,9 +13,10 @@ from oem_knowledge.cli import main
 
 
 @pytest.fixture
-def temp_home():
+def temp_home(monkeypatch):
     d = tempfile.mkdtemp()
     home_path = Path(d)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home_path / ".config"))
     yield home_path
     shutil.rmtree(d)
 
