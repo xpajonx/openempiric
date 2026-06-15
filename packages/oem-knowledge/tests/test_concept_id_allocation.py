@@ -427,3 +427,125 @@ def test_existing_orphan_wiki_files_still_block_reuse(temp_project):
     # concept_002 is blocked by the orphan file, so it must allocate concept_003
     assert beta_cid == "concept_003"
     assert orphan_file.read_text(encoding="utf-8") == "SENTINEL: DO NOT OVERWRITE"
+
+
+def test_materialization_does_not_allocate_existing_wiki_concept_id(temp_project):
+    """Verify that materialization does not allocate concept_009 when concept_009.md exists in the wiki."""
+    project_dir, engine = temp_project
+    
+    # Setup registry with concept_001 to concept_005
+    initial_reg = {}
+    for i in range(1, 6):
+        cid = f"concept_{i:03d}"
+        initial_reg[cid] = {
+            "concept_id": cid,
+            "canonical_name": f"concept-{i}",
+            "aliases": [f"concept-{i}"],
+            "status": "validated",
+            "confidence": 3,
+            "sessions": ["sess_0"]
+        }
+    engine.state._save_registry(initial_reg, str(project_dir))
+    
+    # Create concept_009.md in the wiki (which is missing from the registry)
+    wiki_dir = engine._concepts_dir(str(project_dir))
+    wiki_dir.mkdir(parents=True, exist_ok=True)
+    concept_009_file = wiki_dir / "concept_009.md"
+    concept_009_file.write_text("SENTINEL: DO NOT OVERWRITE", encoding="utf-8")
+    
+    # Create a session report with a new concept to materialize
+    sessions_dir = engine._sessions_dir(str(project_dir))
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    report_file = sessions_dir / "sess_1.md"
+    report_content = "```json\n" + json.dumps({
+        "knowledge_events": [
+            {"type": "observation", "concept": "new-concept", "evidence": "some evidence"}
+        ]
+    }) + "\n```"
+    report_file.write_text(report_content, encoding="utf-8")
+    
+    # Run materialization
+    res = engine.materialization.materialize_concepts(str(project_dir))
+    
+    # Check that concept_009.md remains untouched
+    assert concept_009_file.read_text(encoding="utf-8") == "SENTINEL: DO NOT OVERWRITE"
+    
+    # Verify it succeeds and allocated a safe ID
+    assert res["status"] == "success"
+    reg = engine.state._load_registry(str(project_dir))
+    new_concept_id = None
+    for cid, data in reg.items():
+        if data.get("canonical_name") == "new-concept":
+            new_concept_id = cid
+            break
+            
+    assert new_concept_id is not None
+    assert new_concept_id != "concept_009"
+
+
+def test_allocate_concept_id_scans_registry_and_wiki_files(tmp_path):
+    registry = {"concept_001": {}}
+    wiki_dir = tmp_path / "wiki"
+    wiki_dir.mkdir()
+    (wiki_dir / "concept_002.md").write_text("content", encoding="utf-8")
+    result = allocate_concept_id(registry=registry, wiki_dir=wiki_dir)
+    assert result == "concept_003"
+
+def test_allocate_concept_id_skips_orphan_wiki_file(tmp_path):
+    registry = {"concept_001": {}}
+    wiki_dir = tmp_path / "wiki"
+    wiki_dir.mkdir()
+    (wiki_dir / "concept_002.md").write_text("content", encoding="utf-8")
+    result = allocate_concept_id(registry=registry, wiki_dir=wiki_dir)
+    assert result == "concept_003"
+
+def test_allocate_concept_id_skips_reserved_ids_in_batch():
+    registry = {"concept_001": {}}
+    reserved = {"concept_002"}
+    result = allocate_concept_id(registry=registry, reserved_ids=reserved)
+    assert result == "concept_003"
+
+def test_allocate_concept_id_ignores_nonnumeric_for_sequence():
+    registry = {"concept_001": {}, "concept_custom": {}}
+    result = allocate_concept_id(registry=registry)
+    assert result == "concept_002"
+
+def test_allocate_concept_id_never_uses_len_registry_plus_one():
+    registry = {
+        "concept_001": {},
+        "concept_004": {}
+    }
+    result = allocate_concept_id(registry=registry)
+    assert result == "concept_005"
+
+def test_allocate_concept_id_handles_gaps_safely(tmp_path):
+    registry = {
+        "concept_001": {},
+        "concept_003": {},
+        "concept_010": {}
+    }
+    wiki_dir = tmp_path / "wiki"
+    wiki_dir.mkdir()
+    (wiki_dir / "concept_002.md").write_text("content", encoding="utf-8")
+    (wiki_dir / "concept_009.md").write_text("content", encoding="utf-8")
+    reserved = {"concept_011"}
+    
+    result = allocate_concept_id(registry=registry, wiki_dir=wiki_dir, reserved_ids=reserved)
+    assert result == "concept_012"
+
+def test_allocate_concept_id_handles_existing_concept_009_file(tmp_path):
+    registry = {
+        "concept_001": {},
+        "concept_002": {},
+        "concept_003": {},
+        "concept_004": {},
+        "concept_005": {}
+    }
+    wiki_dir = tmp_path / "wiki"
+    wiki_dir.mkdir()
+    (wiki_dir / "concept_009.md").write_text("content", encoding="utf-8")
+    
+    result = allocate_concept_id(registry=registry, wiki_dir=wiki_dir)
+    assert result == "concept_010"
+
+

@@ -3,7 +3,22 @@ import re
 
 class ConceptIdCollisionError(RuntimeError):
     """Raised when allocating a concept ID would result in overwriting an existing wiki file."""
-    pass
+    def __init__(
+        self,
+        message: str,
+        concept_id: str | None = None,
+        target_path: Path | None = None,
+        in_registry: bool = False,
+        in_wiki: bool = False,
+        suggested_next_id: str | None = None,
+    ):
+        self.concept_id = concept_id
+        self.target_path = target_path
+        self.in_registry = in_registry
+        self.in_wiki = in_wiki
+        self.suggested_next_id = suggested_next_id
+        super().__init__(message)
+
 
 def allocate_concept_id(
     registry: dict,
