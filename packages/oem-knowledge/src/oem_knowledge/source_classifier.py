@@ -131,6 +131,24 @@ def classify_source(
             source_path,
         )
 
+    if name == "openempiric.ts":
+        is_opencode_plugin_path = False
+        if len(parts) >= 3 and (parts[-3:-1] == ("opencode", "plugins") or parts[-3:-1] == (".opencode", "plugins")):
+            is_opencode_plugin_path = True
+        
+        has_plugin_header = False
+        if content:
+            lowered_content = content.lower()
+            has_plugin_header = "generated_by: openempiric" in lowered_content and "source_type: oem_opencode_plugin" in lowered_content
+            
+        if is_opencode_plugin_path or has_plugin_header:
+            return _classification(
+                SourceType.GENERATED_SUMMARY,
+                False,
+                "OpenEmpiric OpenCode hook plugin is an operational integration artifact, not ingestion source",
+                source_path,
+            )
+
     oem_parts = _parts_after_oem(parts)
     if oem_parts:
         if oem_parts[0] == "wiki":

@@ -273,7 +273,7 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None,
             if valid_status == "failure":
                 from oem_knowledge.ui import render_panel
                 print(render_panel(
-                    "OpenCode Integration Failed",
+                    "OpenCode Integration | ERROR",
                     [
                         "OpenCode config is invalid.",
                         err_msg,

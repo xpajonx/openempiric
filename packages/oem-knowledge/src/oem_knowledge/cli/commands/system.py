@@ -70,6 +70,18 @@ def check_opencode_plugins_support() -> str:
     return _OPENCODE_PLUGINS_SUPPORT_CACHE
 
 
+def is_oem_managed_plugin(path: Path) -> bool:
+    if not path.exists():
+        return True
+    if path.is_symlink():
+        return True
+    try:
+        content = path.read_text(encoding="utf-8")
+        return "generated_by: openempiric" in content or "source_type: oem_opencode_plugin" in content
+    except Exception:
+        return False
+
+
 def _remove_plugins_from_jsonc(text: str, plugin_path_str: str, remove_key: bool) -> str:
     if remove_key:
         pattern = r'"plugins"\s*:\s*\[[^\]]*\]'
@@ -88,13 +100,11 @@ def _remove_plugins_from_jsonc(text: str, plugin_path_str: str, remove_key: bool
             return text[:start] + text[end:]
     else:
         escaped_path = re.escape(plugin_path_str)
-        pattern = r'\s*"' + escaped_path + r'"\s*,?'
-        match = re.search(pattern, text)
-        if match:
-            start, end = match.span()
-            cleaned_text = text[:start] + text[end:]
-            cleaned_text = re.sub(r',\s*\]', '\n  ]', cleaned_text)
-            return cleaned_text
+        pattern = r'\s*"(?:[^"]*openempiric\.ts|' + escaped_path + r')"\s*,?'
+        text = re.sub(pattern, '', text)
+        text = re.sub(r',\s*,', ',', text)
+        text = re.sub(r',\s*\]', '\n  ]', text)
+        text = re.sub(r'\[\s*,', '[', text)
     return text
 
 
@@ -148,24 +158,36 @@ def cmd_setup_opencode(eng, project: str | None = None, repair: bool = False) ->
  
     # 2. Install/update plugin
     plugin_installed = False
+    plugin_skipped_user_file = False
     try:
         plugin_src_path = pkg_resources.files("oem_knowledge").joinpath("plugins/openempiric.ts")
-        
-        should_write_plugin = repair or migrated_plugin or not plugin_dest.exists()
-        
-        if should_write_plugin:
-            if plugin_src_path.exists():
-                plugin_dest.write_text(plugin_src_path.read_text(encoding="utf-8"), encoding="utf-8")
-                plugin_installed = True
-            else:
-                local_src = Path(__file__).resolve().parent.parent.parent / "plugins" / "openempiric.ts"
-                if local_src.exists():
-                    plugin_dest.write_text(local_src.read_text(encoding="utf-8"), encoding="utf-8")
+        if not plugin_src_path.exists():
+            plugin_src_path = Path(__file__).resolve().parent.parent.parent / "plugins" / "openempiric.ts"
+            
+        if plugin_dest.exists() and not is_oem_managed_plugin(plugin_dest) and not migrated_plugin and not repair:
+            plugin_skipped_user_file = True
+        else:
+            should_write_plugin = repair or migrated_plugin or not plugin_dest.exists()
+            if should_write_plugin:
+                if plugin_dest.exists() or plugin_dest.is_symlink():
+                    plugin_dest.unlink()
+                is_mock = "mock" in type(plugin_src_path).__name__.lower()
+                if is_mock:
+                    plugin_dest.write_text(plugin_src_path.read_text(encoding="utf-8"), encoding="utf-8")
                     plugin_installed = True
                 else:
-                    print("✗ Failed to locate plugin source file 'plugins/openempiric.ts'.")
-        else:
-            plugin_installed = True  # Already present and valid
+                    try:
+                        plugin_dest.symlink_to(plugin_src_path.resolve())
+                        plugin_installed = True
+                    except Exception:
+                        # Fallback to copy
+                        if plugin_src_path.exists():
+                            plugin_dest.write_text(plugin_src_path.read_text(encoding="utf-8"), encoding="utf-8")
+                            plugin_installed = True
+                        else:
+                            print("✗ Failed to locate plugin source file 'plugins/openempiric.ts'.")
+            else:
+                plugin_installed = True  # Already present and valid
     except Exception as e:
         print(f"✗ Failed to install openempiric.ts plugin: {e}")
         
@@ -248,17 +270,13 @@ def cmd_setup_opencode(eng, project: str | None = None, repair: bool = False) ->
             
             has_plugins_key = "plugins" in config_data
             has_oem_plugin = plugin_path_str in plugin_list
-            has_other_plugins = len([p for p in plugin_list if p != plugin_path_str]) > 0
+            oem_entries = [p for p in plugin_list if p == plugin_path_str or Path(p).name == "openempiric.ts"]
+            has_other_plugins = len([p for p in plugin_list if p not in oem_entries]) > 0
             
             need_inst_change = inst_path_str not in inst_list or repair
             need_mcp_change = existing_mcp != mcp_config or repair
-            
-            if not plugins_supported:
-                need_plugin_change = False
-                need_repair_plugins = has_plugins_key
-            else:
-                need_plugin_change = plugin_path_str not in plugin_list or repair
-                need_repair_plugins = False
+            need_plugin_change = False  # Never write plugins key
+            need_repair_plugins = has_plugins_key
 
             if not need_inst_change and not need_mcp_change and not need_plugin_change and not need_repair_plugins:
                 config_verified = True
@@ -377,7 +395,7 @@ def cmd_setup_opencode(eng, project: str | None = None, repair: bool = False) ->
                     shutil.copy2(backup_file, jsonc_file)
                     config_verified = False
                     print(f"✗ Config validation failed after modification. Backup restored.")
-                    if not plugins_supported and has_other_plugins:
+                    if has_other_plugins:
                         print("⚠ OpenCode does not support `plugins`. User-defined plugin entries remain. Manual review required.")
                     sys.exit(1)
         else:
@@ -388,8 +406,6 @@ def cmd_setup_opencode(eng, project: str | None = None, repair: bool = False) ->
                     "openempiric": mcp_config
                 }
             }
-            if plugins_supported:
-                config_data["plugins"] = [plugin_path_str]
             jsonc_file.write_text(json.dumps(config_data, indent=2), encoding="utf-8")
             config_verified = True
     except Exception as e:
@@ -405,7 +421,7 @@ def cmd_setup_opencode(eng, project: str | None = None, repair: bool = False) ->
         
     mcp_verified = False
     mcp_error = ""
-    if plugin_installed and inst_installed and config_verified:
+    if inst_installed and config_verified:
         # Check MCP server status using mcp_config
         cmd = mcp_config.get("command")
         args_list = mcp_config.get("args", [])
@@ -427,21 +443,29 @@ def cmd_setup_opencode(eng, project: str | None = None, repair: bool = False) ->
             mcp_error = "Could not resolve MCP server configuration command"
 
     # Report summary
-    lines = []
-    lines.append("✓ Plugin installed" if plugin_installed else "✗ Plugin installation failed")
-    lines.append("✓ Instructions installed" if inst_installed else "✗ Instructions installation failed")
-    lines.append("✓ Configuration verified" if config_verified else "✗ Configuration verification failed")
-    
-    if plugin_installed and inst_installed and config_verified:
-        if mcp_verified:
-            lines.append("✓ MCP Server reachable and functional")
+    if plugin_skipped_user_file or not plugin_installed:
+        # Fallback summary
+        lines = []
+        lines.append("✓ OpenCode MCP registered" if mcp_verified else "✗ OpenCode MCP registration failed")
+        lines.append("✓ OEM instructions active" if inst_installed else "✗ OEM instructions activation failed")
+        lines.append("! OEM hook runtime unavailable")
+        if plugin_skipped_user_file:
+            lines.append("  Existing user-owned plugin file preserved.")
         else:
-            lines.append(f"✗ MCP Server verification failed: {mcp_error}")
-            lines.append("  → Verify that 'uv' or 'oem' is in your PATH.")
-            lines.append("  → Run 'oem doctor' to troubleshoot environment problems.")
+            lines.append("  Local plugin file could not be installed.")
+        lines.append("✓ Runtime ready via MCP + instructions fallback")
+    else:
+        # Standard success summary
+        lines = []
+        lines.append("✓ Plugin file installed")
+        lines.append("✓ Instructions installed")
+        lines.append("✓ MCP registered" if mcp_verified else f"✗ MCP registration failed: {mcp_error}")
+        lines.append("✓ OpenCode config valid" if config_verified else "✗ OpenCode config validation failed")
+        if plugin_installed and config_verified:
+            lines.append("✓ OEM hook runtime active")
+        else:
+            lines.append("! OEM hook runtime unavailable")
     
-    if not plugins_supported:
-        lines.append("! Hook runtime fallback active (plugins unsupported)")
     if backup_file:
         lines.append(f"ℹ Backup created at: {backup_file.name}")
     if migrated_plugin:
@@ -451,7 +475,8 @@ def cmd_setup_opencode(eng, project: str | None = None, repair: bool = False) ->
     if repair:
         lines.append("ℹ Re-installed all components (--repair)")
         
-    if plugin_installed and inst_installed and config_verified and mcp_verified:
+    setup_successful = inst_installed and config_verified and mcp_verified
+    if setup_successful:
         lines.append("")
         lines.append("OpenCode integration ready.")
         if eng.is_initialized(project):

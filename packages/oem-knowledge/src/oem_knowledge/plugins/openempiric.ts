@@ -1,3 +1,7 @@
+// generated_by: openempiric
+// source_type: oem_opencode_plugin
+// This file is managed by `oem setup opencode`.
+
 import type { Plugin, Hooks } from "@opencode-ai/plugin"
 import * as path from "path"
 import * as fs from "fs"
@@ -295,7 +299,7 @@ export const OpenempiricPlugin: Plugin = async (input, options) => {
       }
     },
 
-    "chat.message": async (msgInput, msgOutput) => {
+    "tui.prompt.append": async (msgInput, msgOutput) => {
       try {
         const activeProject = process.cwd()
         const projectRoot = findOemProjectRoot(activeProject)
@@ -303,7 +307,7 @@ export const OpenempiricPlugin: Plugin = async (input, options) => {
           assembler.assemble(projectRoot, false)
         }
       } catch (error) {
-        console.warn("openempiric chat.message hook failed dynamically:", error)
+        console.warn("openempiric tui.prompt.append hook failed dynamically:", error)
       }
     },
 

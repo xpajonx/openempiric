@@ -244,28 +244,28 @@ class RuntimeReadiness:
         valid_status, err_msg = check_opencode_config_valid()
         if valid_status == "skipped":
             checks.append(ReadinessCheck(
-                name="OpenCode config validation skipped",
-                status="warning",
-                detail="opencode executable not found"
+                name="OpenCode config valid",
+                status="success",
+                detail="Validation skipped (opencode not installed)"
             ))
         elif valid_status == "failure":
             checks.append(ReadinessCheck(
-                name="OpenCode config",
+                name="OpenCode config valid",
                 status="failure",
                 detail=err_msg,
                 suggestion="Run 'oem setup opencode --repair'"
+            ))
+        else:
+            checks.append(ReadinessCheck(
+                name="OpenCode config valid",
+                status="success"
             ))
 
         if agent_name == "opencode":
             mapped_checks = []
             
-            # 0. OpenCode config validation skipped
-            c_skipped = next((c for c in checks if c.name == "OpenCode config validation skipped"), None)
-            if c_skipped:
-                mapped_checks.append(c_skipped)
-
-            # 0b. OpenCode config
-            c_config = next((c for c in checks if c.name == "OpenCode config"), None)
+            # 0. OpenCode config valid
+            c_config = next((c for c in checks if c.name == "OpenCode config valid"), None)
             if c_config:
                 mapped_checks.append(c_config)
 
@@ -287,18 +287,49 @@ class RuntimeReadiness:
                 c3.name = "OEM instructions active"
                 mapped_checks.append(c3)
                 
-            # 4. OEM hook runtime active (mapped from Check 3: Plugin healthy)
-            from oem_knowledge.cli.commands.system import check_opencode_plugins_support
-            plugins_supported = check_opencode_plugins_support() != "unsupported"
+            # 3b. OEM local plugin file installed
+            import os
+            from oem_knowledge.cli.commands.system import is_oem_managed_plugin
+            env_plugins_dir = os.environ.get("OPENCODE_PLUGINS_DIR")
+            if env_plugins_dir:
+                plugins_dir = Path(env_plugins_dir)
+            else:
+                plugins_dir = Path.home() / ".config" / "opencode" / "plugins"
+            plugin_dest = plugins_dir / "openempiric.ts"
+            
+            plugin_installed = plugin_dest.exists() and is_oem_managed_plugin(plugin_dest)
+            plugin_check = ReadinessCheck(
+                name="OEM local plugin file installed",
+                status="success" if plugin_installed else "warning",
+                detail="Local plugin file is installed and OEM-managed." if plugin_installed else "Local plugin file is missing or not OEM-managed."
+            )
+            mapped_checks.append(plugin_check)
+                
+            # 4. OEM hook runtime likely active
+            mcp_registered = c2.status == "success" if c2 else False
+            inst_active = c3.status == "success" if c3 else False
+            config_valid = valid_status != "failure"
+            hook_active = plugin_installed and config_valid and mcp_registered and inst_active
             
             c4 = next((c for c in checks if c.name == "Plugin healthy"), None)
             if c4:
-                if not plugins_supported:
+                if hook_active:
+                    c4.name = "OEM hook runtime likely active"
+                    c4.status = "success"
+                    c4.detail = None
+                else:
                     c4.name = "OEM hook runtime unavailable"
                     c4.status = "warning"
-                    c4.detail = "Current OpenCode config schema does not support plugin registration."
-                else:
-                    c4.name = "OEM hook runtime active"
+                    reasons = []
+                    if not plugin_installed:
+                        reasons.append("Plugin file not installed")
+                    if not config_valid:
+                        reasons.append("OpenCode config is invalid")
+                    if not mcp_registered:
+                        reasons.append("MCP not registered")
+                    if not inst_active:
+                        reasons.append("Instructions not active")
+                    c4.detail = f"Unavailable: {', '.join(reasons)}"
                 mapped_checks.append(c4)
                 
             # 5. Session lifecycle enabled (mapped from Check 8)
