@@ -10,7 +10,7 @@ export interface ConceptData {
   concept_id: string;
   canonical_name: string;
   aliases: string[];
-  status: "candidate" | "emerging" | "validated" | "canonical" | "needs_review" | "deprecated";
+  status: "candidate" | "emerging" | "validated" | "canonical" | "needs_review" | "deprecated" | "unmanaged" | "missing_file";
   confidence: number;
   evidence_count: number;
   sessions: string[];

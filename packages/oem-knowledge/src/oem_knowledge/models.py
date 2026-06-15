@@ -14,7 +14,7 @@ class ConceptData(BaseModel):
     concept_id: str
     canonical_name: str
     aliases: list[str] = Field(default_factory=list)
-    status: Literal["candidate", "emerging", "validated", "canonical", "needs_review", "deprecated"] = (
+    status: Literal["candidate", "emerging", "validated", "canonical", "needs_review", "deprecated", "unmanaged", "missing_file"] = (
         "candidate"
     )
     confidence: int = Field(default=1, ge=1, le=5)

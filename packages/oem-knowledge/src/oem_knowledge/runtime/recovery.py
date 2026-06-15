@@ -6,6 +6,8 @@ import re
 import uuid
 import time
 import shutil
+import dataclasses
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -516,6 +518,224 @@ def recover_reflection(
     )
 
 
+@dataclass
+class RecoveryIssue:
+    code: str
+    severity: str
+    concept_id: str | None
+    path: str | None
+    message: str
+    suggested_action: str
+    safe_to_apply: bool
+
+def parse_wiki_file_for_recovery(fp: Path) -> dict[str, Any]:
+    text = ""
+    try:
+        text = fp.read_text(encoding="utf-8")
+    except Exception:
+        pass
+    
+    frontmatter = {}
+    fm_match = re.match(r"^---\s*\n(.*?)\n---\s*\n", text, re.DOTALL)
+    if fm_match:
+        for line in fm_match.group(1).splitlines():
+            if ":" in line:
+                k, v = line.split(":", 1)
+                frontmatter[k.strip()] = v.strip()
+                
+    c_id = frontmatter.get("concept_id") or frontmatter.get("id")
+    c_name = frontmatter.get("canonical_name") or frontmatter.get("title")
+    c_status = frontmatter.get("status")
+
+    if c_id and c_name and c_status:
+        aliases = []
+        raw_aliases = frontmatter.get("aliases", "[]")
+        try:
+            aliases = json.loads(raw_aliases)
+        except Exception:
+            pass
+        source_event_ids = []
+        raw_sevents = frontmatter.get("source_event_ids", "[]")
+        try:
+            source_event_ids = json.loads(raw_sevents)
+        except Exception:
+            pass
+            
+        return {
+            "concept_id": c_id,
+            "canonical_name": c_name,
+            "status": c_status,
+            "confidence": int(frontmatter.get("confidence", 3)),
+            "evidence_count": int(frontmatter.get("evidence_count", 0)),
+            "sessions": frontmatter.get("sessions", []),
+            "aliases": aliases,
+            "source_event_ids": source_event_ids,
+            "is_ambiguous": False
+        }
+    
+    # Try H1
+    h1_match = re.search(r"^\s*#\s+(.+)$", text, re.MULTILINE)
+    if h1_match:
+        title = h1_match.group(1).strip()
+        return {
+            "concept_id": fp.stem,
+            "canonical_name": title.lower().replace(" ", "-"),
+            "status": "unmanaged",
+            "aliases": [],
+            "evidence_count": 0,
+            "is_ambiguous": False
+        }
+        
+    # Fallback to filename as title, status unmanaged
+    return {
+        "concept_id": fp.stem,
+        "canonical_name": fp.stem,
+        "status": "unmanaged",
+        "aliases": [],
+        "evidence_count": 0,
+        "is_ambiguous": True
+    }
+
+def diagnose_registry_drift(eng: KnowledgeEngine, project: str | None = None) -> list[RecoveryIssue]:
+    harness = eng._resolve_harness(project)
+    registry_path = eng.layout(project).registry_path
+    wiki_dir = eng.layout(project).concepts_dir
+    events_path = eng.layout(project).events_path
+
+    registry = {}
+    if registry_path.exists():
+        try:
+            registry = eng.state._load_registry(project, lock=False)
+        except Exception:
+            pass
+
+    wiki_files = list(wiki_dir.glob("concept_*.md")) if wiki_dir.exists() else []
+    wiki_stems = {f.stem for f in wiki_files}
+    registry_keys = set(registry.keys())
+    concept_registry_keys = {k for k in registry_keys if k.startswith("concept_")}
+
+    issues = []
+
+    # 1. Orphan wiki concepts
+    orphans = wiki_stems - registry_keys
+    for cid in sorted(orphans):
+        fp = wiki_dir / f"{cid}.md"
+        parsed = parse_wiki_file_for_recovery(fp)
+        if parsed.get("is_ambiguous"):
+            issues.append(RecoveryIssue(
+                code="AMBIGUOUS_ORPHAN",
+                severity="warning",
+                concept_id=cid,
+                path=str(fp),
+                message=f"{cid}.md exists but lacks parseable frontmatter metadata or H1 heading.",
+                suggested_action="Create minimal unmanaged registry entry for manual review. Do not delete.",
+                safe_to_apply=True
+            ))
+        else:
+            issues.append(RecoveryIssue(
+                code="ORPHAN_WIKI_CONCEPT",
+                severity="warning",
+                concept_id=cid,
+                path=str(fp),
+                message=f"{cid}.md exists but registry entry is missing.",
+                suggested_action="Reattach orphan wiki file to registry.",
+                safe_to_apply=True
+            ))
+
+    # 2. Registry entries missing wiki files
+    missing_wiki = concept_registry_keys - wiki_stems
+    for cid in sorted(missing_wiki):
+        issues.append(RecoveryIssue(
+            code="MISSING_WIKI_FILE",
+            severity="warning",
+            concept_id=cid,
+            path=None,
+            message=f"{cid} exists in registry but wiki file is missing.",
+            suggested_action="Mark registry entry status as missing_file/manual-review. Do not delete.",
+            safe_to_apply=True
+        ))
+
+    # 3. Registry ID gaps
+    numeric_values = set()
+    pattern = re.compile(r"^concept_(\d+)$")
+    for cid in concept_registry_keys:
+        m = pattern.match(cid)
+        if m:
+            numeric_values.add(int(m.group(1)))
+    if numeric_values:
+        max_val = max(numeric_values)
+        for i in range(1, max_val + 1):
+            cid = f"concept_{i:03d}"
+            if i not in numeric_values:
+                issues.append(RecoveryIssue(
+                    code="REGISTRY_ID_GAP",
+                    severity="warning",
+                    concept_id=cid,
+                    path=None,
+                    message=f"Registry ID gap found: {cid} is unallocated.",
+                    suggested_action="None (gaps are preserved; allocator will skip).",
+                    safe_to_apply=False
+                ))
+
+    # 4. Duplicate concept titles
+    titles = {}
+    duplicates = {}
+    for cid, cdata in registry.items():
+        if not isinstance(cdata, dict) or not cid.startswith("concept_"):
+            continue
+        title = cdata.get("canonical_name", "").lower()
+        if title:
+            if title in titles:
+                if title not in duplicates:
+                    duplicates[title] = [titles[title]]
+                duplicates[title].append(cid)
+            else:
+                titles[title] = cid
+
+    for title, cids in sorted(duplicates.items()):
+        issues.append(RecoveryIssue(
+            code="DUPLICATE_CONCEPT_TITLE",
+            severity="warning",
+            concept_id=None,
+            path=None,
+            message=f"Duplicate concept title '{title}' found in registry for entries: {', '.join(cids)}.",
+            suggested_action="Manual review required to consolidate duplicates.",
+            safe_to_apply=False
+        ))
+
+    # 5. Partially materialized events
+    all_event_ids = set()
+    if events_path.exists():
+        try:
+            for line in events_path.read_text(encoding="utf-8").strip().splitlines():
+                if line.strip():
+                    ev = json.loads(line)
+                    ev_id = ev.get("event_id") or ev.get("id")
+                    ev_type = ev.get("event_type") or ev.get("type", "observation")
+                    if ev_id and ev_type in ("observation", "validation", "failure", "needs_review", "canonical"):
+                        all_event_ids.add(ev_id)
+        except Exception:
+            pass
+
+    materialized_event_ids = set()
+    for cid, cdata in registry.items():
+        if isinstance(cdata, dict):
+            materialized_event_ids.update(cdata.get("source_event_ids", []))
+
+    partially_materialized_ids = sorted(list(all_event_ids - materialized_event_ids))
+    for ev_id in partially_materialized_ids:
+        issues.append(RecoveryIssue(
+            code="PARTIAL_MATERIALIZATION",
+            severity="info",
+            concept_id=None,
+            path=None,
+            message=f"Event {ev_id} is present in events log but not tracked by any concept in the registry.",
+            suggested_action="None (run new reflection/materialization session to consolidate).",
+            safe_to_apply=False
+        ))
+
+    return issues
+
 def recover_registry(
     eng: KnowledgeEngine,
     project: str | None = None,
@@ -541,162 +761,136 @@ def recover_registry(
         except Exception:
             pass
 
-    wiki_files = list(wiki_dir.glob("concept_*.md")) if wiki_dir.exists() else []
-    wiki_stems = {f.stem for f in wiki_files}
-    registry_keys = set(registry.keys())
-    concept_registry_keys = {k for k in registry_keys if k.startswith("concept_")}
+    issues = diagnose_registry_drift(eng, project)
 
-    # 1. Orphan wiki concept files
-    orphans = wiki_stems - registry_keys
-
-    # 2. Registry entries missing wiki files
-    missing_wiki = concept_registry_keys - wiki_stems
-
-    # 3. Registry ID gaps
-    gaps = []
-    numeric_values = set()
-    pattern = re.compile(r"^concept_(\d+)$")
-    for cid in concept_registry_keys:
-        m = pattern.match(cid)
-        if m:
-            numeric_values.add(int(m.group(1)))
-    if numeric_values:
-        max_val = max(numeric_values)
-        for i in range(1, max_val + 1):
-            if i not in numeric_values:
-                gaps.append(f"concept_{i:03d}")
-
-    # 4. Duplicate concept titles
-    titles = {}
+    orphans = [iss.concept_id for iss in issues if iss.code in ("ORPHAN_WIKI_CONCEPT", "AMBIGUOUS_ORPHAN")]
+    missing_wiki = [iss.concept_id for iss in issues if iss.code == "MISSING_WIKI_FILE"]
+    gaps = [iss.concept_id for iss in issues if iss.code == "REGISTRY_ID_GAP"]
     duplicates = {}
-    for cid, cdata in registry.items():
-        if not isinstance(cdata, dict) or not cid.startswith("concept_"):
-            continue
-        title = cdata.get("canonical_name", "").lower()
-        if title:
-            if title in titles:
-                if title not in duplicates:
-                    duplicates[title] = [titles[title]]
-                duplicates[title].append(cid)
-            else:
-                titles[title] = cid
+    for iss in issues:
+        if iss.code == "DUPLICATE_CONCEPT_TITLE":
+            # Extract concept title from message
+            m = re.search(r"Duplicate concept title '(.+?)'", iss.message)
+            if m:
+                duplicates[m.group(1)] = iss.message
 
-    # 5. Partially materialized events
-    partially_materialized = []
-    all_event_ids = set()
-    if events_path.exists():
-        try:
-            for line in events_path.read_text(encoding="utf-8").strip().splitlines():
-                if line.strip():
-                    ev = json.loads(line)
-                    ev_id = ev.get("event_id") or ev.get("id")
-                    ev_type = ev.get("event_type") or ev.get("type", "observation")
-                    if ev_id and ev_type in ("observation", "validation", "failure", "needs_review", "canonical"):
-                        all_event_ids.add(ev_id)
-        except Exception:
-            pass
-
-    materialized_event_ids = set()
-    for cid, cdata in registry.items():
-        if isinstance(cdata, dict):
-            materialized_event_ids.update(cdata.get("source_event_ids", []))
-
-    partially_materialized = sorted(list(all_event_ids - materialized_event_ids))
-
-    issues = []
-    if orphans:
-        issues.append(f"{len(orphans)} orphan wiki concept files")
-    if missing_wiki:
-        issues.append(f"{len(missing_wiki)} registry entries missing wiki files")
-    if gaps:
-        issues.append(f"{len(gaps)} registry ID gaps")
-    if duplicates:
-        issues.append(f"{len(duplicates)} duplicate concept titles")
-    if partially_materialized:
-        issues.append(f"{len(partially_materialized)} partially materialized events")
+    partially_materialized = [iss.message for iss in issues if iss.code == "PARTIAL_MATERIALIZATION"]
 
     repairs = []
     if orphans:
         repairs.append("reattach orphan wiki files to registry or mark as unmanaged")
     if missing_wiki:
-        repairs.append("remove registry entries with missing wiki files")
+        repairs.append("mark registry entries with missing wiki files as missing_file")
 
-    backup_file = None
+    backup_dir = None
     if apply:
         from oem_knowledge.fs import FileLock
         lock_path = registry_path.with_suffix(".lock")
-        with FileLock(lock_path):
-            if backup is not False and registry_path.exists():
-                timestamp = time.strftime("%Y%m%d-%H%M%S")
-                backup_file = registry_path.with_name(f"concept_registry.json.bak-{timestamp}")
-                shutil.copy2(registry_path, backup_file)
+        
+        # 1. Create full backup of .oem folder
+        if backup is not False:
+            timestamp = time.strftime("%Y%m%d-%H%M%S")
+            backup_dir = harness.parent / f".oem.backup-{timestamp}"
+            try:
+                shutil.copytree(harness, backup_dir, symlinks=True)
+            except Exception as e:
+                raise RuntimeError(f"Failed to create full safety backup before recovery mutation: {e}")
 
-            # Re-load under lock
-            if registry_path.exists():
-                try:
+        # Keep trace of files/registry count to perform validations
+        original_registry_keys = set(registry.keys())
+        original_wiki_files = set(wiki_dir.glob("concept_*.md")) if wiki_dir.exists() else set()
+
+        try:
+            with FileLock(lock_path):
+                # Reload registry under lock
+                if registry_path.exists():
                     registry = eng.state._load_registry(project, lock=False)
-                except Exception:
-                    pass
 
-            for cid in orphans:
-                fp = wiki_dir / f"{cid}.md"
-                frontmatter = {}
+                # Apply repairs
+                for cid in orphans:
+                    fp = wiki_dir / f"{cid}.md"
+                    parsed = parse_wiki_file_for_recovery(fp)
+                    
+                    if parsed.get("status") == "unmanaged":
+                        registry[cid] = {
+                            "concept_id": cid,
+                            "canonical_name": parsed.get("canonical_name", f"unmanaged-{cid}"),
+                            "status": "unmanaged",
+                            "aliases": [],
+                            "evidence_count": 0,
+                            "recovery_status": "manual_review_required",
+                            "wiki_path": f".oem/wiki/{cid}.md"
+                        }
+                    else:
+                        registry[cid] = {
+                            "concept_id": cid,
+                            "canonical_name": parsed.get("canonical_name", cid),
+                            "status": parsed.get("status", "candidate"),
+                            "confidence": parsed.get("confidence", 3),
+                            "evidence_count": parsed.get("evidence_count", 0),
+                            "sessions": parsed.get("sessions", []),
+                            "aliases": parsed.get("aliases", []),
+                            "source_event_ids": parsed.get("source_event_ids", []),
+                            "recovery_status": "reattached",
+                            "wiki_path": f".oem/wiki/{cid}.md"
+                        }
+
+                for cid in missing_wiki:
+                    if cid in registry:
+                        registry[cid]["status"] = "missing_file"
+                        registry[cid]["recovery_status"] = "manual_review_required"
+
+                # Write out registry
+                eng.state._save_registry(registry, project, lock=False)
+
+                # Validate post-write
+                # A. JSON parses
                 try:
-                    text = fp.read_text(encoding="utf-8")
-                    fm_match = re.match(r"^---\s*\n(.*?)\n---\s*\n", text, re.DOTALL)
-                    if fm_match:
-                        for line in fm_match.group(1).splitlines():
-                            if ":" in line:
-                                k, v = line.split(":", 1)
-                                frontmatter[k.strip()] = v.strip()
+                    written_registry = json.loads(registry_path.read_text(encoding="utf-8"))
+                except Exception as je:
+                    raise RuntimeError(f"Post-apply validation failed: registry is not valid JSON: {je}")
+
+                # B. All reattached orphan IDs exist in registry
+                for cid in orphans:
+                    if cid not in written_registry:
+                        raise RuntimeError(f"Post-apply validation failed: orphan {cid} is missing from registry post-write")
+
+                # C. No wiki files were deleted
+                current_wiki_files = set(wiki_dir.glob("concept_*.md")) if wiki_dir.exists() else set()
+                if not original_wiki_files.issubset(current_wiki_files):
+                    deleted = original_wiki_files - current_wiki_files
+                    raise RuntimeError(f"Post-apply validation failed: wiki files were deleted: {deleted}")
+
+                # D. No registry entries were deleted
+                current_registry_keys = set(written_registry.keys())
+                if not original_registry_keys.issubset(current_registry_keys):
+                    deleted = original_registry_keys - current_registry_keys
+                    raise RuntimeError(f"Post-apply validation failed: registry entries were deleted: {deleted}")
+
+                # E. Allocator next ID is greater than highest occupied wiki/registry ID
+                from oem_knowledge.concept_id import allocate_concept_id
+                next_id = allocate_concept_id(written_registry, wiki_dir)
+                
+                numeric_values = set()
+                pattern = re.compile(r"^concept_(\d+)$")
+                for cid in list(written_registry.keys()) + [f.stem for f in current_wiki_files]:
+                    m = pattern.match(cid)
+                    if m:
+                        numeric_values.add(int(m.group(1)))
+                max_id_num = max(numeric_values) if numeric_values else 0
+                match_next = pattern.match(next_id)
+                next_num = int(match_next.group(1)) if match_next else 0
+                if next_num <= max_id_num:
+                    raise RuntimeError(f"Post-apply validation failed: Allocator next ID {next_id} is not greater than highest occupied ID concept_{max_id_num:03d}")
+
+        except Exception as err:
+            # Restore registry backup if we created one
+            if backup_dir and (backup_dir / "concept_registry.json").exists():
+                try:
+                    shutil.copy2(backup_dir / "concept_registry.json", registry_path)
                 except Exception:
                     pass
-
-                c_id = frontmatter.get("concept_id")
-                c_name = frontmatter.get("canonical_name")
-                c_status = frontmatter.get("status")
-
-                if c_id and c_name and c_status:
-                    # Clean aliases
-                    c_aliases = []
-                    raw_aliases = frontmatter.get("aliases", "[]")
-                    try:
-                        c_aliases = json.loads(raw_aliases)
-                    except Exception:
-                        pass
-                    # Clean source_event_ids
-                    c_sevents = []
-                    raw_sevents = frontmatter.get("source_event_ids", "[]")
-                    try:
-                        c_sevents = json.loads(raw_sevents)
-                    except Exception:
-                        pass
-
-                    registry[cid] = {
-                        "concept_id": cid,
-                        "canonical_name": c_name,
-                        "status": c_status,
-                        "confidence": int(frontmatter.get("confidence", 3)),
-                        "evidence_count": int(frontmatter.get("evidence_count", 0)),
-                        "sessions": frontmatter.get("sessions", []),
-                        "aliases": c_aliases,
-                        "source_event_ids": c_sevents,
-                    }
-                else:
-                    registry[cid] = {
-                        "concept_id": cid,
-                        "canonical_name": f"unmanaged-{cid}",
-                        "status": "unmanaged",
-                        "aliases": [],
-                        "evidence_count": 0,
-                    }
-
-            # Remove entries that are missing wiki files
-            for cid in missing_wiki:
-                if cid in registry:
-                    del registry[cid]
-
-            eng.state._save_registry(registry, project, lock=False)
+            raise RuntimeError(f"Registry recovery apply failed: {err}")
 
     from oem_knowledge.runtime.result import make_result
     return make_result(
@@ -709,9 +903,9 @@ def recover_registry(
         gaps=sorted(gaps),
         duplicates=duplicates,
         partially_materialized=partially_materialized,
-        issues=issues,
+        issues=[dataclasses.asdict(iss) for iss in issues],
         repairs=repairs,
-        backup_file=str(backup_file) if backup_file else None,
+        backup_dir=str(backup_dir) if backup_dir else None,
     )
 
 
@@ -733,7 +927,7 @@ def cmd_recover(
             res = recover_registry(
                 eng, project, dry_run=dry_run, apply=apply, backup=backup
             )
-        except ValueError as e:
+        except Exception as e:
             print(f"Error: {e}", file=sys.stderr)
             sys.exit(1)
 
@@ -758,8 +952,8 @@ def cmd_recover(
         print()
 
         if apply:
-            if res.get("backup_file"):
-                p = Path(res["backup_file"])
+            if res.get("backup_dir"):
+                p = Path(res["backup_dir"])
                 try:
                     rel_print = p.relative_to(harness.parent)
                 except Exception:
@@ -831,140 +1025,224 @@ def cmd_recover(
 
         return res
 
-    # Normal recovery (Active session recovery)
+    # Consolidated recovery (default scope = None)
     active_session_file = harness / "state" / "active_session.json"
-    
     session_state = SessionState.load(active_session_file)
-    if not session_state:
-        print(render_panel("OEM Recovery", ["No unfinished sessions detected."], status="info"))
-        return
 
-    session_id = session_state.session_id
-    agent_name = session_state.agent
-    started_at = session_state.started_at
-    current_status = session_state.status
-    transcript_path = session_state.transcript_path
+    # Diagnosing registry drift
+    drift_issues = diagnose_registry_drift(eng, project)
+    
+    orphans = [iss.concept_id for iss in drift_issues if iss.code in ("ORPHAN_WIKI_CONCEPT", "AMBIGUOUS_ORPHAN")]
+    missing_wiki = [iss.concept_id for iss in drift_issues if iss.code == "MISSING_WIKI_FILE"]
+    
+    has_active_session = session_state is not None
+    has_registry_drift = len(orphans) > 0 or len(missing_wiki) > 0
+    is_clean = not has_active_session and not has_registry_drift
 
     if status:
-        started_str = datetime.datetime.fromtimestamp(started_at).isoformat() if started_at else "unknown"
-        lines = [
-            f"Session ID:      {session_id}",
-            f"Agent:           {agent_name}",
-            f"Lifecycle State: {current_status}",
-            f"Started At:      {started_str}",
-            f"Project:         {session_state.project}",
-            f"Transcript Path: {transcript_path}",
-            f"Context Path:    {session_state.context_path}",
-            f"Temp Inst Path:  {session_state.temp_instructions}"
-        ]
-        print(render_panel("Active Session Status", lines, status="stats"))
+        if has_active_session:
+            started_str = datetime.datetime.fromtimestamp(session_state.started_at).isoformat() if session_state.started_at else "unknown"
+            lines = [
+                f"Session ID:      {session_state.session_id}",
+                f"Agent:           {session_state.agent}",
+                f"Lifecycle State: {session_state.status}",
+                f"Started At:      {started_str}",
+                f"Project:         {session_state.project}",
+                f"Transcript Path: {session_state.transcript_path}"
+            ]
+            print(render_panel("Active Session Status", lines, status="stats"))
+        else:
+            print(render_panel("Session Status", ["No active session found."], status="info"))
+        
+        print("\nRegistry / Wiki Drift Status:")
+        print(f"- {len(orphans)} orphan wiki concept files")
+        print(f"- {len(missing_wiki)} registry entries missing wiki files")
         return
 
     if abort:
-        context_path = session_state.context_path
-        temp_inst = session_state.temp_instructions
-        for path_str in (context_path, temp_inst, str(_OEM_RUNTIME_CONTEXT_PATH), str(_OEM_TEMP_INSTRUCTIONS)):
-            if path_str:
-                p = Path(path_str)
-                if p.exists():
-                    try:
-                        p.unlink()
-                    except Exception:
-                        pass
-        try:
-            session_state.status = "failed"
-            active_session_file.unlink()
-        except Exception:
-            pass
-        print(render_panel("Session Aborted", [f"Session {session_id} has been discarded and cleaned up."], status="ok"))
+        if has_active_session:
+            context_path = session_state.context_path
+            temp_inst = session_state.temp_instructions
+            for path_str in (context_path, temp_inst, str(_OEM_RUNTIME_CONTEXT_PATH), str(_OEM_TEMP_INSTRUCTIONS)):
+                if path_str:
+                    p = Path(path_str)
+                    if p.exists():
+                        try:
+                            p.unlink()
+                        except Exception:
+                            pass
+            try:
+                session_state.status = "failed"
+                active_session_file.unlink()
+            except Exception:
+                pass
+            print(render_panel("Session Aborted", [f"Session {session_state.session_id} has been discarded and cleaned up."], status="ok"))
+        else:
+            print("No active session to abort.")
+        return    # Default logic (Dry-run or Apply)
+    should_apply_session = apply or (not dry_run and not apply and has_active_session)
+    should_apply_registry = apply
+
+    if not dry_run and not apply and not has_active_session:
+        dry_run = True
+
+    if dry_run:
+        print("OEM Recovery Dry Run\n")
+        print("Session state:")
+        if has_active_session:
+            print(f"  ! Active session detected: {session_state.session_id} (State: {session_state.status})")
+        else:
+            print("  ✓ No unfinished sessions detected")
+        print()
+        
+        print("Registry/wiki consistency:")
+        if has_registry_drift:
+            if orphans:
+                print(f"  ! {len(orphans)} wiki files missing from registry")
+            else:
+                print("  ✓ No wiki files missing from registry")
+            if missing_wiki:
+                print(f"  ! {len(missing_wiki)} registry entries missing wiki files")
+            else:
+                print("  ✓ No registry entries missing wiki files")
+        else:
+            print("  ✓ Registry/wiki consistency is clean")
+        print()
+
+        if orphans:
+            print("Wiki files missing from registry:")
+            for cid in sorted(orphans):
+                print(f"  - {cid}")
+            print()
+
+        if missing_wiki:
+            print("Registry entries missing wiki files:")
+            for cid in sorted(missing_wiki):
+                print(f"  - {cid}")
+            print()
+
+        print("Suggested actions:")
+        print("  - Reattach orphan wiki files to registry when their frontmatter/title can be parsed safely.")
+        print("  - Mark ambiguous orphan files as unmanaged/manual-review.")
+        print("  - Preserve registry entries with missing wiki files and mark as missing_file/manual-review.")
+        print("  - Do not delete files automatically.")
+        print()
+
+        print("Recovery status:")
+        if is_clean:
+            print("  CLEAN")
+        else:
+            print("  NOT CLEAN")
         return
 
-    print(render_panel("Recovering Session", [f"Attempting to recover session {session_id} (State: {current_status})"], status="info"))
-    
-    from oem_knowledge.adapters import get_adapter
-    adapter = get_adapter(agent_name, eng, project)
+    # Apply Mode
+    if should_apply_session or should_apply_registry:
+        print(f"Beginning Consolidated Recovery Apply...")
+        
+        # 1. Active Session Recovery
+        if has_active_session and should_apply_session:
+            print(render_panel("Recovering Session", [f"Attempting to recover session {session_state.session_id} (State: {session_state.status})"], status="info"))
+            from oem_knowledge.adapters import get_adapter
+            adapter = get_adapter(session_state.agent, eng, project)
 
-    chat_text = ""
-    if transcript_path:
-        t_file = Path(transcript_path)
-        if t_file.exists():
-            if hasattr(adapter, "parse_transcript"):
-                chat_text = adapter.parse_transcript(t_file)
-            else:
-                chat_text = t_file.read_text(encoding="utf-8")
+            chat_text = ""
+            if session_state.transcript_path:
+                t_file = Path(session_state.transcript_path)
+                if t_file.exists():
+                    if hasattr(adapter, "parse_transcript"):
+                        chat_text = adapter.parse_transcript(t_file)
+                    else:
+                        chat_text = t_file.read_text(encoding="utf-8")
 
-    if not chat_text:
-        if hasattr(adapter, "discover_latest_transcript") and hasattr(adapter, "parse_transcript"):
-            latest_t = adapter.discover_latest_transcript()
-            if latest_t:
-                chat_text = adapter.parse_transcript(latest_t)
-        if not chat_text:
-            chat_path = harness / "state" / f"chat_{session_id}.md"
-            if chat_path.exists():
-                chat_text = chat_path.read_text(encoding="utf-8")
+            if not chat_text:
+                if hasattr(adapter, "discover_latest_transcript") and hasattr(adapter, "parse_transcript"):
+                    latest_t = adapter.discover_latest_transcript()
+                    if latest_t:
+                        chat_text = adapter.parse_transcript(latest_t)
+                if not chat_text:
+                    chat_path = harness / "state" / f"chat_{session_state.session_id}.md"
+                    if chat_path.exists():
+                        chat_text = chat_path.read_text(encoding="utf-8")
+                        try:
+                            chat_path.unlink()
+                        except Exception:
+                            pass
+
+            if not chat_text:
+                print(render_panel("Recovery Failed", ["Could not find any conversation transcript or log for the session."], status="error"))
+                sys.exit(1)
+
+            try:
+                commit_start = time.time()
+                commit_res = eng.session_commit(
+                    project,
+                    conversation_text=chat_text,
+                    session_id=session_state.session_id,
+                    session_started_at=session_state.started_at
+                )
+                commit_duration = time.time() - commit_start
+                eng.state.record_outcome("success", session_id=session_state.session_id, project=project)
+
                 try:
-                    chat_path.unlink()
+                    metrics_file = harness / "state" / "metrics.json"
+                    update_metrics_file(metrics_file, {"sessions_recovered": 1})
                 except Exception:
                     pass
 
-    if not chat_text:
-        print(render_panel("Recovery Failed", ["Could not find any conversation transcript or log for the session."], status="error"))
-        sys.exit(1)
+                try:
+                    session_state.status = "completed"
+                    active_session_file.unlink()
+                except Exception:
+                    pass
 
-    try:
-        commit_start = time.time()
-        commit_res = eng.session_commit(
-            project,
-            conversation_text=chat_text,
-            session_id=session_id,
-            session_started_at=started_at
-        )
-        commit_duration = time.time() - commit_start
-        eng.state.record_outcome("success", session_id=session_id, project=project)
+                context_path = session_state.context_path
+                temp_inst = session_state.temp_instructions
+                for path_str in (context_path, temp_inst, str(_OEM_RUNTIME_CONTEXT_PATH), str(_OEM_TEMP_INSTRUCTIONS)):
+                    if path_str:
+                        p = Path(path_str)
+                        if p.exists():
+                            try:
+                                p.unlink()
+                            except Exception:
+                                pass
 
-        # Emit sessions_recovered metric
-        try:
-            metrics_file = harness / "state" / "metrics.json"
-            update_metrics_file(metrics_file, {"sessions_recovered": 1})
-        except Exception:
-            pass
+                from oem_knowledge.runtime.supervisor import render_commit_complete_panel
+                report_name = Path(commit_res['report_path']).name
+                concepts_count = len(commit_res.get('materialized_log', []))
+                exp = commit_res.get("explainability", {})
+                obs_count = exp.get("file_observations", 0)
 
-        try:
-            session_state.status = "completed"
-            active_session_file.unlink()
-        except Exception:
-            pass
+                print(
+                    render_commit_complete_panel(
+                        report_name=report_name,
+                        concepts_count=concepts_count,
+                        observations_count=obs_count,
+                        duration=commit_duration,
+                        structured_events=exp.get("structured_events", 0),
+                        fallback_concepts=exp.get("fallback_extractions", 0),
+                        file_observations=exp.get("file_observations", 0),
+                        index_stats=commit_res.get("index_stats"),
+                        retrieval_mode=eng.search.resolve_retrieval_mode()
+                    )
+                )
+            except Exception as e:
+                print(render_panel("Recovery Commit Failed", [f"Error committing recovered session: {e}"], status="error"))
+                sys.exit(1)
 
-        context_path = session_state.context_path
-        temp_inst = session_state.temp_instructions
-        for path_str in (context_path, temp_inst, str(_OEM_RUNTIME_CONTEXT_PATH), str(_OEM_TEMP_INSTRUCTIONS)):
-            if path_str:
-                p = Path(path_str)
-                if p.exists():
+        # 2. Registry Drift Recovery
+        if has_registry_drift and should_apply_registry:
+            try:
+                res = recover_registry(eng, project, dry_run=False, apply=True, backup=backup)
+                if res.get("backup_dir"):
+                    p = Path(res["backup_dir"])
                     try:
-                        p.unlink()
+                        rel_print = p.relative_to(harness.parent)
                     except Exception:
-                        pass
-
-        from oem_knowledge.runtime.supervisor import render_commit_complete_panel
-        report_name = Path(commit_res['report_path']).name
-        concepts_count = len(commit_res.get('materialized_log', []))
-        exp = commit_res.get("explainability", {})
-        obs_count = exp.get("file_observations", 0)
-
-        print(
-            render_commit_complete_panel(
-                report_name=report_name,
-                concepts_count=concepts_count,
-                observations_count=obs_count,
-                duration=commit_duration,
-                structured_events=exp.get("structured_events", 0),
-                fallback_concepts=exp.get("fallback_extractions", 0),
-                file_observations=exp.get("file_observations", 0),
-                index_stats=commit_res.get("index_stats"),
-                retrieval_mode=eng.search.resolve_retrieval_mode()
-            )
-        )
-    except Exception as e:
-        print(render_panel("Recovery Commit Failed", [f"Error committing recovered session: {e}"], status="error"))
-        sys.exit(1)
+                        rel_print = p
+                    print(f"Full safety backup created at: {rel_print}")
+                print("Registry / wiki drift repairs applied and validated successfully.")
+            except Exception as e:
+                print(f"Registry drift recovery failed: {e}", file=sys.stderr)
+                sys.exit(1)
+        elif has_registry_drift and not should_apply_registry:
+            print("\nRegistry / wiki drift detected but not repaired (run with --apply to repair).")
