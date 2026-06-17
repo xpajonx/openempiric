@@ -563,6 +563,89 @@ def cmd_setup_codex_app(eng, project: str | None = None, repair: bool = False) -
     print(render_panel("OEM Codex App Setup", lines, status="ok"))
 
 
+def cmd_setup_grok(eng, project: str | None = None, repair: bool = False) -> None:
+    """Setup Grok integration: register OEM as MCP server in Grok config(s) + optional skill.
+
+    Supports GROK_HOME. Writes to both user (~/.grok/config.toml) and project (.grok/config.toml) when possible.
+    """
+    import tomllib
+    from oem_knowledge.adapters.grok.adapter import _get_grok_home
+
+    print("OEM Grok Setup\n")
+
+    grok_home = _get_grok_home()
+    user_config = grok_home / "config.toml"
+    project_root = Path(project or ".").resolve()
+    project_config = project_root / ".grok" / "config.toml"
+
+    mcp_name = "openempiric"
+    mcp_section = f'''
+[mcp_servers.{mcp_name}]
+command = "oem"
+args = ["mcp"]
+enabled = true
+'''
+
+    changes = []
+
+    def _ensure_mcp(path: Path, label: str) -> bool:
+        if not repair and path.exists():
+            try:
+                data = tomllib.loads(path.read_text(encoding="utf-8"))
+                if "mcp_servers" in data and mcp_name in data.get("mcp_servers", {}):
+                    return False  # already present
+            except Exception:
+                pass  # treat as need update
+
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            existing = ""
+            if path.exists():
+                existing = path.read_text(encoding="utf-8")
+
+            if f"[mcp_servers.{mcp_name}]" in existing and not repair:
+                return False
+
+            # Simple append (safe for most cases; user can run grok mcp add for complex envs)
+            with open(path, "a", encoding="utf-8") as f:
+                if existing and not existing.endswith("\n"):
+                    f.write("\n")
+                f.write(mcp_section)
+            changes.append(f"{label}: added [mcp_servers.{mcp_name}]")
+            return True
+        except Exception as e:
+            import logging as _logging
+            _logging.getLogger(__name__).warning(f"Failed to update {label} ({path}): {e}")
+            return False
+
+    wrote_user = _ensure_mcp(user_config, "user")
+    wrote_proj = _ensure_mcp(project_config, "project")
+
+    # Try to also install a project skill (best effort)
+    try:
+        from oem_knowledge.adapters.grok.adapter import GrokAdapter
+        adapter = GrokAdapter(eng, str(project_root))
+        adapter.install_skill()
+    except Exception:
+        pass
+
+    lines = [
+        f"GROK_HOME: {grok_home}",
+        f"User config: {user_config} {'(updated)' if wrote_user else ''}",
+        f"Project .grok/config: {project_config} {'(updated)' if wrote_proj else ''}",
+        "",
+        "MCP server 'openempiric' registered (oem mcp).",
+        "Restart Grok or use `/mcp reload` (if available) to pick up changes.",
+        "Use `knowledge_read` / `knowledge_search` etc. inside Grok sessions.",
+    ]
+    if repair:
+        lines.append("(--repair used)")
+    if not (wrote_user or wrote_proj):
+        lines.append("No changes needed (already configured).")
+
+    print(render_panel("OEM Grok Setup", lines, status="ok"))
+
+
 def run_system_command(args):
     # Setup deferred logging Configuration
     import logging
@@ -582,6 +665,8 @@ def run_system_command(args):
             cmd_setup_opencode(eng, project=project, repair=args.repair)
         elif args.setup_target == "codex-app":
             cmd_setup_codex_app(eng, project=project, repair=args.repair)
+        elif args.setup_target == "grok":
+            cmd_setup_grok(eng, project=project, repair=args.repair)
 
     elif args.command == "warmup":
         res = eng.warmup()

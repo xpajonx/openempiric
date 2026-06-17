@@ -200,7 +200,7 @@ def _setup_parser() -> argparse.ArgumentParser:
         help="[User] Run a managed coding agent session with dynamic config injection",
     )
     run_p.add_argument(
-        "agent", type=str, help="opencode, claude-code, cursor, or custom command"
+        "agent", type=str, help="opencode, grok, claude-code, cursor, or custom command"
     )
     run_p.add_argument("--project", type=str, default="")
     run_p.add_argument(
@@ -371,7 +371,7 @@ def _setup_parser() -> argparse.ArgumentParser:
 
     setup_p = sub.add_parser(
         "setup",
-        help="[User] Configure and register OpenCode agent workstation-level integration",
+        help="[User] Configure and register agent workstation-level integration (opencode, grok, codex-app)",
     )
     setup_sub = setup_p.add_subparsers(dest="setup_target", required=True)
     setup_opencode = setup_sub.add_parser(
@@ -389,6 +389,14 @@ def _setup_parser() -> argparse.ArgumentParser:
         "--repair",
         action="store_true",
         help="Forcefully overwrite and recreate OEM-owned Codex integration files",
+    )
+    setup_grok = setup_sub.add_parser(
+        "grok", help="Integrate Grok (xAI) with OEM via MCP + project rules"
+    )
+    setup_grok.add_argument(
+        "--repair",
+        action="store_true",
+        help="Forcefully overwrite and recreate OEM Grok integration files",
     )
 
     migrate_p = sub.add_parser(

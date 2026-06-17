@@ -8,6 +8,7 @@ from oem_knowledge.adapters.registry import register_adapter, get_registered_ada
 from oem_knowledge.adapters.opencode.adapter import OpenCodeAdapter
 from oem_knowledge.adapters.antigravity.adapter import AntigravityAdapter
 from oem_knowledge.adapters.codex_app.adapter import CodexAppAdapter
+from oem_knowledge.adapters.grok.adapter import GrokAdapter
 
 def get_adapter(agent_name: str, engine: KnowledgeEngine, project_path: Optional[str] = None):
     name_clean = agent_name.lower().strip()

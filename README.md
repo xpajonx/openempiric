@@ -134,6 +134,7 @@ oem doctor
 OpenEmpiric officially supports the following agent runtimes out-of-the-box:
 
 - **OpenCode**: Workstation-level integration, native plugins, and session supervisor for terminal environments.
+- **Grok**: xAI Grok Build TUI/CLI support via `oem run grok` and `oem setup grok` (MCP + rules).
 - **Antigravity**: Terminal co-pilot and command-line companion integration.
 - **Codex App**: First-class MCP-based non-terminal desktop runtime, configured automatically via the WSL bridge architecture (`oem setup codex-app`).
 
@@ -214,8 +215,10 @@ To keep project repositories clean while preserving valuable knowledge, follow t
 | ------- | -------- | ----------- |
 | `oem init` | **User** | Initialize the `.oem/` memory repository in the current workspace. |
 | `oem setup opencode` | **User** | Configure and register OpenCode workstation-level integration. |
+| `oem setup grok` | **User** | Configure and register Grok (MCP + .grok integration). |
 | `oem setup codex-app` | **User** | Configure and register Codex App bridge integration. |
 | `oem run opencode` | **User** | Launch a managed OpenCode agent session with dynamic config injection. |
+| `oem run grok` | **User** | Launch a managed Grok agent session with dynamic context + transcript capture. |
 | `oem doctor` | **User** | Verify workspace health, plugin links, and agent integration state. |
 | `oem read` | **User** | Read the project memory baseline based on scope (`project`, `recent`, `skills`, `health`). |
 | `oem search` | **User** | Search the project knowledge base with keyword or hybrid search. |

@@ -246,6 +246,8 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None,
             cmd = ["cursor", "."]
         elif agent_name in ("agy", "antigravity"):
             cmd = ["agy"]
+        elif agent_name in ("grok", "grok-build"):
+            cmd = ["grok"]
         else:
             cmd = agent_name.split()
         try:
@@ -507,6 +509,8 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None,
                 agent_display = "Antigravity"
             elif agent_name in ("codex", "codex-app"):
                 agent_display = "Codex App"
+            elif agent_name in ("grok", "grok-build"):
+                agent_display = "Grok"
             else:
                 agent_display = agent_name.title()
                 
@@ -573,6 +577,11 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None,
             cmd = ["cursor", "."]
         elif agent_name in ("agy", "antigravity"):
             cmd = ["agy"]
+        elif agent_name in ("grok", "grok-build"):
+            # Resolve via GROK_BIN / GROK_HOME/bin/grok if present (isolated addition)
+            from oem_knowledge.adapters.grok.adapter import _get_grok_bin
+            resolved = _get_grok_bin()
+            cmd = [resolved] if resolved else ["grok"]
         else:
             cmd = agent_name.split()
 
