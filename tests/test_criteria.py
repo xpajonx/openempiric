@@ -467,14 +467,17 @@ aliases: ["two"]
             }
         )
         
+        import json
         text = result.content[0].text
+        data = json.loads(text)
+        message = data.get("message", "")
         # Clean markdown checks (no ANSI colors or ASCII frame decorators)
-        assert "Session End / Commit Complete" in text
-        assert "Session ended successfully" in text
-        assert "React" not in text  # It writes events but doesn't print raw text details by default
-        assert "\u2502" not in text  # ASCII border characters
-        assert "\u2551" not in text
-        assert "\x1b" not in text  # ANSI codes
+        assert "Session End / Commit Complete" in message
+        assert "Session ended successfully" in message
+        assert "React" not in message  # It writes events but doesn't print raw text details by default
+        assert "\u2502" not in message  # ASCII border characters
+        assert "\u2551" not in message
+        assert "\x1b" not in message  # ANSI codes
 
         # Check session report was written
         sessions_dir = Path(tmp_proj) / OEM_DIR / "sessions"

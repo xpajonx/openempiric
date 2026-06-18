@@ -9,6 +9,16 @@ if TYPE_CHECKING:
 def render_supervisor_panel(project: str | None, agent_name: str, checks: list[ReadinessCheck]) -> str:
     proj_dir = Path(project or ".").resolve()
     project_name = proj_dir.name
+    memory_root = proj_dir / ".oem"
+    cwd = Path.cwd().resolve()
+    
+    header_lines = [
+        f"Active OEM project: {proj_dir}",
+        f"Memory root: {memory_root}"
+    ]
+    if proj_dir != cwd:
+        header_lines.append(f"! Active OEM project does not match current working directory.")
+    header_lines.append("")
     
     agent_display = agent_name
     if agent_name == "opencode":
@@ -28,7 +38,7 @@ def render_supervisor_panel(project: str | None, agent_name: str, checks: list[R
     border_mid = "╠═════════════════════════════════════════════╣"
     border_bot = "╚═════════════════════════════════════════════╝"
     
-    lines = [border_top]
+    lines = list(header_lines) + [border_top]
     lines.append(f"║ Project     {project_name:<30} ║")
     lines.append(f"║ Agent       {agent_display:<30} ║")
     lines.append(border_mid)

@@ -563,6 +563,7 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None,
     managed_env["OEM_RUNTIME_CONTEXT_PATH"] = str(_OEM_RUNTIME_CONTEXT_PATH)
     if proj:
         managed_env["OEM_PROJECT"] = proj
+    managed_env["OEM_PROJECT_ROOT"] = str(Path(proj or ".").resolve())
 
     logging.info("Spawning coding agent: %s... (managed session_id=%s)", agent_name, session_id)
     p = None

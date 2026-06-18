@@ -2,11 +2,186 @@ from __future__ import annotations
 
 import time
 import json
+import os
+import sys
 from pathlib import Path
 
 from .ui import render_panel
 
 from .engine import KnowledgeEngine
+
+
+class ProjectResolutionError(Exception):
+    def __init__(self, message: str, suggestion: str = "", reason: str = ""):
+        super().__init__(message)
+        self.suggestion = suggestion
+        self.reason = reason
+
+
+class ProjectMismatchError(ProjectResolutionError):
+    def __init__(self, resolved_project: str, cwd: str):
+        super().__init__(
+            f"Active project mismatch: resolved {resolved_project} but cwd is {cwd}.",
+            suggestion="Verify you are in the correct workspace directory or pass the project explicitly.",
+            reason="project_mismatch"
+        )
+        self.resolved_project = resolved_project
+        self.cwd = cwd
+
+
+class ProjectUnresolvedError(ProjectResolutionError):
+    def __init__(self, message: str, suggestion: str = ""):
+        super().__init__(
+            message,
+            suggestion=suggestion,
+            reason="project_unresolved"
+        )
+
+
+SESSION_TO_PROJECT: dict[str, Path] = {}
+
+
+def find_nearest_oem_root(path: Path) -> Path | None:
+    try:
+        p = path.resolve()
+        for parent in [p] + list(p.parents):
+            if (parent / ".oem").is_dir():
+                return parent
+    except Exception:
+        pass
+    return None
+
+
+def is_oem_dev_repo(path: Path) -> bool:
+    try:
+        resolved = path.resolve()
+        current_file = Path(__file__).resolve()
+        for parent in [current_file] + list(current_file.parents):
+            if (parent / ".git").exists() and (parent / "packages" / "oem-knowledge").is_dir():
+                if resolved == parent:
+                    return True
+    except Exception:
+        pass
+    return False
+
+
+def is_path_inside(path: Path, parent: Path) -> bool:
+    try:
+        path.resolve().relative_to(parent.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def get_project_root_from_active_session(path: Path) -> Path | None:
+    root = find_nearest_oem_root(path)
+    if root:
+        active_json = root / ".oem" / "state" / "active_session.json"
+        if active_json.exists():
+            try:
+                data = json.loads(active_json.read_text(encoding="utf-8"))
+                p = data.get("project")
+                if p:
+                    return Path(p).resolve()
+            except Exception:
+                pass
+    return None
+
+
+def _should_bypass_mismatch_check() -> bool:
+    if os.environ.get("OEM_FORCE_MISMATCH_CHECK") == "1":
+        return False
+    return "pytest" in sys.modules
+
+
+def resolve_active_project(project_arg: str = "", session_id: str = "") -> Path:
+    # 1. Explicit project argument if provided (one-off override, does not rebind session)
+    if project_arg:
+        p = Path(project_arg).resolve()
+        root = find_nearest_oem_root(p)
+        if root:
+            return root
+        if p.is_dir():
+            return p
+        raise ProjectUnresolvedError(
+            f"Explicit project path '{project_arg}' does not exist or is not a directory.",
+            suggestion="Verify the path exists and contains a .oem folder."
+        )
+
+    # 2. Active project root recorded in SESSION_TO_PROJECT for this session
+    if session_id and session_id in SESSION_TO_PROJECT:
+        return SESSION_TO_PROJECT[session_id]
+
+    # Check active_session.json under env var directories
+    for env_var in ["OEM_PROJECT_ROOT", "WORKSPACE", "PWD"]:
+        val = os.environ.get(env_var)
+        if val:
+            p = Path(val).resolve()
+            root = get_project_root_from_active_session(p)
+            if root:
+                return root
+
+    # Check active_session.json under CWD
+    root_from_cwd_session = get_project_root_from_active_session(Path.cwd())
+    if root_from_cwd_session:
+        return root_from_cwd_session
+
+    # 3. Environment variables provided by agent runtime
+    for env_var in ["OEM_PROJECT_ROOT", "WORKSPACE", "PWD"]:
+        val = os.environ.get(env_var)
+        if val:
+            p = Path(val).resolve()
+            root = find_nearest_oem_root(p)
+            if root:
+                if is_oem_dev_repo(root) and not _should_bypass_mismatch_check():
+                    for check_var in ["OEM_PROJECT_ROOT", "WORKSPACE", "PWD"]:
+                        chk_val = os.environ.get(check_var)
+                        if chk_val:
+                            chk_p = Path(chk_val).resolve()
+                            if chk_p.is_dir() and not is_path_inside(chk_p, root):
+                                raise ProjectMismatchError(str(root), str(chk_p))
+                return root
+
+    # 4. Nearest parent directory containing .oem starting from os.getcwd()
+    cwd_path = Path.cwd().resolve()
+    root = find_nearest_oem_root(cwd_path)
+    if root:
+        if is_oem_dev_repo(root) and not _should_bypass_mismatch_check():
+            pwd_val = os.environ.get("PWD")
+            if pwd_val:
+                pwd_p = Path(pwd_val).resolve()
+                if not is_path_inside(pwd_p, root):
+                    raise ProjectMismatchError(str(root), str(pwd_p))
+        return root
+
+    raise ProjectUnresolvedError(
+        "Active OEM project root could not be resolved from the current context.",
+        suggestion="Pass project explicitly or start session from a directory containing .oem."
+    )
+
+
+def handle_resolution_error(operation: str, e: ProjectResolutionError) -> str:
+    if isinstance(e, ProjectMismatchError):
+        return json.dumps({
+            "status": "error",
+            "reason": "project_mismatch",
+            "resolved_project": e.resolved_project,
+            "cwd": e.cwd
+        }, indent=2)
+    elif isinstance(e, ProjectUnresolvedError):
+        return json.dumps({
+            "status": "error",
+            "operation": operation,
+            "reason": "project_unresolved",
+            "suggestion": e.suggestion or "Pass project explicitly or start session from a directory containing .oem."
+        }, indent=2)
+    else:
+        return json.dumps({
+            "status": "error",
+            "operation": operation,
+            "message": str(e),
+            "suggestion": getattr(e, "suggestion", None)
+        }, indent=2)
 
 
 def mount_tools(mcp: object) -> None:
@@ -27,22 +202,29 @@ def mount_tools(mcp: object) -> None:
         """Bootstrap the .oem/ memory in a project directory. If project is empty, uses current directory."""
         target = project or "."
         try:
-            res = engine.init_project(target)
+            target_path = Path(target).resolve()
+            res = engine.init_project(str(target_path))
+            lines = [res["message"], "", "Created Directories:"]
+            for d in res.get("created_directories", []):
+                lines.append(f"  📁 {d}")
+            lines.append("")
+            lines.append("Created Baseline Documents:")
+            for f in res.get("created_files", []):
+                lines.append(f"  📄 {f}")
+            panel = render_panel("OpenEmpiric Initialized", lines, status="bootstrap")
+            return json.dumps({
+                "status": "success",
+                "operation": "knowledge_init",
+                "project_root": str(target_path),
+                "memory_root": str(target_path / ".oem"),
+                "message": panel
+            }, indent=2)
         except Exception as e:
-            return render_panel(
-                "Initialization Failure", [f"Error: {e}"], status="error"
-            )
-
-        lines = [res["message"], "", "Created Directories:"]
-        for d in res.get("created_directories", []):
-            lines.append(f"  📁 {d}")
-        lines.append("")
-        lines.append("Created Baseline Documents:")
-        for f in res.get("created_files", []):
-            lines.append(f"  📄 {f}")
-        return render_panel("OpenEmpiric Initialized", lines, status="bootstrap")
-
-
+            return json.dumps({
+                "status": "error",
+                "operation": "knowledge_init",
+                "message": str(e)
+            }, indent=2)
 
     @mcp.tool()
     def knowledge_index(force: bool = False, project: str = "") -> str:
@@ -52,25 +234,38 @@ def mount_tools(mcp: object) -> None:
             force: If True, re-index everything. If False, only new/changed files.
             project: Project directory path. Defaults to current directory.
         """
-        start = time.time()
         try:
-            with KnowledgeEngine(project or None) as eng:
+            project_root = resolve_active_project(project)
+            memory_root = project_root / ".oem"
+            start = time.time()
+            with KnowledgeEngine(str(project_root)) as eng:
                 s = eng.search.index_all(force=force)
+            duration = time.time() - start
+            lines = [
+                f"Files Scanned: {s.get('scanned', 0)}",
+                f"New:           {s.get('new', 0)}",
+                f"Updated:       {s.get('updated', 0)}",
+                f"Unchanged:     {s.get('unchanged', 0)}",
+                f"Failed:        {s.get('failed', 0)}",
+                f"Duration:      {duration:.2f}s",
+            ]
+            panel = render_panel("Knowledge Index", lines, status="index")
+            return json.dumps({
+                "status": "success",
+                "operation": "knowledge_index",
+                "project_root": str(project_root),
+                "memory_root": str(memory_root),
+                "message": panel,
+                "stats": s
+            }, indent=2)
+        except ProjectResolutionError as e:
+            return handle_resolution_error("knowledge_index", e)
         except Exception as e:
-            return render_panel("Index Failure", [f"Error: {e}"], status="error")
-
-        duration = time.time() - start
-        lines = [
-            f"Files Scanned: {s.get('scanned', 0)}",
-            f"New:           {s.get('new', 0)}",
-            f"Updated:       {s.get('updated', 0)}",
-            f"Unchanged:     {s.get('unchanged', 0)}",
-            f"Failed:        {s.get('failed', 0)}",
-            f"Duration:      {duration:.2f}s",
-        ]
-        return render_panel("Knowledge Index", lines, status="index")
-
-
+            return json.dumps({
+                "status": "error",
+                "operation": "knowledge_index",
+                "message": str(e)
+            }, indent=2)
 
     @mcp.tool()
     def knowledge_reflect(
@@ -92,58 +287,49 @@ def mount_tools(mcp: object) -> None:
             timeout_seconds: Optional timeout in seconds for LLM extraction.
         """
         try:
-            with KnowledgeEngine(project or None) as eng:
+            project_root = resolve_active_project(project, session_id)
+            memory_root = project_root / ".oem"
+            with KnowledgeEngine(str(project_root)) as eng:
                 res = eng.reflection.reflect_session(
-                    project=project or None,
+                    project=str(project_root),
                     conversation_text=conversation_text,
                     session_id=session_id,
                     events=events,
                     extraction_mode=extraction_mode,
                     timeout_seconds=timeout_seconds,
                 )
-        except Exception as e:
-            # For JSON request contexts, we want to return structured JSON errors
-            if events is not None or extraction_mode != "auto":
-                return json.dumps({
-                    "status": "error",
-                    "mode": extraction_mode,
-                    "events_written": 0,
-                    "events_rejected": 0,
-                    "warnings": [str(e)],
-                    "suggestion": "Check the tool arguments or workspace lock status."
-                }, indent=2)
-            return render_panel("Reflection Failure", [f"Error: {e}"], status="error")
-
-        status = res.get("status")
-        if events is not None or status in ("partial", "empty") or extraction_mode != "auto":
-            return json.dumps({
-                "status": status,
-                "mode": res.get("mode", extraction_mode),
-                "events_written": res.get("events_written", 0),
-                "events_rejected": res.get("events_rejected", 0),
-                "warnings": res.get("warnings", []),
-                "suggestion": res.get("suggestion"),
-                "message": res.get("message"),
-                "failed_step": res.get("failed_step")
-            }, indent=2)
-
-        events_list = res.get("knowledge_events", [])
-        lines = [
-            f"Report: {Path(res.get('report_path', '')).name}",
-            "",
-            "Knowledge Events Extracted:",
-        ]
-        for ev in events_list:
-            lines.append(f"  - [{ev.get('type', '').upper()}] {ev.get('concept', '')}")
-        if not events_list:
-            lines.append("  - None")
-        if res.get("warnings"):
-            lines.extend([
+            status = res.get("status")
+            events_list = res.get("knowledge_events", [])
+            lines = [
+                f"Report: {Path(res.get('report_path', '')).name if res.get('report_path') else 'None'}",
                 "",
-                "Warnings:",
-                *[f"  - ⚠ {w}" for w in res["warnings"]]
-            ])
-        return render_panel("Session Reflection", lines, status="ok")
+                "Knowledge Events Extracted:",
+            ]
+            for ev in events_list:
+                lines.append(f"  - [{ev.get('type', '').upper()}] {ev.get('concept', '')}")
+            if not events_list:
+                lines.append("  - None")
+            if res.get("warnings"):
+                lines.extend([
+                    "",
+                    "Warnings:",
+                    *[f"  - ⚠ {w}" for w in res["warnings"]]
+                ])
+            panel = render_panel("Session Reflection", lines, status="ok")
+            res["project_root"] = str(project_root)
+            res["memory_root"] = str(memory_root)
+            res["operation"] = "knowledge_reflect"
+            res["message"] = panel
+            return json.dumps(res, indent=2)
+        except ProjectResolutionError as e:
+            return handle_resolution_error("knowledge_reflect", e)
+        except Exception as e:
+            return json.dumps({
+                "status": "error",
+                "operation": "knowledge_reflect",
+                "message": str(e),
+                "suggestion": "Check the tool arguments or workspace lock status."
+            }, indent=2)
 
     @mcp.tool()
     def knowledge_session_start(project: str = "") -> str:
@@ -153,8 +339,37 @@ def mount_tools(mcp: object) -> None:
             project: Project directory path. Defaults to current directory.
         """
         try:
-            with KnowledgeEngine(project or None) as eng:
-                res = eng.session_start(project or None)
+            try:
+                project_root = resolve_active_project(project)
+            except ProjectUnresolvedError:
+                return json.dumps({
+                    "status": "error",
+                    "reason": "project_not_initialized",
+                    "suggestion": "Run `oem init` or call with an explicit project path."
+                }, indent=2)
+            except ProjectResolutionError as e:
+                return handle_resolution_error("knowledge_session_start", e)
+
+            if not (project_root / ".oem").is_dir():
+                return json.dumps({
+                    "status": "error",
+                    "reason": "project_not_initialized",
+                    "suggestion": "Run `oem init` or call with an explicit project path."
+                }, indent=2)
+
+            memory_root = project_root / ".oem"
+            with KnowledgeEngine(str(project_root)) as eng:
+                res = eng.session_start(str(project_root))
+
+            if res.get("status") == "success":
+                sid = res.get("session_id")
+                if sid:
+                    SESSION_TO_PROJECT[sid] = project_root
+
+            res["project_root"] = str(project_root)
+            res["memory_root"] = str(memory_root)
+            res["operation"] = "knowledge_session_start"
+            return json.dumps(res, indent=2)
         except Exception as e:
             return json.dumps({
                 "status": "error",
@@ -163,8 +378,6 @@ def mount_tools(mcp: object) -> None:
                 "suggestion": "Check the tool arguments or workspace lock status.",
                 "warnings": [str(e)],
             }, indent=2)
-
-        return json.dumps(res, indent=2)
 
     @mcp.tool()
     def knowledge_read(scope: str = "project", project: str = "", limit: int = 10) -> str:
@@ -179,8 +392,16 @@ def mount_tools(mcp: object) -> None:
             limit: Max items per section (default 10).
         """
         try:
-            with KnowledgeEngine(project or None) as eng:
-                res = eng.knowledge_read(project or None, scope, limit)
+            project_root = resolve_active_project(project)
+            memory_root = project_root / ".oem"
+            with KnowledgeEngine(str(project_root)) as eng:
+                res = eng.knowledge_read(str(project_root), scope, limit)
+            res["project_root"] = str(project_root)
+            res["memory_root"] = str(memory_root)
+            res["operation"] = "knowledge_read"
+            return json.dumps(res, indent=2)
+        except ProjectResolutionError as e:
+            return handle_resolution_error("knowledge_read", e)
         except Exception as e:
             return json.dumps({
                 "status": "error",
@@ -190,8 +411,6 @@ def mount_tools(mcp: object) -> None:
                 "warnings": [str(e)],
             }, indent=2)
 
-        return json.dumps(res, indent=2)
-
     @mcp.tool()
     def knowledge_materialize(project: str = "") -> str:
         """Promote candidate/emerging concepts to validated/canonical status and materialize markdown nodes.
@@ -200,35 +419,43 @@ def mount_tools(mcp: object) -> None:
             project: Project directory path. Defaults to current directory.
         """
         try:
-            with KnowledgeEngine(project or None) as eng:
-                res = eng.materialization.materialize_concepts(project or None)
+            project_root = resolve_active_project(project)
+            memory_root = project_root / ".oem"
+            with KnowledgeEngine(str(project_root)) as eng:
+                res = eng.materialization.materialize_concepts(str(project_root))
+            lines = [res.get("message", "Materialization complete."), ""]
+            if res.get("materialized"):
+                for m in res["materialized"]:
+                    lines.append(f"  ✨ {m}")
+            else:
+                lines.append("  No new or modified concepts.")
+            panel = render_panel("Concept Materialization", lines, status="ok")
+            res["project_root"] = str(project_root)
+            res["memory_root"] = str(memory_root)
+            res["operation"] = "knowledge_materialize"
+            res["message"] = panel
+            return json.dumps(res, indent=2)
+        except ProjectResolutionError as e:
+            return handle_resolution_error("knowledge_materialize", e)
         except Exception as e:
-            return render_panel(
-                "Materialization Failure", [f"Error: {e}"], status="error"
-            )
-
-        lines = [res.get("message", "Materialization complete."), ""]
-        if res.get("materialized"):
-            for m in res["materialized"]:
-                lines.append(f"  ✨ {m}")
-        else:
-            lines.append("  No new or modified concepts.")
-        return render_panel("Concept Materialization", lines, status="ok")
-
-
+            return json.dumps({
+                "status": "error",
+                "operation": "knowledge_materialize",
+                "message": str(e)
+            }, indent=2)
 
     def _commit_session_from_tool(
         eng: KnowledgeEngine,
-        project: str,
+        project_root: Path,
         conversation_text: str,
         session_id: str,
         events: list[dict] | None = None,
         extraction_mode: str = "auto",
         timeout_seconds: float | None = None,
-    ) -> str:
+    ) -> dict:
         try:
             res = eng.session_commit(
-                project or None,
+                str(project_root),
                 conversation_text,
                 session_id,
                 events=events,
@@ -236,7 +463,10 @@ def mount_tools(mcp: object) -> None:
                 timeout_seconds=timeout_seconds,
             )
         except Exception as e:
-            return f"# Session End Failure\n\nError: {e}"
+            return {
+                "status": "error",
+                "message": f"# Session End Failure\n\nError: {e}"
+            }
 
         status = res.get("status", "success")
         failed_step = res.get("failed_step")
@@ -261,7 +491,8 @@ def mount_tools(mcp: object) -> None:
                     "### Warnings:",
                     *[f"- ⚠ {w}" for w in warnings]
                 ])
-            return "\n".join(lines)
+            res["message"] = "\n".join(lines)
+            return res
 
         if status == "empty":
             lines = [
@@ -281,7 +512,8 @@ def mount_tools(mcp: object) -> None:
                     "### Warnings:",
                     *[f"- ⚠ {w}" for w in warnings]
                 ])
-            return "\n".join(lines)
+            res["message"] = "\n".join(lines)
+            return res
 
         if status == "partial" and failed_step == "llm_extraction":
             lines = [
@@ -301,7 +533,8 @@ def mount_tools(mcp: object) -> None:
                     "### Warnings:",
                     *[f"- ⚠ {w}" for w in warnings]
                 ])
-            return "\n".join(lines)
+            res["message"] = "\n".join(lines)
+            return res
 
         if status == "error":
             failed_step = res.get("failed_step", "reflection/materialization")
@@ -329,9 +562,9 @@ def mount_tools(mcp: object) -> None:
                         lines.append(f"- {k}: {v:.1f}s")
                 if "total" in timings:
                     lines.append(f"- total: {timings['total']:.1f}s")
-            return "\n".join(lines)
+            res["message"] = "\n".join(lines)
+            return res
 
-        from pathlib import Path
         events_list = res.get("knowledge_events", [])
         event_counts: dict[str, int] = {}
         for ev in events_list:
@@ -397,7 +630,8 @@ def mount_tools(mcp: object) -> None:
                 res["notification"]
             ])
 
-        return "\n".join(lines)
+        res["message"] = "\n".join(lines)
+        return res
 
     @mcp.tool()
     def knowledge_session_commit(
@@ -422,36 +656,40 @@ def mount_tools(mcp: object) -> None:
             timeout_seconds: Optional timeout in seconds for LLM extraction.
         """
         try:
-            with KnowledgeEngine(project or None) as eng:
+            project_root = resolve_active_project(project, session_id)
+            memory_root = project_root / ".oem"
+            with KnowledgeEngine(str(project_root)) as eng:
                 res = _commit_session_from_tool(
                     eng,
-                    project,
+                    project_root,
                     conversation_text,
                     session_id,
                     events=events,
                     extraction_mode=extraction_mode,
                     timeout_seconds=timeout_seconds,
                 )
-                warning_msg = "knowledge_session_commit is deprecated. Use knowledge_session_end instead."
-                if res.strip().startswith("{"):
-                    try:
-                        data = json.loads(res)
-                        if isinstance(data, dict):
-                            data["deprecated"] = True
-                            warnings = data.get("warnings", [])
-                            if warning_msg not in warnings:
-                                warnings.append(warning_msg)
-                            data["warnings"] = warnings
-                            return json.dumps(data, indent=2)
-                    except Exception:
-                        pass
-                return (
-                    f"> [!WARNING]\n"
-                    f"> {warning_msg}\n\n"
-                    f"{res}"
-                )
+            if res.get("status") in ("success", "partial", "warn", "empty") and session_id in SESSION_TO_PROJECT:
+                SESSION_TO_PROJECT.pop(session_id, None)
+
+            res["project_root"] = str(project_root)
+            res["memory_root"] = str(memory_root)
+            res["operation"] = "knowledge_session_commit"
+            res["deprecated"] = True
+            
+            warning_msg = "knowledge_session_commit is deprecated. Use knowledge_session_end instead."
+            warnings_list = res.get("warnings", [])
+            if warning_msg not in warnings_list:
+                warnings_list.append(warning_msg)
+            res["warnings"] = warnings_list
+            return json.dumps(res, indent=2)
+        except ProjectResolutionError as e:
+            return handle_resolution_error("knowledge_session_commit", e)
         except Exception as e:
-            return f"# Session Commit Failure\n\nError: {e}"
+            return json.dumps({
+                "status": "error",
+                "operation": "knowledge_session_commit",
+                "message": f"# Session Commit Failure\n\nError: {e}"
+            }, indent=2)
 
     @mcp.tool()
     def knowledge_session_end(
@@ -473,20 +711,33 @@ def mount_tools(mcp: object) -> None:
             timeout_seconds: Optional timeout in seconds for LLM extraction.
         """
         try:
-            with KnowledgeEngine(project or None) as eng:
-                return _commit_session_from_tool(
+            project_root = resolve_active_project(project, session_id)
+            memory_root = project_root / ".oem"
+            with KnowledgeEngine(str(project_root)) as eng:
+                res = _commit_session_from_tool(
                     eng,
-                    project,
+                    project_root,
                     conversation_text,
                     session_id,
                     events=events,
                     extraction_mode=extraction_mode,
                     timeout_seconds=timeout_seconds,
                 )
+            if res.get("status") in ("success", "partial", "warn", "empty") and session_id in SESSION_TO_PROJECT:
+                SESSION_TO_PROJECT.pop(session_id, None)
+
+            res["project_root"] = str(project_root)
+            res["memory_root"] = str(memory_root)
+            res["operation"] = "knowledge_session_end"
+            return json.dumps(res, indent=2)
+        except ProjectResolutionError as e:
+            return handle_resolution_error("knowledge_session_end", e)
         except Exception as e:
-            return f"# Session End Failure\n\nError: {e}"
-
-
+            return json.dumps({
+                "status": "error",
+                "operation": "knowledge_session_end",
+                "message": f"# Session End Failure\n\nError: {e}"
+            }, indent=2)
 
     @mcp.tool()
     def knowledge_get_events(
@@ -501,27 +752,42 @@ def mount_tools(mcp: object) -> None:
             session_id: Filter by session ID
         """
         try:
-            with KnowledgeEngine(project or None) as eng:
+            project_root = resolve_active_project(project, session_id)
+            memory_root = project_root / ".oem"
+            with KnowledgeEngine(str(project_root)) as eng:
                 events = eng.state.get_events(
-                    project or None,
+                    str(project_root),
                     concept=concept,
                     event_type=event_type,
                     session_id=session_id,
                 )
+            lines = [f"Total events: {len(events)}", ""]
+            for idx, ev in enumerate(events):
+                lines.append(
+                    f"{idx + 1}. [{ev.get('event_type', '').upper()}] {ev.get('summary', '')}"
+                )
+                lines.append(f"   ID: {ev.get('event_id', '')}")
+                lines.append(f"   Evidence: {ev.get('evidence', '')[:100]}")
+                lines.append("")
+            if not events:
+                lines.append("No matching events.")
+            panel = render_panel("Knowledge Events", lines, status="ok")
+            return json.dumps({
+                "status": "success",
+                "operation": "knowledge_get_events",
+                "project_root": str(project_root),
+                "memory_root": str(memory_root),
+                "message": panel,
+                "events": events
+            }, indent=2)
+        except ProjectResolutionError as e:
+            return handle_resolution_error("knowledge_get_events", e)
         except Exception as e:
-            return render_panel("Get Events Failure", [f"Error: {e}"], status="error")
-
-        lines = [f"Total events: {len(events)}", ""]
-        for idx, ev in enumerate(events):
-            lines.append(
-                f"{idx + 1}. [{ev.get('event_type', '').upper()}] {ev.get('summary', '')}"
-            )
-            lines.append(f"   ID: {ev.get('event_id', '')}")
-            lines.append(f"   Evidence: {ev.get('evidence', '')[:100]}")
-            lines.append("")
-        if not events:
-            lines.append("No matching events.")
-        return render_panel("Knowledge Events", lines, status="ok")
+            return json.dumps({
+                "status": "error",
+                "operation": "knowledge_get_events",
+                "message": str(e)
+            }, indent=2)
 
     @mcp.tool()
     def knowledge_get_event(project: str = "", event_id: str = "") -> str:
@@ -532,24 +798,41 @@ def mount_tools(mcp: object) -> None:
             event_id: The event UUID
         """
         try:
-            with KnowledgeEngine(project or None) as eng:
-                ev = eng.state.get_event(project or None, event_id)
+            project_root = resolve_active_project(project)
+            memory_root = project_root / ".oem"
+            with KnowledgeEngine(str(project_root)) as eng:
+                ev = eng.state.get_event(str(project_root), event_id)
+            lines = [
+                f"Event: {ev.get('event_id', '')}",
+                f"Type: {ev.get('event_type', '')}",
+                f"Summary: {ev.get('summary', '')}",
+                f"Evidence: {ev.get('evidence', '')}",
+                f"Confidence: {ev.get('confidence', '')}",
+                f"Session: {ev.get('session_id', '')}",
+            ]
+            panel = render_panel("Knowledge Event Detail", lines, status="ok")
+            return json.dumps({
+                "status": "success",
+                "operation": "knowledge_get_event",
+                "project_root": str(project_root),
+                "memory_root": str(memory_root),
+                "message": panel,
+                "event": ev
+            }, indent=2)
         except KeyError as e:
-            return render_panel("Event Not Found", [str(e)], status="error")
+            return json.dumps({
+                "status": "error",
+                "operation": "knowledge_get_event",
+                "message": f"Event not found: {e}"
+            }, indent=2)
+        except ProjectResolutionError as e:
+            return handle_resolution_error("knowledge_get_event", e)
         except Exception as e:
-            return render_panel("Get Event Failure", [f"Error: {e}"], status="error")
-
-        lines = [
-            f"Event: {ev.get('event_id', '')}",
-            f"Type: {ev.get('event_type', '')}",
-            f"Summary: {ev.get('summary', '')}",
-            f"Evidence: {ev.get('evidence', '')}",
-            f"Confidence: {ev.get('confidence', '')}",
-            f"Session: {ev.get('session_id', '')}",
-        ]
-        return render_panel("Knowledge Event Detail", lines, status="ok")
-
-
+            return json.dumps({
+                "status": "error",
+                "operation": "knowledge_get_event",
+                "message": str(e)
+            }, indent=2)
 
     @mcp.tool()
     def knowledge_merge_concepts(
@@ -563,21 +846,35 @@ def mount_tools(mcp: object) -> None:
             secondary_id: The UUID of the concept to merge and remove
         """
         try:
-            with KnowledgeEngine(project or None) as eng:
-                res = eng.state.merge_concepts(project or None, primary_id, secondary_id)
+            project_root = resolve_active_project(project)
+            memory_root = project_root / ".oem"
+            with KnowledgeEngine(str(project_root)) as eng:
+                res = eng.state.merge_concepts(str(project_root), primary_id, secondary_id)
+            if res.get("status") == "error":
+                panel = render_panel("Merge Error", [res.get("message", "")], status="error")
+                return json.dumps({
+                    "status": "error",
+                    "operation": "knowledge_merge_concepts",
+                    "project_root": str(project_root),
+                    "memory_root": str(memory_root),
+                    "message": panel
+                }, indent=2)
+            panel = render_panel("Concepts Merged", [res.get("message", "")], status="organize")
+            return json.dumps({
+                "status": "success",
+                "operation": "knowledge_merge_concepts",
+                "project_root": str(project_root),
+                "memory_root": str(memory_root),
+                "message": panel
+            }, indent=2)
+        except ProjectResolutionError as e:
+            return handle_resolution_error("knowledge_merge_concepts", e)
         except Exception as e:
-            return render_panel("Merge Failure", [f"Error: {e}"], status="error")
-
-        if res.get("status") == "error":
-            return render_panel("Merge Error", [res.get("message", "")], status="error")
-
-        return render_panel(
-            "Concepts Merged", [res.get("message", "")], status="organize"
-        )
-
-
-
-
+            return json.dumps({
+                "status": "error",
+                "operation": "knowledge_merge_concepts",
+                "message": str(e)
+            }, indent=2)
 
     @mcp.tool()
     def knowledge_search(query: str, k: int = 3, project: str = "") -> str:
@@ -589,13 +886,29 @@ def mount_tools(mcp: object) -> None:
             project: Project directory path. Defaults to current directory.
         """
         try:
-            with KnowledgeEngine(project or None) as eng:
+            project_root = resolve_active_project(project)
+            memory_root = project_root / ".oem"
+            with KnowledgeEngine(str(project_root)) as eng:
                 results = eng.search.search(query, k=k)
+        except ProjectResolutionError as e:
+            return handle_resolution_error("knowledge_search", e)
         except Exception as e:
-            return render_panel("Search Failure", [f"Error: {e}"], status="error")
+            return json.dumps({
+                "status": "error",
+                "operation": "knowledge_search",
+                "message": str(e)
+            }, indent=2)
 
         if not results:
-            return render_panel(f"Search: 0 results", [f"No matches for: '{query}'"], status="search")
+            panel = render_panel(f"Search: 0 results", [f"No matches for: '{query}'"], status="search")
+            return json.dumps({
+                "status": "success",
+                "operation": "knowledge_search",
+                "project_root": str(project_root),
+                "memory_root": str(memory_root),
+                "results": [],
+                "message": panel
+            }, indent=2)
 
         lines = [f"Query: \"{query}\"", f"Results: {len(results)}", ""]
         for idx, r in enumerate(results):
@@ -603,7 +916,7 @@ def mount_tools(mcp: object) -> None:
             rel_path = meta.get("file_path", "")
             if rel_path:
                 try:
-                    rel_path = str(Path(rel_path).relative_to(Path(project or ".")))
+                    rel_path = str(Path(rel_path).relative_to(project_root))
                 except ValueError:
                     rel_path = Path(rel_path).name
             else:
@@ -617,7 +930,15 @@ def mount_tools(mcp: object) -> None:
             lines.append(f"   {snippet}...")
             lines.append("")
 
-        return render_panel("Knowledge Search Results", lines, status="search")
+        panel = render_panel("Knowledge Search Results", lines, status="search")
+        return json.dumps({
+            "status": "success",
+            "operation": "knowledge_search",
+            "project_root": str(project_root),
+            "memory_root": str(memory_root),
+            "results": results,
+            "message": panel
+        }, indent=2)
 
     @mcp.tool()
     def knowledge_health_check(
@@ -631,13 +952,17 @@ def mount_tools(mcp: object) -> None:
             project: Project directory path. Defaults to current directory.
         """
         try:
+            project_root = resolve_active_project(project)
+            memory_root = project_root / ".oem"
             from oem_knowledge.health import build_runtime_health
-            res = build_runtime_health(project or None)
+            res = build_runtime_health(str(project_root))
 
-            with KnowledgeEngine(project or None) as eng:
-                stale = eng.state.detect_stale_concepts(stale_sessions, project or None)
-                merges = eng.propose_merges(similarity_threshold, project or None)
-                conflicts = eng.detect_contradictions(project or None)
+            with KnowledgeEngine(str(project_root)) as eng:
+                stale = eng.state.detect_stale_concepts(stale_sessions, str(project_root))
+                merges = eng.propose_merges(similarity_threshold, str(project_root))
+                conflicts = eng.detect_contradictions(str(project_root))
+        except ProjectResolutionError as e:
+            return handle_resolution_error("knowledge_health_check", e)
         except Exception as e:
             err_data = {
                 "status": "error",
@@ -651,15 +976,12 @@ def mount_tools(mcp: object) -> None:
             return json.dumps(err_data, indent=2)
 
         lines = []
-        
-        # Runtime Checks
         lines.append("Runtime Checks:")
         for c in res["runtime"]["checks"]:
             symbol = "✓" if c["status"] == "success" else ("⚠" if c["status"] == "warn" else "✗")
             lines.append(f"  {symbol} {c['name']}")
         lines.append("")
 
-        # Stale concepts section
         lines.append("Stale Concepts:")
         if stale:
             for s in stale:
@@ -668,7 +990,6 @@ def mount_tools(mcp: object) -> None:
             lines.append("  None")
         lines.append("")
         
-        # Merge proposals section
         lines.append("Duplicate Merge Proposals:")
         if merges:
             for m in merges:
@@ -678,7 +999,6 @@ def mount_tools(mcp: object) -> None:
             lines.append("  None")
         lines.append("")
         
-        # Contradictions section
         lines.append("Contradictions Detected:")
         if conflicts:
             for c in conflicts:
@@ -687,7 +1007,18 @@ def mount_tools(mcp: object) -> None:
         else:
             lines.append("  None")
             
-        return render_panel("Knowledge Health Scan", lines, status="stats")
+        panel = render_panel("Knowledge Health Scan", lines, status="stats")
+        return json.dumps({
+            "status": "success",
+            "operation": "knowledge_health_check",
+            "project_root": str(project_root),
+            "memory_root": str(memory_root),
+            "message": panel,
+            "health": res,
+            "stale": stale,
+            "merges": merges,
+            "conflicts": conflicts
+        }, indent=2)
 
     @mcp.tool()
     def knowledge_stats(project: str = "") -> str:
@@ -697,9 +1028,11 @@ def mount_tools(mcp: object) -> None:
             project: Project directory path. Defaults to current directory.
         """
         try:
-            with KnowledgeEngine(project or None) as eng:
-                registry = eng.state._load_registry(project or None)
-                harness = eng._resolve_harness(project or None)
+            project_root = resolve_active_project(project)
+            memory_root = project_root / ".oem"
+            with KnowledgeEngine(str(project_root)) as eng:
+                registry = eng.state._load_registry(str(project_root))
+                harness = eng._resolve_harness(str(project_root))
                 db_path = harness / ".local_vector_db"
                 db_size = 0
                 if db_path.exists():
@@ -716,9 +1049,24 @@ def mount_tools(mcp: object) -> None:
                     f"Vector DB Size:       {(db_size / (1024 * 1024)):.2f} MB",
                     f"OEM Path:             {harness}"
                 ]
-                return render_panel("Knowledge Stats", lines, status="stats")
+                panel = render_panel("Knowledge Stats", lines, status="stats")
+                return json.dumps({
+                    "status": "success",
+                    "operation": "knowledge_stats",
+                    "project_root": str(project_root),
+                    "memory_root": str(memory_root),
+                    "message": panel,
+                    "total_concepts": len(registry),
+                    "vector_db_size_mb": db_size / (1024 * 1024)
+                }, indent=2)
+        except ProjectResolutionError as e:
+            return handle_resolution_error("knowledge_stats", e)
         except Exception as e:
-            return render_panel("Stats Failure", [f"Error: {e}"], status="error")
+            return json.dumps({
+                "status": "error",
+                "operation": "knowledge_stats",
+                "message": str(e)
+            }, indent=2)
 
     @mcp.tool()
     def knowledge_explain_concept(concept_id: str, project: str = "") -> str:
@@ -729,13 +1077,22 @@ def mount_tools(mcp: object) -> None:
             project: Project directory path. Defaults to current directory.
         """
         try:
-            with KnowledgeEngine(project or None) as eng:
-                registry = eng.state._load_registry(project or None)
+            project_root = resolve_active_project(project)
+            memory_root = project_root / ".oem"
+            with KnowledgeEngine(str(project_root)) as eng:
+                registry = eng.state._load_registry(str(project_root))
                 cdata = registry.get(concept_id)
                 if not cdata:
-                    return render_panel("Concept Not Found", [f"Concept {concept_id} not in registry."], status="error")
+                    panel = render_panel("Concept Not Found", [f"Concept {concept_id} not in registry."], status="error")
+                    return json.dumps({
+                        "status": "error",
+                        "operation": "knowledge_explain_concept",
+                        "project_root": str(project_root),
+                        "memory_root": str(memory_root),
+                        "message": panel
+                    }, indent=2)
 
-                harness = eng._resolve_harness(project or None)
+                harness = eng._resolve_harness(str(project_root))
                 wiki_file = harness / "wiki" / f"{concept_id}.md"
                 recent_evidence = []
                 if wiki_file.exists():
@@ -762,11 +1119,23 @@ def mount_tools(mcp: object) -> None:
                 else:
                     lines.append("  - None")
 
-                return render_panel("Concept Explanation", lines, status="ok")
+                panel = render_panel("Concept Explanation", lines, status="ok")
+                return json.dumps({
+                    "status": "success",
+                    "operation": "knowledge_explain_concept",
+                    "project_root": str(project_root),
+                    "memory_root": str(memory_root),
+                    "message": panel,
+                    "concept": cdata
+                }, indent=2)
+        except ProjectResolutionError as e:
+            return handle_resolution_error("knowledge_explain_concept", e)
         except Exception as e:
-            return render_panel("Explanation Failure", [f"Error: {e}"], status="error")
-
-
+            return json.dumps({
+                "status": "error",
+                "operation": "knowledge_explain_concept",
+                "message": str(e)
+            }, indent=2)
 
     @mcp.tool()
     def knowledge_skill_candidates(project: str = "") -> str:
@@ -776,10 +1145,19 @@ def mount_tools(mcp: object) -> None:
             project: Project directory path. Defaults to current directory.
         """
         try:
-            with KnowledgeEngine(project or None) as eng:
-                candidates = eng.skills.list_skill_candidates(project or None)
+            project_root = resolve_active_project(project)
+            memory_root = project_root / ".oem"
+            with KnowledgeEngine(str(project_root)) as eng:
+                candidates = eng.skills.list_skill_candidates(str(project_root))
                 if not candidates:
-                    return "No skill candidates found."
+                    return json.dumps({
+                        "status": "success",
+                        "operation": "knowledge_skill_candidates",
+                        "project_root": str(project_root),
+                        "memory_root": str(memory_root),
+                        "message": "No skill candidates found.",
+                        "candidates": []
+                    }, indent=2)
                 
                 lines = [
                     "| Slug | Title | Confidence | Status | Evidence Count |",
@@ -787,9 +1165,23 @@ def mount_tools(mcp: object) -> None:
                 ]
                 for c in candidates:
                     lines.append(f"| {c.slug} | {c.title} | {c.confidence} | {c.status} | {len(c.evidence)} |")
-                return "\n".join(lines)
+                panel = "\n".join(lines)
+                return json.dumps({
+                    "status": "success",
+                    "operation": "knowledge_skill_candidates",
+                    "project_root": str(project_root),
+                    "memory_root": str(memory_root),
+                    "message": panel,
+                    "candidates": [c.to_dict() if hasattr(c, "to_dict") else vars(c) for c in candidates]
+                }, indent=2)
+        except ProjectResolutionError as e:
+            return handle_resolution_error("knowledge_skill_candidates", e)
         except Exception as e:
-            return f"Status: error\nReason: {e}"
+            return json.dumps({
+                "status": "error",
+                "operation": "knowledge_skill_candidates",
+                "message": str(e)
+            }, indent=2)
 
     @mcp.tool()
     def knowledge_skill_candidate_show(slug: str, project: str = "") -> str:
@@ -800,16 +1192,30 @@ def mount_tools(mcp: object) -> None:
             project: Project directory path. Defaults to current directory.
         """
         try:
-            with KnowledgeEngine(project or None) as eng:
-                candidate = eng.skills.load_skill_candidate(slug, project or None)
+            project_root = resolve_active_project(project)
+            memory_root = project_root / ".oem"
+            with KnowledgeEngine(str(project_root)) as eng:
+                candidate = eng.skills.load_skill_candidate(slug, str(project_root))
                 if not candidate:
-                    layout = eng.layout(project or None)
+                    layout = eng.layout(str(project_root))
                     approved_path = layout.skills_dir / f"{slug}.md"
                     if approved_path.exists():
-                        return approved_path.read_text(encoding="utf-8")
-                    return f"Status: error\nReason: Candidate/Skill '{slug}' not found."
+                        content = approved_path.read_text(encoding="utf-8")
+                        return json.dumps({
+                            "status": "success",
+                            "operation": "knowledge_skill_candidate_show",
+                            "project_root": str(project_root),
+                            "memory_root": str(memory_root),
+                            "message": content
+                        }, indent=2)
+                    return json.dumps({
+                        "status": "error",
+                        "operation": "knowledge_skill_candidate_show",
+                        "project_root": str(project_root),
+                        "memory_root": str(memory_root),
+                        "message": f"Candidate/Skill '{slug}' not found."
+                    }, indent=2)
                 
-                # Format candidate details as simple markdown
                 lines = [
                     f"# Skill Candidate: {candidate.title}",
                     "",
@@ -830,9 +1236,23 @@ def mount_tools(mcp: object) -> None:
                 ]
                 for ev in candidate.evidence:
                     lines.append(f"- {ev}")
-                return "\n".join(lines)
+                panel = "\n".join(lines)
+                return json.dumps({
+                    "status": "success",
+                    "operation": "knowledge_skill_candidate_show",
+                    "project_root": str(project_root),
+                    "memory_root": str(memory_root),
+                    "message": panel,
+                    "candidate": candidate.to_dict() if hasattr(candidate, "to_dict") else vars(candidate)
+                }, indent=2)
+        except ProjectResolutionError as e:
+            return handle_resolution_error("knowledge_skill_candidate_show", e)
         except Exception as e:
-            return f"Status: error\nReason: {e}"
+            return json.dumps({
+                "status": "error",
+                "operation": "knowledge_skill_candidate_show",
+                "message": str(e)
+            }, indent=2)
 
     @mcp.tool()
     def knowledge_skill_candidate_approve(slug: str = "", force: bool = False, project: str = "") -> str:
@@ -844,19 +1264,44 @@ def mount_tools(mcp: object) -> None:
             project: Project directory path. Defaults to current directory.
         """
         if not slug:
-            return "Status: error\nReason: Slug is required."
+            return json.dumps({
+                "status": "error",
+                "operation": "knowledge_skill_candidate_approve",
+                "message": "Slug is required."
+            }, indent=2)
         try:
-            with KnowledgeEngine(project or None) as eng:
-                cand = eng.skills.update_skill_candidate_status(slug, "approved", project or None, force=force)
+            project_root = resolve_active_project(project)
+            memory_root = project_root / ".oem"
+            with KnowledgeEngine(str(project_root)) as eng:
+                cand = eng.skills.update_skill_candidate_status(slug, "approved", str(project_root), force=force)
                 if not cand:
-                    return f"Status: error\nReason: Candidate '{slug}' not found."
-                return (
+                    return json.dumps({
+                        "status": "error",
+                        "operation": "knowledge_skill_candidate_approve",
+                        "project_root": str(project_root),
+                        "memory_root": str(memory_root),
+                        "message": f"Candidate '{slug}' not found."
+                    }, indent=2)
+                panel = (
                     "Status: approved\n"
                     f"Skill: {slug}\n"
                     f"Approved skill written: .oem/skills/{slug}.md"
                 )
+                return json.dumps({
+                    "status": "success",
+                    "operation": "knowledge_skill_candidate_approve",
+                    "project_root": str(project_root),
+                    "memory_root": str(memory_root),
+                    "message": panel
+                }, indent=2)
+        except ProjectResolutionError as e:
+            return handle_resolution_error("knowledge_skill_candidate_approve", e)
         except Exception as e:
-            return f"Status: error\nReason: {e}"
+            return json.dumps({
+                "status": "error",
+                "operation": "knowledge_skill_candidate_approve",
+                "message": str(e)
+            }, indent=2)
 
     @mcp.tool()
     def knowledge_skill_candidate_reject(slug: str = "", project: str = "") -> str:
@@ -867,15 +1312,39 @@ def mount_tools(mcp: object) -> None:
             project: Project directory path. Defaults to current directory.
         """
         if not slug:
-            return "Status: error\nReason: Slug is required."
+            return json.dumps({
+                "status": "error",
+                "operation": "knowledge_skill_candidate_reject",
+                "message": "Slug is required."
+            }, indent=2)
         try:
-            with KnowledgeEngine(project or None) as eng:
-                cand = eng.skills.update_skill_candidate_status(slug, "rejected", project or None)
+            project_root = resolve_active_project(project)
+            memory_root = project_root / ".oem"
+            with KnowledgeEngine(str(project_root)) as eng:
+                cand = eng.skills.update_skill_candidate_status(slug, "rejected", str(project_root))
                 if not cand:
-                    return f"Status: error\nReason: Candidate '{slug}' not found."
-                return f"Status: rejected\nSkill: {slug}"
+                    return json.dumps({
+                        "status": "error",
+                        "operation": "knowledge_skill_candidate_reject",
+                        "project_root": str(project_root),
+                        "memory_root": str(memory_root),
+                        "message": f"Candidate '{slug}' not found."
+                    }, indent=2)
+                return json.dumps({
+                    "status": "success",
+                    "operation": "knowledge_skill_candidate_reject",
+                    "project_root": str(project_root),
+                    "memory_root": str(memory_root),
+                    "message": f"Status: rejected\nSkill: {slug}"
+                }, indent=2)
+        except ProjectResolutionError as e:
+            return handle_resolution_error("knowledge_skill_candidate_reject", e)
         except Exception as e:
-            return f"Status: error\nReason: {e}"
+            return json.dumps({
+                "status": "error",
+                "operation": "knowledge_skill_candidate_reject",
+                "message": str(e)
+            }, indent=2)
 
     @mcp.tool()
     def knowledge_skill_candidate_defer(slug: str = "", project: str = "") -> str:
@@ -886,15 +1355,509 @@ def mount_tools(mcp: object) -> None:
             project: Project directory path. Defaults to current directory.
         """
         if not slug:
-            return "Status: error\nReason: Slug is required."
+            return json.dumps({
+                "status": "error",
+                "operation": "knowledge_skill_candidate_defer",
+                "message": "Slug is required."
+            }, indent=2)
         try:
-            with KnowledgeEngine(project or None) as eng:
-                cand = eng.skills.update_skill_candidate_status(slug, "deferred", project or None)
+            project_root = resolve_active_project(project)
+            memory_root = project_root / ".oem"
+            with KnowledgeEngine(str(project_root)) as eng:
+                cand = eng.skills.update_skill_candidate_status(slug, "deferred", str(project_root))
                 if not cand:
-                    return f"Status: error\nReason: Candidate '{slug}' not found."
-                return f"Status: deferred\nSkill: {slug}"
+                    return json.dumps({
+                        "status": "error",
+                        "operation": "knowledge_skill_candidate_defer",
+                        "project_root": str(project_root),
+                        "memory_root": str(memory_root),
+                        "message": f"Candidate '{slug}' not found."
+                    }, indent=2)
+                return json.dumps({
+                    "status": "success",
+                    "operation": "knowledge_skill_candidate_defer",
+                    "project_root": str(project_root),
+                    "memory_root": str(memory_root),
+                    "message": f"Status: deferred\nSkill: {slug}"
+                }, indent=2)
+        except ProjectResolutionError as e:
+            return handle_resolution_error("knowledge_skill_candidate_defer", e)
         except Exception as e:
-            return f"Status: error\nReason: {e}"
+            return json.dumps({
+                "status": "error",
+                "operation": "knowledge_skill_candidate_defer",
+                "message": str(e)
+            }, indent=2)
+
+
+def main() -> None:
+    import os
+    # Suppress fastmcp logs on stdout/stderr to protect MCP JSON-RPC transport stream
+    if "FASTMCP_LOG_LEVEL" not in os.environ:
+        os.environ["FASTMCP_LOG_LEVEL"] = "WARNING"
+    if "FASTMCP_LOG_ENABLED" not in os.environ:
+        os.environ["FASTMCP_LOG_ENABLED"] = "false"
+
+    from oem_knowledge.engine import apply_oem_process_env_defaults
+    apply_oem_process_env_defaults()
+
+    from fastmcp import FastMCP
+    mcp = FastMCP("openempiric")
+    mount_tools(mcp)
+    mcp.run(show_banner=False)
+
+
+if __name__ == "__main__":
+    main()
+
+    @mcp.tool()
+    def knowledge_health_check(
+        stale_sessions: int = 5, similarity_threshold: float = 0.85, project: str = ""
+    ) -> str:
+        """Scan the knowledge base for stale concepts, duplicate concepts (merge proposals), and architectural contradictions.
+
+        Args:
+            stale_sessions: Number of sessions threshold to consider a concept stale. Defaults to 5.
+            similarity_threshold: Similarity threshold to propose merges. Defaults to 0.85.
+            project: Project directory path. Defaults to current directory.
+        """
+        try:
+            project_root = resolve_active_project(project)
+            memory_root = project_root / ".oem"
+            from oem_knowledge.health import build_runtime_health
+            res = build_runtime_health(project_root)
+
+            with KnowledgeEngine(project_root) as eng:
+                stale = eng.state.detect_stale_concepts(stale_sessions, project_root)
+                merges = eng.propose_merges(similarity_threshold, project_root)
+                conflicts = eng.detect_contradictions(project_root)
+        except ProjectResolutionError as e:
+            return handle_resolution_error("knowledge_health_check", e)
+        except Exception as e:
+            err_data = {
+                "status": "error",
+                "operation": "knowledge_health_check",
+                "message": str(e),
+                "failed_step": "knowledge_health_check",
+                "warnings": [],
+                "errors": [str(e)],
+                "suggestion": "Ensure the project directory exists and contains valid .oem/ memory files."
+            }
+            return json.dumps(err_data, indent=2)
+
+        lines = []
+        lines.append("Runtime Checks:")
+        for c in res["runtime"]["checks"]:
+            symbol = "✓" if c["status"] == "success" else ("⚠" if c["status"] == "warn" else "✗")
+            lines.append(f"  {symbol} {c['name']}")
+        lines.append("")
+
+        lines.append("Stale Concepts:")
+        if stale:
+            for s in stale:
+                lines.append(f"  ○ {s['canonical_name']} ({s['concept_id']}) - untouched for {s['sessions_since_reference']} sessions")
+        else:
+            lines.append("  None")
+        lines.append("")
+        
+        lines.append("Duplicate Merge Proposals:")
+        if merges:
+            for m in merges:
+                lines.append(f"  ✦ Suggest merging {m['secondary_name']} ({m['secondary_id']}) into {m['primary_name']} ({m['primary_id']})")
+                lines.append(f"    Reason: {m['reason']}")
+        else:
+            lines.append("  None")
+        lines.append("")
+        
+        lines.append("Contradictions Detected:")
+        if conflicts:
+            for c in conflicts:
+                lines.append(f"  ✗ Conflict between {c['name_a']} ({c['concept_a']}) and {c['name_b']} ({c['concept_b']})")
+                lines.append(f"    Description: {c['description']}")
+        else:
+            lines.append("  None")
+            
+        panel = render_panel("Knowledge Health Scan", lines, status="stats")
+        return json.dumps({
+            "status": "success",
+            "operation": "knowledge_health_check",
+            "project_root": str(project_root),
+            "memory_root": str(memory_root),
+            "message": panel,
+            "health": res,
+            "stale": stale,
+            "merges": merges,
+            "conflicts": conflicts
+        }, indent=2)
+
+    @mcp.tool()
+    def knowledge_stats(project: str = "") -> str:
+        """Show oem/ knowledge statistics.
+
+        Args:
+            project: Project directory path. Defaults to current directory.
+        """
+        try:
+            project_root = resolve_active_project(project)
+            memory_root = project_root / ".oem"
+            with KnowledgeEngine(project_root) as eng:
+                registry = eng.state._load_registry(project_root)
+                harness = eng._resolve_harness(project_root)
+                db_path = harness / ".local_vector_db"
+                db_size = 0
+                if db_path.exists():
+                    def get_files_size(p: Path) -> int:
+                        if p.is_file():
+                            return p.stat().st_size
+                        elif p.is_dir():
+                            return sum(get_files_size(f) for f in p.iterdir())
+                        return 0
+                    db_size = get_files_size(db_path)
+
+                lines = [
+                    f"Total Concepts:       {len(registry)}",
+                    f"Vector DB Size:       {(db_size / (1024 * 1024)):.2f} MB",
+                    f"OEM Path:             {harness}"
+                ]
+                panel = render_panel("Knowledge Stats", lines, status="stats")
+                return json.dumps({
+                    "status": "success",
+                    "operation": "knowledge_stats",
+                    "project_root": str(project_root),
+                    "memory_root": str(memory_root),
+                    "message": panel,
+                    "total_concepts": len(registry),
+                    "vector_db_size_mb": db_size / (1024 * 1024)
+                }, indent=2)
+        except ProjectResolutionError as e:
+            return handle_resolution_error("knowledge_stats", e)
+        except Exception as e:
+            return json.dumps({
+                "status": "error",
+                "operation": "knowledge_stats",
+                "message": str(e)
+            }, indent=2)
+
+    @mcp.tool()
+    def knowledge_explain_concept(concept_id: str, project: str = "") -> str:
+        """Explain a concept and its details from the registry.
+
+        Args:
+            concept_id: Concept ID (e.g. concept_001)
+            project: Project directory path. Defaults to current directory.
+        """
+        try:
+            project_root = resolve_active_project(project)
+            memory_root = project_root / ".oem"
+            with KnowledgeEngine(project_root) as eng:
+                registry = eng.state._load_registry(project_root)
+                cdata = registry.get(concept_id)
+                if not cdata:
+                    panel = render_panel("Concept Not Found", [f"Concept {concept_id} not in registry."], status="error")
+                    return json.dumps({
+                        "status": "error",
+                        "operation": "knowledge_explain_concept",
+                        "project_root": str(project_root),
+                        "memory_root": str(memory_root),
+                        "message": panel
+                    }, indent=2)
+
+                harness = eng._resolve_harness(project_root)
+                wiki_file = harness / "wiki" / f"{concept_id}.md"
+                recent_evidence = []
+                if wiki_file.exists():
+                    content = wiki_file.read_text(encoding="utf-8")
+                    import re
+                    ev_match = re.search(r"## Learnings.*?\n([\s\S]*)", content)
+                    if ev_match and ev_match.group(1):
+                        recent_evidence = [
+                            line.strip().lstrip("-").strip()
+                            for line in ev_match.group(1).split("\n")
+                            if line.strip().startswith("-")
+                        ]
+
+                lines = [
+                    f"Concept: {cdata.get('canonical_name', '').replace('-', ' ').upper()} ({concept_id})",
+                    f"Status: {cdata.get('status', '').upper()}",
+                    f"Confidence: {cdata.get('confidence', 1)}/5",
+                    f"Aliases: {', '.join(cdata.get('aliases', []))}",
+                    "",
+                    "Recent Evidence:"
+                ]
+                if recent_evidence:
+                    lines.extend(f"  - {e}" for e in recent_evidence)
+                else:
+                    lines.append("  - None")
+
+                panel = render_panel("Concept Explanation", lines, status="ok")
+                return json.dumps({
+                    "status": "success",
+                    "operation": "knowledge_explain_concept",
+                    "project_root": str(project_root),
+                    "memory_root": str(memory_root),
+                    "message": panel,
+                    "concept": cdata
+                }, indent=2)
+        except ProjectResolutionError as e:
+            return handle_resolution_error("knowledge_explain_concept", e)
+        except Exception as e:
+            return json.dumps({
+                "status": "error",
+                "operation": "knowledge_explain_concept",
+                "message": str(e)
+            }, indent=2)
+
+    @mcp.tool()
+    def knowledge_skill_candidates(project: str = "") -> str:
+        """List all skill candidates.
+
+        Args:
+            project: Project directory path. Defaults to current directory.
+        """
+        try:
+            project_root = resolve_active_project(project)
+            memory_root = project_root / ".oem"
+            with KnowledgeEngine(project_root) as eng:
+                candidates = eng.skills.list_skill_candidates(project_root)
+                if not candidates:
+                    return json.dumps({
+                        "status": "success",
+                        "operation": "knowledge_skill_candidates",
+                        "project_root": str(project_root),
+                        "memory_root": str(memory_root),
+                        "message": "No skill candidates found.",
+                        "candidates": []
+                    }, indent=2)
+                
+                lines = [
+                    "| Slug | Title | Confidence | Status | Evidence Count |",
+                    "| --- | --- | --- | --- | --- |"
+                ]
+                for c in candidates:
+                    lines.append(f"| {c.slug} | {c.title} | {c.confidence} | {c.status} | {len(c.evidence)} |")
+                panel = "\n".join(lines)
+                return json.dumps({
+                    "status": "success",
+                    "operation": "knowledge_skill_candidates",
+                    "project_root": str(project_root),
+                    "memory_root": str(memory_root),
+                    "message": panel,
+                    "candidates": [c.to_dict() if hasattr(c, "to_dict") else vars(c) for c in candidates]
+                }, indent=2)
+        except ProjectResolutionError as e:
+            return handle_resolution_error("knowledge_skill_candidates", e)
+        except Exception as e:
+            return json.dumps({
+                "status": "error",
+                "operation": "knowledge_skill_candidates",
+                "message": str(e)
+            }, indent=2)
+
+    @mcp.tool()
+    def knowledge_skill_candidate_show(slug: str, project: str = "") -> str:
+        """Show detailed candidate or approved skill.
+
+        Args:
+            slug: The slug of the skill candidate or approved skill.
+            project: Project directory path. Defaults to current directory.
+        """
+        try:
+            project_root = resolve_active_project(project)
+            memory_root = project_root / ".oem"
+            with KnowledgeEngine(project_root) as eng:
+                candidate = eng.skills.load_skill_candidate(slug, project_root)
+                if not candidate:
+                    layout = eng.layout(project_root)
+                    approved_path = layout.skills_dir / f"{slug}.md"
+                    if approved_path.exists():
+                        content = approved_path.read_text(encoding="utf-8")
+                        return json.dumps({
+                            "status": "success",
+                            "operation": "knowledge_skill_candidate_show",
+                            "project_root": str(project_root),
+                            "memory_root": str(memory_root),
+                            "message": content
+                        }, indent=2)
+                    return json.dumps({
+                        "status": "error",
+                        "operation": "knowledge_skill_candidate_show",
+                        "project_root": str(project_root),
+                        "memory_root": str(memory_root),
+                        "message": f"Candidate/Skill '{slug}' not found."
+                    }, indent=2)
+                
+                lines = [
+                    f"# Skill Candidate: {candidate.title}",
+                    "",
+                    f"- **Slug**: {candidate.slug}",
+                    f"- **Status**: {candidate.status}",
+                    f"- **Confidence**: {candidate.confidence}",
+                    "",
+                    "## Trigger",
+                    candidate.trigger,
+                    "",
+                    "## Recommended behavior",
+                    candidate.recommended_behavior,
+                    "",
+                    "## Rationale",
+                    candidate.rationale,
+                    "",
+                    "## Evidence",
+                ]
+                for ev in candidate.evidence:
+                    lines.append(f"- {ev}")
+                panel = "\n".join(lines)
+                return json.dumps({
+                    "status": "success",
+                    "operation": "knowledge_skill_candidate_show",
+                    "project_root": str(project_root),
+                    "memory_root": str(memory_root),
+                    "message": panel,
+                    "candidate": candidate.to_dict() if hasattr(candidate, "to_dict") else vars(candidate)
+                }, indent=2)
+        except ProjectResolutionError as e:
+            return handle_resolution_error("knowledge_skill_candidate_show", e)
+        except Exception as e:
+            return json.dumps({
+                "status": "error",
+                "operation": "knowledge_skill_candidate_show",
+                "message": str(e)
+            }, indent=2)
+
+    @mcp.tool()
+    def knowledge_skill_candidate_approve(slug: str = "", force: bool = False, project: str = "") -> str:
+        """Approve a skill candidate and promote it to a project skill.
+
+        Args:
+            slug: The slug of the skill candidate.
+            force: Force approval even if rejected previously.
+            project: Project directory path. Defaults to current directory.
+        """
+        if not slug:
+            return json.dumps({
+                "status": "error",
+                "operation": "knowledge_skill_candidate_approve",
+                "message": "Slug is required."
+            }, indent=2)
+        try:
+            project_root = resolve_active_project(project)
+            memory_root = project_root / ".oem"
+            with KnowledgeEngine(project_root) as eng:
+                cand = eng.skills.update_skill_candidate_status(slug, "approved", project_root, force=force)
+                if not cand:
+                    return json.dumps({
+                        "status": "error",
+                        "operation": "knowledge_skill_candidate_approve",
+                        "project_root": str(project_root),
+                        "memory_root": str(memory_root),
+                        "message": f"Candidate '{slug}' not found."
+                    }, indent=2)
+                panel = (
+                    "Status: approved\n"
+                    f"Skill: {slug}\n"
+                    f"Approved skill written: .oem/skills/{slug}.md"
+                )
+                return json.dumps({
+                    "status": "success",
+                    "operation": "knowledge_skill_candidate_approve",
+                    "project_root": str(project_root),
+                    "memory_root": str(memory_root),
+                    "message": panel
+                }, indent=2)
+        except ProjectResolutionError as e:
+            return handle_resolution_error("knowledge_skill_candidate_approve", e)
+        except Exception as e:
+            return json.dumps({
+                "status": "error",
+                "operation": "knowledge_skill_candidate_approve",
+                "message": str(e)
+            }, indent=2)
+
+    @mcp.tool()
+    def knowledge_skill_candidate_reject(slug: str = "", project: str = "") -> str:
+        """Reject a skill candidate.
+
+        Args:
+            slug: The slug of the skill candidate.
+            project: Project directory path. Defaults to current directory.
+        """
+        if not slug:
+            return json.dumps({
+                "status": "error",
+                "operation": "knowledge_skill_candidate_reject",
+                "message": "Slug is required."
+            }, indent=2)
+        try:
+            project_root = resolve_active_project(project)
+            memory_root = project_root / ".oem"
+            with KnowledgeEngine(project_root) as eng:
+                cand = eng.skills.update_skill_candidate_status(slug, "rejected", project_root)
+                if not cand:
+                    return json.dumps({
+                        "status": "error",
+                        "operation": "knowledge_skill_candidate_reject",
+                        "project_root": str(project_root),
+                        "memory_root": str(memory_root),
+                        "message": f"Candidate '{slug}' not found."
+                    }, indent=2)
+                return json.dumps({
+                    "status": "success",
+                    "operation": "knowledge_skill_candidate_reject",
+                    "project_root": str(project_root),
+                    "memory_root": str(memory_root),
+                    "message": f"Status: rejected\nSkill: {slug}"
+                }, indent=2)
+        except ProjectResolutionError as e:
+            return handle_resolution_error("knowledge_skill_candidate_reject", e)
+        except Exception as e:
+            return json.dumps({
+                "status": "error",
+                "operation": "knowledge_skill_candidate_reject",
+                "message": str(e)
+            }, indent=2)
+
+    @mcp.tool()
+    def knowledge_skill_candidate_defer(slug: str = "", project: str = "") -> str:
+        """Defer a skill candidate.
+
+        Args:
+            slug: The slug of the skill candidate.
+            project: Project directory path. Defaults to current directory.
+        """
+        if not slug:
+            return json.dumps({
+                "status": "error",
+                "operation": "knowledge_skill_candidate_defer",
+                "message": "Slug is required."
+            }, indent=2)
+        try:
+            project_root = resolve_active_project(project)
+            memory_root = project_root / ".oem"
+            with KnowledgeEngine(project_root) as eng:
+                cand = eng.skills.update_skill_candidate_status(slug, "deferred", project_root)
+                if not cand:
+                    return json.dumps({
+                        "status": "error",
+                        "operation": "knowledge_skill_candidate_defer",
+                        "project_root": str(project_root),
+                        "memory_root": str(memory_root),
+                        "message": f"Candidate '{slug}' not found."
+                    }, indent=2)
+                return json.dumps({
+                    "status": "success",
+                    "operation": "knowledge_skill_candidate_defer",
+                    "project_root": str(project_root),
+                    "memory_root": str(memory_root),
+                    "message": f"Status: deferred\nSkill: {slug}"
+                }, indent=2)
+        except ProjectResolutionError as e:
+            return handle_resolution_error("knowledge_skill_candidate_defer", e)
+        except Exception as e:
+            return json.dumps({
+                "status": "error",
+                "operation": "knowledge_skill_candidate_defer",
+                "message": str(e)
+            }, indent=2)
 
 
 def main() -> None:

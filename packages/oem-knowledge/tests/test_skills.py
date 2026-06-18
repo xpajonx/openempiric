@@ -1072,7 +1072,7 @@ def test_mcp_skill_candidate_approve_missing_slug_returns_clean_error(temp_proje
     import asyncio
     res = asyncio.run(mcp.call_tool("knowledge_skill_candidate_approve", {"slug": "", "project": str(tmp_path)}))
     res_str = res.content[0].text
-    assert "Status: error" in res_str
+    assert '"status": "error"' in res_str
     assert "Slug is required" in res_str
 
 
