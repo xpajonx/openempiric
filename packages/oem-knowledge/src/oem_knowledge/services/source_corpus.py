@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import fnmatch
 import hashlib
 import json
@@ -27,13 +28,74 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+@dataclass
+class SourceIndexConfig:
+    include: list[str]
+    exclude: list[str]
+    max_file_size_bytes: int
+    chunk_lines: int
+    chunk_overlap_lines: int
+    max_read_lines: int
+    max_read_characters: int
+
+@dataclass
+class SourceFileClassification:
+    path: Path
+    rel_path: str
+    eligible: bool
+    reason: str
+    file_type: str
+    language: str
+    size_bytes: int
+    metadata_only: bool = False
+
+@dataclass
+class SourceDiscoveryResult:
+    project_root: str
+    files_included: int
+    files_excluded: int
+    excluded_reasons: dict[str, int]
+    warnings: list[str]
+    discovered_files: list[SourceFileClassification]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "project_root": self.project_root,
+            "files_included": self.files_included,
+            "files_excluded": self.files_excluded,
+            "excluded_reasons": self.excluded_reasons,
+            "warnings": self.warnings
+        }
+
 DEFAULT_SOURCE_CONFIG: dict[str, Any] = {
     "version": 1,
+    "include": [
+        "src/**",
+        "packages/**",
+        "tests/**",
+        "docs/**",
+        "README.md",
+        "AGENTS.md",
+        "pyproject.toml",
+        "package.json"
+    ],
+    "exclude": [
+        ".git/**",
+        ".oem/**",
+        "node_modules/**",
+        "dist/**",
+        "build/**",
+        ".venv/**",
+        "*.png",
+        "*.jpg",
+        "*.pdf",
+        ".env"
+    ],
     "chunk_lines": 120,
     "chunk_overlap_lines": 20,
     "max_file_size_bytes": 524288,
     "max_read_lines": 400,
-    "max_read_characters": 24000,
+    "max_read_characters": 50000,
     "exclude_globs": [],
 }
 
@@ -137,6 +199,8 @@ def _estimate_tokens(characters: int) -> int:
 def _deep_copy_defaults() -> dict[str, Any]:
     return {
         "version": DEFAULT_SOURCE_CONFIG["version"],
+        "include": list(DEFAULT_SOURCE_CONFIG["include"]),
+        "exclude": list(DEFAULT_SOURCE_CONFIG["exclude"]),
         "chunk_lines": DEFAULT_SOURCE_CONFIG["chunk_lines"],
         "chunk_overlap_lines": DEFAULT_SOURCE_CONFIG["chunk_overlap_lines"],
         "max_file_size_bytes": DEFAULT_SOURCE_CONFIG["max_file_size_bytes"],
@@ -374,8 +438,14 @@ class _SourceIndexStore:
 
 
 class SourceCorpusService:
-    def __init__(self, engine: "KnowledgeEngine"):
-        self.engine = engine
+    def __init__(self, engine_or_path: "KnowledgeEngine" | Path | str):
+        if hasattr(engine_or_path, "project_path"):
+            self.engine = engine_or_path
+            self.project_root = Path(engine_or_path.project_path or ".").resolve()
+        else:
+            self.engine = None
+            self.project_root = Path(engine_or_path).resolve()
+        self.memory_root = self.project_root / ".oem"
         self._store: _SourceIndexStore | None = None
 
     def close(self) -> None:
@@ -384,13 +454,16 @@ class SourceCorpusService:
             self._store = None
 
     def _project_root(self) -> Path:
-        return Path(self.engine.project_path or ".").resolve()
+        return self.project_root
 
     def _memory_root(self) -> Path:
-        return self._project_root() / ".oem"
+        return self.memory_root
 
     def _layout(self):
-        return self.engine.layout(str(self._project_root()))
+        if self.engine is not None:
+            return self.engine.layout(str(self.project_root))
+        from oem_knowledge.project_layout import ProjectLayout
+        return ProjectLayout(self.memory_root)
 
     def _store_for_write(self) -> _SourceIndexStore:
         if self._store is None:
@@ -399,13 +472,13 @@ class SourceCorpusService:
         return self._store
 
     def _manifest_path(self) -> Path:
-        return self._memory_root() / "source_manifest.json"
+        return self.memory_root / "source_manifest.json"
 
     def _config_path(self) -> Path:
-        return self._memory_root() / "source_index_config.yml"
+        return self.memory_root / "source_index_config.yml"
 
     def _db_path(self) -> Path:
-        return self._memory_root() / "indexes" / "source_index.sqlite"
+        return self.memory_root / "indexes" / "source_index.sqlite"
 
     def _load_config(self) -> dict[str, Any]:
         config = _deep_copy_defaults()
@@ -433,6 +506,10 @@ class SourceCorpusService:
                     pass
         if isinstance(loaded.get("exclude_globs"), list):
             config["exclude_globs"] = [str(item) for item in loaded["exclude_globs"] if str(item).strip()]
+        if isinstance(loaded.get("include"), list):
+            config["include"] = [str(item) for item in loaded["include"]]
+        if isinstance(loaded.get("exclude"), list):
+            config["exclude"] = [str(item) for item in loaded["exclude"]]
         return config
 
     def _ensure_config_written(self, config: dict[str, Any]) -> None:
@@ -463,7 +540,7 @@ class SourceCorpusService:
             return []
 
     def _build_ignore_matcher(self, config: dict[str, Any]) -> _IgnoreMatcher:
-        project_root = self._project_root()
+        project_root = self.project_root
         patterns = []
         patterns.extend(self._read_ignore_file(project_root / ".gitignore"))
         patterns.extend(self._read_ignore_file(project_root / ".oemignore"))
@@ -486,79 +563,275 @@ class SourceCorpusService:
             return "unsupported_binary_or_media"
         return None
 
-    def _discover_files(self, config: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, int]]:
-        project_root = self._project_root()
-        ignore_matcher = self._build_ignore_matcher(config)
-        discovered: list[dict[str, Any]] = []
-        counters = {
-            "excluded": 0,
+    def load_config(self) -> SourceIndexConfig:
+        config_dict = self._load_config()
+        include = config_dict.get("include")
+        if include is None:
+            include = list(DEFAULT_SOURCE_CONFIG["include"])
+        exclude = config_dict.get("exclude")
+        if exclude is None:
+            exclude = list(DEFAULT_SOURCE_CONFIG["exclude"])
+            
+        return SourceIndexConfig(
+            include=[str(i) for i in include],
+            exclude=[str(e) for e in exclude],
+            max_file_size_bytes=int(config_dict.get("max_file_size_bytes", DEFAULT_SOURCE_CONFIG["max_file_size_bytes"])),
+            chunk_lines=int(config_dict.get("chunk_lines", DEFAULT_SOURCE_CONFIG["chunk_lines"])),
+            chunk_overlap_lines=int(config_dict.get("chunk_overlap_lines", DEFAULT_SOURCE_CONFIG["chunk_overlap_lines"])),
+            max_read_lines=int(config_dict.get("max_read_lines", DEFAULT_SOURCE_CONFIG["max_read_lines"])),
+            max_read_characters=int(config_dict.get("max_read_characters", DEFAULT_SOURCE_CONFIG["max_read_characters"])),
+        )
+
+    def classify_file(self, path: Path) -> SourceFileClassification:
+        project_root = self.project_root.resolve()
+        
+        # 1. Path Safety Check (traversal, absolute path outside, symlink escaping root)
+        try:
+            # Check traversal and absolute path outside root by resolving and checking relative
+            resolved = path.resolve()
+            resolved.relative_to(project_root)
+            is_inside = True
+        except (ValueError, RuntimeError):
+            is_inside = False
+
+        if not is_inside:
+            rel_path = str(path)
+            try:
+                rel_path = _normalize_rel_path(path.relative_to(project_root))
+            except Exception:
+                pass
+            return SourceFileClassification(
+                path=path,
+                rel_path=rel_path,
+                eligible=False,
+                reason="outside_project_symlink",
+                file_type="unknown",
+                language="unknown",
+                size_bytes=0
+            )
+
+        rel_path = _normalize_rel_path(resolved.relative_to(project_root))
+        
+        # 2. Mandatory Exclusions check (these always override includes)
+        reason = self._mandatory_exclusion_reason(rel_path, is_dir=resolved.is_dir())
+        if reason is not None:
+            if reason == "mandatory_excluded_directory":
+                reason = "mandatory_excluded"
+            return SourceFileClassification(
+                path=resolved,
+                rel_path=rel_path,
+                eligible=False,
+                reason=reason,
+                file_type="unknown",
+                language="unknown",
+                size_bytes=resolved.stat().st_size if resolved.is_file() else 0
+            )
+
+        name_lower = resolved.name.lower()
+        if any(name_lower.endswith(ext) for ext in (".pem", ".key", ".crt", ".p12", ".pfx", ".sqlite", ".db")):
+            return SourceFileClassification(
+                path=resolved,
+                rel_path=rel_path,
+                eligible=False,
+                reason="mandatory_excluded",
+                file_type="unknown",
+                language="unknown",
+                size_bytes=resolved.stat().st_size if resolved.is_file() else 0
+            )
+
+        if resolved.is_dir():
+            return SourceFileClassification(
+                path=resolved,
+                rel_path=rel_path,
+                eligible=False,
+                reason="directory",
+                file_type="directory",
+                language="unknown",
+                size_bytes=0
+            )
+
+        # 3. Ignore Matcher check (.gitignore / .oemignore)
+        config = self.load_config()
+        ignore_matcher = self._build_ignore_matcher({
+            "exclude_globs": config.exclude
+        })
+        if ignore_matcher.matches(rel_path, is_dir=False):
+            return SourceFileClassification(
+                path=resolved,
+                rel_path=rel_path,
+                eligible=False,
+                reason="gitignored",
+                file_type="unknown",
+                language="unknown",
+                size_bytes=resolved.stat().st_size
+            )
+
+        # 4. Lockfile/large file/binary check (checked before includes/excludes)
+        size_bytes = resolved.stat().st_size
+        file_type = _guess_file_type(resolved)
+        language = _guess_language(resolved)
+
+        if file_type == "lockfile":
+            return SourceFileClassification(
+                path=resolved,
+                rel_path=rel_path,
+                eligible=False,
+                reason="lockfile_metadata_only",
+                file_type=file_type,
+                language=language,
+                size_bytes=size_bytes,
+                metadata_only=True
+            )
+
+        if size_bytes > config.max_file_size_bytes:
+            return SourceFileClassification(
+                path=resolved,
+                rel_path=rel_path,
+                eligible=False,
+                reason="large_file",
+                file_type=file_type,
+                language=language,
+                size_bytes=size_bytes,
+                metadata_only=True
+            )
+
+        if not self._is_text_like(resolved):
+            return SourceFileClassification(
+                path=resolved,
+                rel_path=rel_path,
+                eligible=False,
+                reason="binary",
+                file_type="binary",
+                language=language,
+                size_bytes=size_bytes
+            )
+
+        # 5. Include/Exclude configuration check
+        if config.exclude:
+            exclude_matcher = _IgnoreMatcher(config.exclude)
+            if exclude_matcher.matches(rel_path, is_dir=False):
+                return SourceFileClassification(
+                    path=resolved,
+                    rel_path=rel_path,
+                    eligible=False,
+                    reason="excluded",
+                    file_type="unknown",
+                    language="unknown",
+                    size_bytes=resolved.stat().st_size
+                )
+
+        if config.include:
+            include_matcher = _IgnoreMatcher(config.include)
+            if not include_matcher.matches(rel_path, is_dir=False):
+                return SourceFileClassification(
+                    path=resolved,
+                    rel_path=rel_path,
+                    eligible=False,
+                    reason="not_included",
+                    file_type="unknown",
+                    language="unknown",
+                    size_bytes=resolved.stat().st_size
+                )
+
+        return SourceFileClassification(
+            path=resolved,
+            rel_path=rel_path,
+            eligible=True,
+            reason="eligible",
+            file_type=file_type,
+            language=language,
+            size_bytes=size_bytes
+        )
+
+    def discover_files(self) -> SourceDiscoveryResult:
+        project_root = self.project_root.resolve()
+        config = self.load_config()
+        
+        discovered_files: list[SourceFileClassification] = []
+        excluded_reasons: dict[str, int] = {
+            "mandatory_excluded": 0,
+            "gitignored": 0,
+            "binary": 0,
+            "large_file": 0,
+            "outside_project_symlink": 0,
             "lockfile_metadata_only": 0,
-            "skipped_large_file": 0,
+            "excluded": 0,
+            "not_included": 0,
         }
+        
         for current_root, dirnames, filenames in os.walk(project_root):
             current_path = Path(current_root)
-            rel_dir = "" if current_path == project_root else _normalize_rel_path(current_path.relative_to(project_root))
-
+            
             kept_dirs = []
             for dirname in dirnames:
-                rel_path = dirname if not rel_dir else f"{rel_dir}/{dirname}"
-                if self._mandatory_exclusion_reason(rel_path, is_dir=True) is not None:
-                    counters["excluded"] += 1
-                    continue
-                if ignore_matcher.matches(rel_path, is_dir=True):
-                    counters["excluded"] += 1
-                    continue
-                kept_dirs.append(dirname)
+                dir_path = current_path / dirname
+                classification = self.classify_file(dir_path)
+                
+                if classification.eligible or classification.reason not in (
+                    "mandatory_excluded",
+                    "gitignored",
+                    "outside_project_symlink"
+                ):
+                    kept_dirs.append(dirname)
+                else:
+                    reason = classification.reason
+                    if reason in excluded_reasons:
+                        excluded_reasons[reason] += 1
             dirnames[:] = kept_dirs
 
             for filename in filenames:
-                abs_path = current_path / filename
-                rel_path = filename if not rel_dir else f"{rel_dir}/{filename}"
-                reason = self._mandatory_exclusion_reason(rel_path, is_dir=False)
-                if reason is not None:
-                    counters["excluded"] += 1
-                    continue
-                if ignore_matcher.matches(rel_path, is_dir=False):
-                    counters["excluded"] += 1
-                    continue
+                file_path = current_path / filename
+                classification = self.classify_file(file_path)
+                discovered_files.append(classification)
+                
+                if not classification.eligible:
+                    reason = classification.reason
+                    if reason in excluded_reasons:
+                        excluded_reasons[reason] += 1
 
-                stat = abs_path.stat()
-                size_bytes = int(stat.st_size)
-                mtime_ns = int(stat.st_mtime_ns)
-                content_hash = _sha256_file(abs_path)
-                language = _guess_language(abs_path)
-                file_type = _guess_file_type(abs_path)
-                name = abs_path.name
+        files_included = sum(1 for c in discovered_files if c.eligible)
+        files_excluded = len(discovered_files) - files_included
+        
+        warnings = []
+        if not self._config_path().exists():
+            warnings.append("config_missing_using_defaults")
+            
+        return SourceDiscoveryResult(
+            project_root=str(project_root),
+            files_included=files_included,
+            files_excluded=files_excluded,
+            excluded_reasons=excluded_reasons,
+            warnings=warnings,
+            discovered_files=discovered_files
+        )
 
-                mode = "index"
-                reason = "eligible"
-                if name in LOCKFILE_NAMES or name.endswith(".lock"):
-                    mode = "metadata_only"
-                    reason = "lockfile_metadata_only"
-                    counters["lockfile_metadata_only"] += 1
-                elif size_bytes > int(config["max_file_size_bytes"]):
-                    mode = "metadata_only"
-                    reason = "skipped_large_file"
-                    counters["skipped_large_file"] += 1
-                elif not self._is_text_like(abs_path):
-                    counters["excluded"] += 1
-                    continue
-
-                discovered.append(
-                    {
-                        "absolute_path": abs_path,
-                        "rel_path": rel_path,
-                        "size_bytes": size_bytes,
-                        "mtime_ns": mtime_ns,
-                        "content_hash": content_hash,
-                        "language": language,
-                        "file_type": file_type,
-                        "mode": mode,
-                        "reason": reason,
-                    }
-                )
+    def _discover_files(self, config: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, int]]:
+        res = self.discover_files()
+        discovered = []
+        for c in res.discovered_files:
+            if c.eligible or c.reason in ("lockfile_metadata_only", "large_file"):
+                discovered.append({
+                    "absolute_path": Path(c.path),
+                    "rel_path": c.rel_path,
+                    "size_bytes": c.size_bytes,
+                    "mtime_ns": Path(c.path).stat().st_mtime_ns if Path(c.path).exists() else 0,
+                    "content_hash": _sha256_file(Path(c.path)) if Path(c.path).is_file() else "",
+                    "language": c.language,
+                    "file_type": c.file_type,
+                    "mode": "metadata_only" if c.reason in ("lockfile_metadata_only", "large_file") else "index",
+                    "reason": c.reason,
+                })
+        
+        counters = {
+            "excluded": sum(1 for c in res.discovered_files if not c.eligible and c.reason not in ("lockfile_metadata_only", "large_file")),
+            "lockfile_metadata_only": res.excluded_reasons.get("lockfile_metadata_only", 0),
+            "skipped_large_file": res.excluded_reasons.get("large_file", 0),
+        }
         discovered.sort(key=lambda item: item["rel_path"])
         return discovered, counters
+
+    def estimate_tokens(self, text: str) -> int:
+        return _estimate_tokens(len(text))
 
     def _is_text_like(self, path: Path) -> bool:
         try:

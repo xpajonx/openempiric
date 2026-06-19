@@ -16,11 +16,16 @@ def temp_project(tmp_path):
     engine = KnowledgeEngine(project_dir)
     engine.init_project(str(project_dir))
     
-    # Create a couple of sample files to index
-    file1 = project_dir / "src_test_file.py"
+    # Create a couple of sample files to index inside valid directories
+    src_dir = project_dir / "src"
+    src_dir.mkdir()
+    docs_dir = project_dir / "docs"
+    docs_dir.mkdir()
+    
+    file1 = src_dir / "src_test_file.py"
     file1.write_text("def test_function():\n    return 'hello world'\n", encoding="utf-8")
     
-    file2 = project_dir / "docs_test_file.md"
+    file2 = docs_dir / "docs_test_file.md"
     file2.write_text("# Documentation\nThis is a sample document for testing.\n", encoding="utf-8")
     
     yield project_dir
@@ -59,10 +64,10 @@ def test_cli_source_index_and_stats_and_search_and_read(temp_project, capsys):
     run_knowledge_command(args_search)
     captured = capsys.readouterr()
     assert "Source Search Results" in captured.out
-    assert "src_test_file.py" in captured.out
+    assert "src/src_test_file.py" in captured.out
 
     # 4. Run read
-    args_read = parser.parse_args(["source", "read", "src_test_file.py", "--start-line", "1", "--end-line", "2", "--project", str(temp_project)])
+    args_read = parser.parse_args(["source", "read", "src/src_test_file.py", "--start-line", "1", "--end-line", "2", "--project", str(temp_project)])
     run_knowledge_command(args_read)
     captured = capsys.readouterr()
     assert "Source Content" in captured.out
@@ -96,11 +101,11 @@ def test_mcp_source_tools(temp_project):
     assert search_res["status"] == "success"
     assert search_res["operation"] == "knowledge_source_search"
     assert len(search_res["results"]) > 0
-    assert search_res["results"][0]["metadata"]["rel_path"] == "src_test_file.py"
+    assert search_res["results"][0]["metadata"]["rel_path"] == "src/src_test_file.py"
     
     # 3. Test knowledge_source_read via the registered tool function
     read_fn = read_tool.fn
-    read_res_json = read_fn(path="src_test_file.py", start_line=1, end_line=2, project=str(temp_project))
+    read_res_json = read_fn(path="src/src_test_file.py", start_line=1, end_line=2, project=str(temp_project))
     read_res = json.loads(read_res_json)
     
     assert read_res["status"] == "success"
