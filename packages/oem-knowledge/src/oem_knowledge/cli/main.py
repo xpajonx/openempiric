@@ -58,6 +58,7 @@ def main():
         "identity",
         "contradictions",
         "health",
+        "source",
     ):
         from .commands.knowledge import run_knowledge_command
         run_knowledge_command(args)

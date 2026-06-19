@@ -159,10 +159,12 @@ class KnowledgeEngine:
         from oem_knowledge.services.state import StateService
         from oem_knowledge.services.event_migration import EventMigrator
         from oem_knowledge.services.fitness import FitnessService
+        from oem_knowledge.services.source_corpus import SourceCorpusService
         from oem_knowledge.services.skills import SkillService
         from oem_knowledge.services.skill_promotion import SkillPromotionService
 
         self.search = SearchService(self)
+        self.source = SourceCorpusService(self)
         self.materialization = MaterializationService(self)
         self.reflection = ReflectionService(self)
         self.state = StateService(self)
@@ -172,7 +174,7 @@ class KnowledgeEngine:
         self.skill_promotion = SkillPromotionService(self)
 
     def close(self) -> None:
-        for service in (getattr(self, "search", None),):
+        for service in (getattr(self, "search", None), getattr(self, "source", None)):
             close = getattr(service, "close", None)
             if callable(close):
                 close()

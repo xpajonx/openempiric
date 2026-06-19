@@ -22,7 +22,7 @@ try:
 
     _VERSION = _pkg_version("oem-knowledge")
 except Exception:
-    _VERSION = "1.0.0"
+    _VERSION = "1.0.1"
 
 
 def _resolve_project(args) -> str | None:
@@ -89,6 +89,28 @@ def _setup_parser() -> argparse.ArgumentParser:
     search_p.add_argument("query", type=str)
     search_p.add_argument("--k", type=int, default=3)
     search_p.add_argument("--project", type=str, default="")
+
+    source_p = sub.add_parser("source", help="[User] Search and read the project source corpus")
+    source_sub = source_p.add_subparsers(dest="source_command", required=True, metavar="SOURCE_COMMAND")
+
+    source_index_p = source_sub.add_parser("index", help="Build the project source corpus index")
+    source_index_p.add_argument("--force", action="store_true", help="Re-index all eligible source files")
+    source_index_p.add_argument("--dry-run", action="store_true", help="Discover and count without writing files")
+    source_index_p.add_argument("--project", type=str, default="")
+
+    source_search_p = source_sub.add_parser("search", help="Search indexed project source files")
+    source_search_p.add_argument("query", type=str)
+    source_search_p.add_argument("--k", type=int, default=5)
+    source_search_p.add_argument("--project", type=str, default="")
+
+    source_read_p = source_sub.add_parser("read", help="Read an exact project source file range")
+    source_read_p.add_argument("path", type=str)
+    source_read_p.add_argument("--start-line", type=int, default=None)
+    source_read_p.add_argument("--end-line", type=int, default=None)
+    source_read_p.add_argument("--project", type=str, default="")
+
+    source_stats_p = source_sub.add_parser("stats", help="Show source corpus index statistics")
+    source_stats_p.add_argument("--project", type=str, default="")
 
     read_p = sub.add_parser("read", help="[User] Read the project memory baseline")
     read_p.add_argument(

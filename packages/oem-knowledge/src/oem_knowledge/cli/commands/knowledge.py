@@ -423,3 +423,107 @@ def _run_knowledge_command_impl(args):
             print(render_panel("Merge Failure", [res.get("message", "")], status="error"))
         else:
             print(render_panel("Concepts Merged", [res.get("message", "")], status="ok"))
+
+    elif args.command == "source":
+        if args.source_command == "index":
+            res = eng.source.index(force=args.force, dry_run=args.dry_run)
+            if res.get("status") == "error":
+                print(render_panel(
+                    "Source Indexing Failure",
+                    [res.get("message", "Unknown error")],
+                    status="error"
+                ))
+                sys.exit(1)
+            else:
+                summary = res.get("summary", {})
+                lines = [
+                    f"Operation:         {res.get('mode', 'write').upper()}",
+                    f"Scanned Files:     {res.get('scanned_files', 0)}",
+                    f"Indexed Files:     {res.get('indexed_files', 0)}",
+                    f"Metadata-only:     {res.get('metadata_only_files', 0)}",
+                    f"New Files:         {res.get('new_files', 0)}",
+                    f"Updated Files:     {res.get('updated_files', 0)}",
+                    f"Removed Files:     {res.get('removed_files', 0)}",
+                    f"Total Chunks:      {res.get('total_chunks', 0)}",
+                    f"Est. Tokens:       {res.get('estimated_source_tokens', 0)}",
+                ]
+                if res.get("warnings"):
+                    lines += ["", "Warnings:"] + [f"  ⚠ {w}" for w in res["warnings"]]
+                print(render_panel(
+                    "Source Indexing Complete" if not args.dry_run else "Source Indexing (Dry Run)",
+                    lines,
+                    status="ok"
+                ))
+
+        elif args.source_command == "search":
+            res = eng.source.search(args.query, k=args.k)
+            if res.get("status") == "error":
+                print(render_panel(
+                    "Source Search Failure",
+                    [res.get("message", "Unknown error.")],
+                    status="error"
+                ))
+                sys.exit(1)
+            results = res.get("results", [])
+            lines = [f'Query: "{args.query}"', f"Results: {len(results)}", ""]
+            for idx, r in enumerate(results):
+                meta = r.get("metadata", {})
+                rel_path = meta.get("rel_path", "unknown")
+                start = meta.get("start_line")
+                end = meta.get("end_line")
+                loc = f"L{start}-{end}" if start and end else "metadata"
+                lines.append(
+                    f"{idx + 1}. [{rel_path}#{loc}] (score: {r['score']:.4f})"
+                )
+                lines.append(f"   {r['document'][:150]}...")
+                lines.append("")
+            if not results:
+                lines = [f"No matches for: '{args.query}'"]
+            print(render_panel("Source Search Results", lines, status="search"))
+
+        elif args.source_command == "read":
+            res = eng.source.read(args.path, start_line=args.start_line, end_line=args.end_line)
+            if res.get("status") == "error":
+                panel_lines = [res.get("message", "Unknown error.")]
+                if res.get("suggestion"):
+                    panel_lines += ["", f"Suggestion: {res['suggestion']}"]
+                print(render_panel("Source Read Error", panel_lines, status="error"))
+                sys.exit(1)
+            
+            content = res.get("content", "")
+            line_range = res.get("line_range", {})
+            warnings = res.get("warnings", [])
+            
+            lines = [
+                f"File: {res.get('path')}",
+                f"Range: {line_range.get('start')}-{line_range.get('end')} (Total lines: {line_range.get('total_lines')})",
+                "",
+                content,
+                ""
+            ]
+            if warnings:
+                lines += ["Warnings:"] + [f"  ⚠ {w}" for w in warnings] + [""]
+            if res.get("suggestion"):
+                lines += [f"Tip: {res['suggestion']}"]
+
+            print(render_panel("Source Content", lines, status="ok"))
+
+        elif args.source_command == "stats":
+            res = eng.source.stats()
+            if res.get("status") == "error":
+                print(render_panel("Source Stats Error", [res.get("message", "Unknown error")], status="error"))
+                sys.exit(1)
+            s = res.get("summary", {})
+            lines = [
+                f"Baseline Tokens:     {s.get('estimated_baseline_tokens', 0)}",
+                f"Retrieval Tokens:    {s.get('estimated_retrieval_tokens', 0)}",
+                f"Estimated Savings:   {s.get('estimated_savings', 0)}",
+                f"Database Size:       {s.get('db_size_mb', 0.0):.4f} MB",
+                f"Total Chunks:        {s.get('total_chunks', 0)}",
+                f"Indexed Files:       {s.get('indexed_files', 0)}",
+                f"Metadata-only:       {s.get('metadata_only_files', 0)}",
+                f"Skipped Large Files: {s.get('skipped_large_files', 0)}",
+            ]
+            if res.get("warnings"):
+                lines += ["", "Warnings:"] + [f"  ⚠ {w}" for w in res["warnings"]]
+            print(render_panel("Source Stats", lines, status="stats"))

@@ -44,6 +44,22 @@ class ProjectLayout:
         return self.root / ".local_vector_db"
 
     @property
+    def source_indexes_dir(self) -> Path:
+        return self.root / "indexes"
+
+    @property
+    def source_index_db_path(self) -> Path:
+        return self.source_indexes_dir / "source_index.sqlite"
+
+    @property
+    def source_manifest_path(self) -> Path:
+        return self.root / "source_manifest.json"
+
+    @property
+    def source_config_path(self) -> Path:
+        return self.root / "source_index_config.yml"
+
+    @property
     def state_dir(self) -> Path:
         return self.root / "state"
 

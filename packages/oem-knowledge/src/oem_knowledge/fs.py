@@ -214,6 +214,9 @@ class SecureFileSystem:
             )
         return resolved
 
+    def resolve_path(self, path: Path) -> Path:
+        return self._verify_path(path)
+
     def read_text(self, path: Path, encoding: str = "utf-8") -> str:
         verified = self._verify_path(path)
         if not verified.exists():

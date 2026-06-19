@@ -1389,475 +1389,141 @@ def mount_tools(mcp: object) -> None:
                 "message": str(e)
             }, indent=2)
 
-
-def main() -> None:
-    import os
-    # Suppress fastmcp logs on stdout/stderr to protect MCP JSON-RPC transport stream
-    if "FASTMCP_LOG_LEVEL" not in os.environ:
-        os.environ["FASTMCP_LOG_LEVEL"] = "WARNING"
-    if "FASTMCP_LOG_ENABLED" not in os.environ:
-        os.environ["FASTMCP_LOG_ENABLED"] = "false"
-
-    from oem_knowledge.engine import apply_oem_process_env_defaults
-    apply_oem_process_env_defaults()
-
-    from fastmcp import FastMCP
-    mcp = FastMCP("openempiric")
-    mount_tools(mcp)
-    mcp.run(show_banner=False)
-
-
-if __name__ == "__main__":
-    main()
-
     @mcp.tool()
-    def knowledge_health_check(
-        stale_sessions: int = 5, similarity_threshold: float = 0.85, project: str = ""
-    ) -> str:
-        """Scan the knowledge base for stale concepts, duplicate concepts (merge proposals), and architectural contradictions.
+    def knowledge_source_search(query: str, k: int = 5, project: str = "") -> str:
+        """Search indexed project source files (separate source corpus).
 
         Args:
-            stale_sessions: Number of sessions threshold to consider a concept stale. Defaults to 5.
-            similarity_threshold: Similarity threshold to propose merges. Defaults to 0.85.
+            query: Search query
+            k: Number of results to return. Defaults to 5.
             project: Project directory path. Defaults to current directory.
         """
         try:
             project_root = resolve_active_project(project)
             memory_root = project_root / ".oem"
-            from oem_knowledge.health import build_runtime_health
-            res = build_runtime_health(project_root)
-
-            with KnowledgeEngine(project_root) as eng:
-                stale = eng.state.detect_stale_concepts(stale_sessions, project_root)
-                merges = eng.propose_merges(similarity_threshold, project_root)
-                conflicts = eng.detect_contradictions(project_root)
+            with KnowledgeEngine(str(project_root)) as eng:
+                res = eng.source.search(query, k=k)
         except ProjectResolutionError as e:
-            return handle_resolution_error("knowledge_health_check", e)
+            return handle_resolution_error("knowledge_source_search", e)
         except Exception as e:
-            err_data = {
+            return json.dumps({
                 "status": "error",
-                "operation": "knowledge_health_check",
-                "message": str(e),
-                "failed_step": "knowledge_health_check",
-                "warnings": [],
-                "errors": [str(e)],
-                "suggestion": "Ensure the project directory exists and contains valid .oem/ memory files."
-            }
-            return json.dumps(err_data, indent=2)
+                "operation": "knowledge_source_search",
+                "message": str(e)
+            }, indent=2)
 
-        lines = []
-        lines.append("Runtime Checks:")
-        for c in res["runtime"]["checks"]:
-            symbol = "✓" if c["status"] == "success" else ("⚠" if c["status"] == "warn" else "✗")
-            lines.append(f"  {symbol} {c['name']}")
-        lines.append("")
+        if res.get("status") == "error":
+            panel_lines = [res.get("message", "Unknown error.")]
+            if res.get("suggestion"):
+                panel_lines += ["", f"Suggestion: {res['suggestion']}"]
+            panel = render_panel("Source Search Error", panel_lines, status="error")
+            return json.dumps({
+                **res,
+                "operation": "knowledge_source_search",
+                "project_root": str(project_root),
+                "memory_root": str(memory_root),
+                "message": panel
+            }, indent=2)
 
-        lines.append("Stale Concepts:")
-        if stale:
-            for s in stale:
-                lines.append(f"  ○ {s['canonical_name']} ({s['concept_id']}) - untouched for {s['sessions_since_reference']} sessions")
-        else:
-            lines.append("  None")
-        lines.append("")
-        
-        lines.append("Duplicate Merge Proposals:")
-        if merges:
-            for m in merges:
-                lines.append(f"  ✦ Suggest merging {m['secondary_name']} ({m['secondary_id']}) into {m['primary_name']} ({m['primary_id']})")
-                lines.append(f"    Reason: {m['reason']}")
-        else:
-            lines.append("  None")
-        lines.append("")
-        
-        lines.append("Contradictions Detected:")
-        if conflicts:
-            for c in conflicts:
-                lines.append(f"  ✗ Conflict between {c['name_a']} ({c['concept_a']}) and {c['name_b']} ({c['concept_b']})")
-                lines.append(f"    Description: {c['description']}")
-        else:
-            lines.append("  None")
-            
-        panel = render_panel("Knowledge Health Scan", lines, status="stats")
+        results = res.get("results", [])
+        if not results:
+            panel = render_panel(f"Source Search: 0 results", [f"No matches for: '{query}'"], status="search")
+            return json.dumps({
+                "status": "success",
+                "operation": "knowledge_source_search",
+                "project_root": str(project_root),
+                "memory_root": str(memory_root),
+                "results": [],
+                "message": panel
+            }, indent=2)
+
+        lines = [f"Query: \"{query}\"", f"Results: {len(results)}", ""]
+        for idx, r in enumerate(results):
+            meta = r.get("metadata", {})
+            rel_path = meta.get("rel_path", "")
+            start = meta.get("start_line")
+            end = meta.get("end_line")
+            loc = f"L{start}-{end}" if start and end else "metadata"
+            snippet = r.get("document", "No content available.")
+            score = r.get("score", 0.0)
+
+            lines.append(f"{idx + 1}. [{rel_path}#{loc}] (score: {score:.4f})")
+            lines.append(f"   {snippet[:150]}...")
+            lines.append("")
+
+        panel = render_panel("Source Search Results", lines, status="search")
         return json.dumps({
             "status": "success",
-            "operation": "knowledge_health_check",
+            "operation": "knowledge_source_search",
             "project_root": str(project_root),
             "memory_root": str(memory_root),
-            "message": panel,
-            "health": res,
-            "stale": stale,
-            "merges": merges,
-            "conflicts": conflicts
+            "results": results,
+            "message": panel
         }, indent=2)
 
     @mcp.tool()
-    def knowledge_stats(project: str = "") -> str:
-        """Show oem/ knowledge statistics.
+    def knowledge_source_read(
+        path: str, start_line: int | None = None, end_line: int | None = None, project: str = ""
+    ) -> str:
+        """Inspect exact code or docs with bounded line ranges (separate source corpus).
 
         Args:
+            path: Relative or absolute path to the file.
+            start_line: 1-indexed starting line number (inclusive).
+            end_line: 1-indexed ending line number (inclusive).
             project: Project directory path. Defaults to current directory.
         """
         try:
             project_root = resolve_active_project(project)
             memory_root = project_root / ".oem"
-            with KnowledgeEngine(project_root) as eng:
-                registry = eng.state._load_registry(project_root)
-                harness = eng._resolve_harness(project_root)
-                db_path = harness / ".local_vector_db"
-                db_size = 0
-                if db_path.exists():
-                    def get_files_size(p: Path) -> int:
-                        if p.is_file():
-                            return p.stat().st_size
-                        elif p.is_dir():
-                            return sum(get_files_size(f) for f in p.iterdir())
-                        return 0
-                    db_size = get_files_size(db_path)
-
-                lines = [
-                    f"Total Concepts:       {len(registry)}",
-                    f"Vector DB Size:       {(db_size / (1024 * 1024)):.2f} MB",
-                    f"OEM Path:             {harness}"
-                ]
-                panel = render_panel("Knowledge Stats", lines, status="stats")
-                return json.dumps({
-                    "status": "success",
-                    "operation": "knowledge_stats",
-                    "project_root": str(project_root),
-                    "memory_root": str(memory_root),
-                    "message": panel,
-                    "total_concepts": len(registry),
-                    "vector_db_size_mb": db_size / (1024 * 1024)
-                }, indent=2)
+            with KnowledgeEngine(str(project_root)) as eng:
+                res = eng.source.read(path, start_line=start_line, end_line=end_line)
         except ProjectResolutionError as e:
-            return handle_resolution_error("knowledge_stats", e)
+            return handle_resolution_error("knowledge_source_read", e)
         except Exception as e:
             return json.dumps({
                 "status": "error",
-                "operation": "knowledge_stats",
+                "operation": "knowledge_source_read",
                 "message": str(e)
             }, indent=2)
 
-    @mcp.tool()
-    def knowledge_explain_concept(concept_id: str, project: str = "") -> str:
-        """Explain a concept and its details from the registry.
-
-        Args:
-            concept_id: Concept ID (e.g. concept_001)
-            project: Project directory path. Defaults to current directory.
-        """
-        try:
-            project_root = resolve_active_project(project)
-            memory_root = project_root / ".oem"
-            with KnowledgeEngine(project_root) as eng:
-                registry = eng.state._load_registry(project_root)
-                cdata = registry.get(concept_id)
-                if not cdata:
-                    panel = render_panel("Concept Not Found", [f"Concept {concept_id} not in registry."], status="error")
-                    return json.dumps({
-                        "status": "error",
-                        "operation": "knowledge_explain_concept",
-                        "project_root": str(project_root),
-                        "memory_root": str(memory_root),
-                        "message": panel
-                    }, indent=2)
-
-                harness = eng._resolve_harness(project_root)
-                wiki_file = harness / "wiki" / f"{concept_id}.md"
-                recent_evidence = []
-                if wiki_file.exists():
-                    content = wiki_file.read_text(encoding="utf-8")
-                    import re
-                    ev_match = re.search(r"## Learnings.*?\n([\s\S]*)", content)
-                    if ev_match and ev_match.group(1):
-                        recent_evidence = [
-                            line.strip().lstrip("-").strip()
-                            for line in ev_match.group(1).split("\n")
-                            if line.strip().startswith("-")
-                        ]
-
-                lines = [
-                    f"Concept: {cdata.get('canonical_name', '').replace('-', ' ').upper()} ({concept_id})",
-                    f"Status: {cdata.get('status', '').upper()}",
-                    f"Confidence: {cdata.get('confidence', 1)}/5",
-                    f"Aliases: {', '.join(cdata.get('aliases', []))}",
-                    "",
-                    "Recent Evidence:"
-                ]
-                if recent_evidence:
-                    lines.extend(f"  - {e}" for e in recent_evidence)
-                else:
-                    lines.append("  - None")
-
-                panel = render_panel("Concept Explanation", lines, status="ok")
-                return json.dumps({
-                    "status": "success",
-                    "operation": "knowledge_explain_concept",
-                    "project_root": str(project_root),
-                    "memory_root": str(memory_root),
-                    "message": panel,
-                    "concept": cdata
-                }, indent=2)
-        except ProjectResolutionError as e:
-            return handle_resolution_error("knowledge_explain_concept", e)
-        except Exception as e:
+        if res.get("status") == "error":
+            panel_lines = [res.get("message", "Unknown error.")]
+            if res.get("suggestion"):
+                panel_lines += ["", f"Suggestion: {res['suggestion']}"]
+            panel = render_panel("Source Read Error", panel_lines, status="error")
             return json.dumps({
-                "status": "error",
-                "operation": "knowledge_explain_concept",
-                "message": str(e)
+                **res,
+                "operation": "knowledge_source_read",
+                "project_root": str(project_root),
+                "memory_root": str(memory_root),
+                "message": panel
             }, indent=2)
 
-    @mcp.tool()
-    def knowledge_skill_candidates(project: str = "") -> str:
-        """List all skill candidates.
+        content = res.get("content", "")
+        line_range = res.get("line_range", {})
+        warnings = res.get("warnings", [])
+        
+        lines = [
+            f"File: {res.get('path')}",
+            f"Range: {line_range.get('start')}-{line_range.get('end')} (Total lines: {line_range.get('total_lines')})",
+            "",
+            content,
+            ""
+        ]
+        if warnings:
+            lines += ["Warnings:"] + [f"  ⚠ {w}" for w in warnings] + [""]
+        if res.get("suggestion"):
+            lines += [f"Tip: {res['suggestion']}"]
 
-        Args:
-            project: Project directory path. Defaults to current directory.
-        """
-        try:
-            project_root = resolve_active_project(project)
-            memory_root = project_root / ".oem"
-            with KnowledgeEngine(project_root) as eng:
-                candidates = eng.skills.list_skill_candidates(project_root)
-                if not candidates:
-                    return json.dumps({
-                        "status": "success",
-                        "operation": "knowledge_skill_candidates",
-                        "project_root": str(project_root),
-                        "memory_root": str(memory_root),
-                        "message": "No skill candidates found.",
-                        "candidates": []
-                    }, indent=2)
-                
-                lines = [
-                    "| Slug | Title | Confidence | Status | Evidence Count |",
-                    "| --- | --- | --- | --- | --- |"
-                ]
-                for c in candidates:
-                    lines.append(f"| {c.slug} | {c.title} | {c.confidence} | {c.status} | {len(c.evidence)} |")
-                panel = "\n".join(lines)
-                return json.dumps({
-                    "status": "success",
-                    "operation": "knowledge_skill_candidates",
-                    "project_root": str(project_root),
-                    "memory_root": str(memory_root),
-                    "message": panel,
-                    "candidates": [c.to_dict() if hasattr(c, "to_dict") else vars(c) for c in candidates]
-                }, indent=2)
-        except ProjectResolutionError as e:
-            return handle_resolution_error("knowledge_skill_candidates", e)
-        except Exception as e:
-            return json.dumps({
-                "status": "error",
-                "operation": "knowledge_skill_candidates",
-                "message": str(e)
-            }, indent=2)
-
-    @mcp.tool()
-    def knowledge_skill_candidate_show(slug: str, project: str = "") -> str:
-        """Show detailed candidate or approved skill.
-
-        Args:
-            slug: The slug of the skill candidate or approved skill.
-            project: Project directory path. Defaults to current directory.
-        """
-        try:
-            project_root = resolve_active_project(project)
-            memory_root = project_root / ".oem"
-            with KnowledgeEngine(project_root) as eng:
-                candidate = eng.skills.load_skill_candidate(slug, project_root)
-                if not candidate:
-                    layout = eng.layout(project_root)
-                    approved_path = layout.skills_dir / f"{slug}.md"
-                    if approved_path.exists():
-                        content = approved_path.read_text(encoding="utf-8")
-                        return json.dumps({
-                            "status": "success",
-                            "operation": "knowledge_skill_candidate_show",
-                            "project_root": str(project_root),
-                            "memory_root": str(memory_root),
-                            "message": content
-                        }, indent=2)
-                    return json.dumps({
-                        "status": "error",
-                        "operation": "knowledge_skill_candidate_show",
-                        "project_root": str(project_root),
-                        "memory_root": str(memory_root),
-                        "message": f"Candidate/Skill '{slug}' not found."
-                    }, indent=2)
-                
-                lines = [
-                    f"# Skill Candidate: {candidate.title}",
-                    "",
-                    f"- **Slug**: {candidate.slug}",
-                    f"- **Status**: {candidate.status}",
-                    f"- **Confidence**: {candidate.confidence}",
-                    "",
-                    "## Trigger",
-                    candidate.trigger,
-                    "",
-                    "## Recommended behavior",
-                    candidate.recommended_behavior,
-                    "",
-                    "## Rationale",
-                    candidate.rationale,
-                    "",
-                    "## Evidence",
-                ]
-                for ev in candidate.evidence:
-                    lines.append(f"- {ev}")
-                panel = "\n".join(lines)
-                return json.dumps({
-                    "status": "success",
-                    "operation": "knowledge_skill_candidate_show",
-                    "project_root": str(project_root),
-                    "memory_root": str(memory_root),
-                    "message": panel,
-                    "candidate": candidate.to_dict() if hasattr(candidate, "to_dict") else vars(candidate)
-                }, indent=2)
-        except ProjectResolutionError as e:
-            return handle_resolution_error("knowledge_skill_candidate_show", e)
-        except Exception as e:
-            return json.dumps({
-                "status": "error",
-                "operation": "knowledge_skill_candidate_show",
-                "message": str(e)
-            }, indent=2)
-
-    @mcp.tool()
-    def knowledge_skill_candidate_approve(slug: str = "", force: bool = False, project: str = "") -> str:
-        """Approve a skill candidate and promote it to a project skill.
-
-        Args:
-            slug: The slug of the skill candidate.
-            force: Force approval even if rejected previously.
-            project: Project directory path. Defaults to current directory.
-        """
-        if not slug:
-            return json.dumps({
-                "status": "error",
-                "operation": "knowledge_skill_candidate_approve",
-                "message": "Slug is required."
-            }, indent=2)
-        try:
-            project_root = resolve_active_project(project)
-            memory_root = project_root / ".oem"
-            with KnowledgeEngine(project_root) as eng:
-                cand = eng.skills.update_skill_candidate_status(slug, "approved", project_root, force=force)
-                if not cand:
-                    return json.dumps({
-                        "status": "error",
-                        "operation": "knowledge_skill_candidate_approve",
-                        "project_root": str(project_root),
-                        "memory_root": str(memory_root),
-                        "message": f"Candidate '{slug}' not found."
-                    }, indent=2)
-                panel = (
-                    "Status: approved\n"
-                    f"Skill: {slug}\n"
-                    f"Approved skill written: .oem/skills/{slug}.md"
-                )
-                return json.dumps({
-                    "status": "success",
-                    "operation": "knowledge_skill_candidate_approve",
-                    "project_root": str(project_root),
-                    "memory_root": str(memory_root),
-                    "message": panel
-                }, indent=2)
-        except ProjectResolutionError as e:
-            return handle_resolution_error("knowledge_skill_candidate_approve", e)
-        except Exception as e:
-            return json.dumps({
-                "status": "error",
-                "operation": "knowledge_skill_candidate_approve",
-                "message": str(e)
-            }, indent=2)
-
-    @mcp.tool()
-    def knowledge_skill_candidate_reject(slug: str = "", project: str = "") -> str:
-        """Reject a skill candidate.
-
-        Args:
-            slug: The slug of the skill candidate.
-            project: Project directory path. Defaults to current directory.
-        """
-        if not slug:
-            return json.dumps({
-                "status": "error",
-                "operation": "knowledge_skill_candidate_reject",
-                "message": "Slug is required."
-            }, indent=2)
-        try:
-            project_root = resolve_active_project(project)
-            memory_root = project_root / ".oem"
-            with KnowledgeEngine(project_root) as eng:
-                cand = eng.skills.update_skill_candidate_status(slug, "rejected", project_root)
-                if not cand:
-                    return json.dumps({
-                        "status": "error",
-                        "operation": "knowledge_skill_candidate_reject",
-                        "project_root": str(project_root),
-                        "memory_root": str(memory_root),
-                        "message": f"Candidate '{slug}' not found."
-                    }, indent=2)
-                return json.dumps({
-                    "status": "success",
-                    "operation": "knowledge_skill_candidate_reject",
-                    "project_root": str(project_root),
-                    "memory_root": str(memory_root),
-                    "message": f"Status: rejected\nSkill: {slug}"
-                }, indent=2)
-        except ProjectResolutionError as e:
-            return handle_resolution_error("knowledge_skill_candidate_reject", e)
-        except Exception as e:
-            return json.dumps({
-                "status": "error",
-                "operation": "knowledge_skill_candidate_reject",
-                "message": str(e)
-            }, indent=2)
-
-    @mcp.tool()
-    def knowledge_skill_candidate_defer(slug: str = "", project: str = "") -> str:
-        """Defer a skill candidate.
-
-        Args:
-            slug: The slug of the skill candidate.
-            project: Project directory path. Defaults to current directory.
-        """
-        if not slug:
-            return json.dumps({
-                "status": "error",
-                "operation": "knowledge_skill_candidate_defer",
-                "message": "Slug is required."
-            }, indent=2)
-        try:
-            project_root = resolve_active_project(project)
-            memory_root = project_root / ".oem"
-            with KnowledgeEngine(project_root) as eng:
-                cand = eng.skills.update_skill_candidate_status(slug, "deferred", project_root)
-                if not cand:
-                    return json.dumps({
-                        "status": "error",
-                        "operation": "knowledge_skill_candidate_defer",
-                        "project_root": str(project_root),
-                        "memory_root": str(memory_root),
-                        "message": f"Candidate '{slug}' not found."
-                    }, indent=2)
-                return json.dumps({
-                    "status": "success",
-                    "operation": "knowledge_skill_candidate_defer",
-                    "project_root": str(project_root),
-                    "memory_root": str(memory_root),
-                    "message": f"Status: deferred\nSkill: {slug}"
-                }, indent=2)
-        except ProjectResolutionError as e:
-            return handle_resolution_error("knowledge_skill_candidate_defer", e)
-        except Exception as e:
-            return json.dumps({
-                "status": "error",
-                "operation": "knowledge_skill_candidate_defer",
-                "message": str(e)
-            }, indent=2)
+        panel = render_panel("Source Content", lines, status="ok")
+        return json.dumps({
+            **res,
+            "operation": "knowledge_source_read",
+            "project_root": str(project_root),
+            "memory_root": str(memory_root),
+            "message": panel
+        }, indent=2)
 
 
 def main() -> None:
