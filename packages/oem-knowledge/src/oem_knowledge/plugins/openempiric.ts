@@ -7,6 +7,172 @@ import * as path from "path"
 import * as fs from "fs"
 import * as os from "os"
 import { fileURLToPath } from "url"
+import { spawnSync } from "child_process"
+
+interface PreflightConfig {
+  enabled: boolean;
+  writeAudit: boolean;
+}
+
+function getPreflightConfig(projectRoot: string): PreflightConfig {
+  const config: PreflightConfig = { enabled: false, writeAudit: true };
+  if (process.env.OEM_PREFLIGHT_AUTOMATIC === "1") {
+    config.enabled = true;
+  }
+  if (process.env.OEM_PREFLIGHT_AUDIT === "0") {
+    config.writeAudit = false;
+  }
+  
+  // Parse from config files
+  const configPaths = [
+    path.join(projectRoot, ".oem", "config.json"),
+    path.join(projectRoot, ".oem", "preflight", "config.json")
+  ];
+  
+  for (const configPath of configPaths) {
+    try {
+      if (fs.existsSync(configPath)) {
+        const raw = fs.readFileSync(configPath, "utf-8");
+        const parsed = JSON.parse(raw);
+        if (parsed && parsed.preflight && parsed.preflight.automatic) {
+          const auto = parsed.preflight.automatic;
+          if (auto.enabled !== undefined) {
+            config.enabled = !!auto.enabled;
+          }
+          if (auto.write_audit !== undefined) {
+            config.writeAudit = !!auto.write_audit;
+          }
+        }
+      }
+    } catch (e) {
+      // Ignore
+    }
+  }
+  
+  return config;
+}
+
+function isTrivialPrompt(prompt: string): boolean {
+  const normalized = prompt.trim().toLowerCase();
+  if (!normalized) return true;
+  
+  const trivialPatterns = [
+    /^thanks$/,
+    /^ok$/,
+    /^yes$/,
+    /^continue$/,
+    /^fix typo$/,
+    /^run it$/,
+    /^no$/,
+    /^sure$/,
+    /^please$/,
+    /^hello$/,
+    /^hi$/,
+  ];
+  
+  if (trivialPatterns.some(pat => pat.test(normalized))) {
+    return true;
+  }
+  
+  const taskKeywords = [
+    "implement", "fix", "refactor", "write", "create", "analyze", "review",
+    "debug", "plan", "task", "concept", "build", "change", "update", "add", "make"
+  ];
+  
+  const hasTaskKeyword = taskKeywords.some(kw => normalized.includes(kw));
+  if (normalized.length < 8 && !hasTaskKeyword) {
+    return true;
+  }
+  
+  return false;
+}
+
+function extractPromptText(msgInput: any): string {
+  if (!msgInput) return "";
+  if (typeof msgInput === "string") return msgInput;
+  if (msgInput.content && typeof msgInput.content === "string") return msgInput.content;
+  if (msgInput.text && typeof msgInput.text === "string") return msgInput.text;
+  if (msgInput.prompt && typeof msgInput.prompt === "string") return msgInput.prompt;
+  if (Array.isArray(msgInput.parts)) {
+    return msgInput.parts.map((p: any) => typeof p === "string" ? p : (p.text || "")).join(" ");
+  }
+  return "";
+}
+
+function safelyDeletePreflightContextFile(projectRoot: string): void {
+  const preflightMdPath = path.join(projectRoot, ".oem", ".runtime", "preflight_context.md");
+  if (fs.existsSync(preflightMdPath)) {
+    try {
+      const content = fs.readFileSync(preflightMdPath, "utf-8");
+      if (content.includes("generated_by: openempiric") && content.includes("source_type: oem_preflight_runtime")) {
+        fs.unlinkSync(preflightMdPath);
+      }
+    } catch (e) {
+      // Ignore
+    }
+  }
+}
+
+function executePreflightCli(projectRoot: string, task: string, repoDir: string | null, writeAudit: boolean): any {
+  const truncatedTask = task.slice(0, 1000);
+  
+  let cmd: string;
+  let args: string[];
+  
+  if (repoDir && fs.existsSync(path.join(repoDir, "pyproject.toml"))) {
+    cmd = "uv";
+    args = [
+      "run",
+      "--directory",
+      repoDir,
+      "oem",
+      "preflight",
+      truncatedTask,
+      "--project",
+      projectRoot,
+      "--json"
+    ];
+  } else {
+    cmd = "oem";
+    args = [
+      "preflight",
+      truncatedTask,
+      "--project",
+      projectRoot,
+      "--json"
+    ];
+  }
+
+  if (!writeAudit) {
+    args.push("--no-audit");
+  }
+  
+  try {
+    const res = spawnSync(cmd, args, {
+      encoding: "utf-8",
+      env: process.env,
+      shell: false,
+      timeout: 3000,
+      maxBuffer: 10 * 1024 * 1024
+    });
+    if (res.status === 0 && res.stdout) {
+      return JSON.parse(res.stdout);
+    } else {
+      console.warn("Preflight CLI execution failed:", res.stderr || res.stdout);
+    }
+  } catch (e: any) {
+    console.warn("Error running preflight CLI:", e.message);
+  }
+  return null;
+}
+
+function findActiveProjectRoot(): string | null {
+  if (process.env.OEM_PROJECT_ROOT) {
+    return path.resolve(process.env.OEM_PROJECT_ROOT);
+  }
+  const activeProject = process.cwd();
+  return findOemProjectRoot(activeProject);
+}
 
 function redactSecrets(text: string): string {
   if (!text) return "";
@@ -161,7 +327,7 @@ class ContextAssembler {
 OpenEmpiric project memory is active for this repository.
 
 Lifecycle:
-1. Before planning non-trivial tasks, call \`knowledge_preflight\` with the user task.
+1. Before planning a non-trivial task, check \`.oem/.runtime/preflight_context.md\` if it exists. If it contains an OEM Preflight Context with decision \`required\`, follow it before planning. If stale or absent, call \`knowledge_preflight\` directly.
 2. If preflight returns \`required\`, follow the returned OEM context before planning.
 3. If preflight returns \`suggest\`, consider the returned context and optionally use \`knowledge_search\` or \`knowledge_source_search\`.
 4. Use \`knowledge_session_start\` when beginning work.
@@ -312,6 +478,28 @@ export const OpenempiricPlugin: Plugin = async (input, options) => {
           if (!config.instructions.includes(contextMdPath)) {
             config.instructions.push(contextMdPath)
           }
+
+          const preflightConfig = getPreflightConfig(projectRoot)
+          if (preflightConfig.enabled) {
+            const preflightMdPath = path.join(projectRoot, ".oem", ".runtime", "preflight_context.md")
+            if (!fs.existsSync(preflightMdPath)) {
+              try {
+                fs.mkdirSync(path.dirname(preflightMdPath), { recursive: true })
+                fs.writeFileSync(preflightMdPath, 
+                  `<!-- generated_by: openempiric -->\n` +
+                  `<!-- source_type: oem_preflight_runtime -->\n` +
+                  `<!-- ingestion_eligible: false -->\n` +
+                  `# OEM Preflight Context\n\nStatus: pending\nReason: no user prompt processed yet\n\nBefore planning a non-trivial task, use the latest prompt-specific preflight context.\n`, 
+                  "utf-8"
+                )
+              } catch (e) {}
+            }
+            if (!config.instructions.includes(preflightMdPath)) {
+              config.instructions.push(preflightMdPath)
+            }
+          } else {
+            safelyDeletePreflightContextFile(projectRoot)
+          }
         }
       } catch (error) {
         console.error("openempiric plugin config hook failed, isolating error:", error)
@@ -320,11 +508,56 @@ export const OpenempiricPlugin: Plugin = async (input, options) => {
 
     "tui.prompt.append": async (msgInput, msgOutput) => {
       try {
-        const activeProject = process.cwd()
-        const projectRoot = findOemProjectRoot(activeProject)
-        if (projectRoot) {
-          assembler.assemble(projectRoot, false)
+        const projectRoot = findActiveProjectRoot()
+        if (!projectRoot) return
+
+        const preflightConfig = getPreflightConfig(projectRoot)
+        if (!preflightConfig.enabled) {
+          safelyDeletePreflightContextFile(projectRoot)
+          return
         }
+
+        const promptText = extractPromptText(msgInput)
+        if (!promptText) return
+
+        if (isTrivialPrompt(promptText)) {
+          safelyDeletePreflightContextFile(projectRoot)
+          return
+        }
+
+        const repoDir = resolveRepoDir()
+        const result = executePreflightCli(projectRoot, promptText, repoDir, preflightConfig.writeAudit)
+        
+        const preflightMdPath = path.join(projectRoot, ".oem", ".runtime", "preflight_context.md")
+        if (result && result.context) {
+          const formattedContext = 
+            `<!-- generated_by: openempiric -->\n` +
+            `<!-- source_type: oem_preflight_runtime -->\n` +
+            `<!-- ingestion_eligible: false -->\n` +
+            result.context;
+
+          // Attempt direct prompt injection/append
+          let injected = false;
+          if (msgInput && typeof msgInput === "object") {
+            const oemContextBlock = `\n\n[OEM Preflight Context]\n${result.context}`;
+            if (typeof msgInput.content === "string") {
+              msgInput.content += oemContextBlock;
+              injected = true;
+            } else if (typeof msgInput.text === "string") {
+              msgInput.text += oemContextBlock;
+              injected = true;
+            }
+          }
+
+          // Write file fallback
+          fs.mkdirSync(path.dirname(preflightMdPath), { recursive: true })
+          fs.writeFileSync(preflightMdPath, formattedContext, "utf-8")
+        } else {
+          safelyDeletePreflightContextFile(projectRoot)
+        }
+
+        // Always update general context assembler
+        assembler.assemble(projectRoot, false)
       } catch (error) {
         console.warn("openempiric tui.prompt.append hook failed dynamically:", error)
       }

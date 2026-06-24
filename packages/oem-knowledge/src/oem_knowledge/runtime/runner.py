@@ -564,6 +564,10 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None,
     if proj:
         managed_env["OEM_PROJECT"] = proj
     managed_env["OEM_PROJECT_ROOT"] = str(Path(proj or ".").resolve())
+    if "OEM_PREFLIGHT_AUTOMATIC" not in managed_env:
+        managed_env["OEM_PREFLIGHT_AUTOMATIC"] = "1"
+    if "OEM_PREFLIGHT_ADAPTER" not in managed_env:
+        managed_env["OEM_PREFLIGHT_ADAPTER"] = "opencode"
 
     logging.info("Spawning coding agent: %s... (managed session_id=%s)", agent_name, session_id)
     p = None

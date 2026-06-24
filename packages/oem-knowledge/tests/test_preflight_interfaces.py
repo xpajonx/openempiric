@@ -205,7 +205,8 @@ def test_preflight_limit_is_clamped_with_warning(preflight_project: Path):
 
 
 def test_agent_instructions_include_preflight_rule(tmp_path: Path):
-    assert "Before planning non-trivial tasks, call `knowledge_preflight`" in OEM_MEMORY_INSTRUCTIONS
+    assert "Before planning a non-trivial task" in OEM_MEMORY_INSTRUCTIONS
+    assert "call `knowledge_preflight`" in OEM_MEMORY_INSTRUCTIONS
     assert "Do not use `knowledge_index` as a fallback for failed reflection." in OEM_MEMORY_INSTRUCTIONS
     assert "Do not treat the source corpus as learned memory." in OEM_MEMORY_INSTRUCTIONS
     assert "knowledge_preflight" in CODEX_SKILL_CONTENT

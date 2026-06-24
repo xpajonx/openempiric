@@ -150,6 +150,8 @@ def test_ingestion_filter_exclusions():
     assert is_ingestion_eligible("init.sh") is False
     assert is_ingestion_eligible("oem.md") is False
     assert is_ingestion_eligible("memory-start.md") is False
+    assert is_ingestion_eligible(".oem/.runtime/preflight_context.md") is False
+    assert is_ingestion_eligible(".oem/preflight/preflight_events.jsonl") is False
 
 
 # ---------------------------------------------------------------------------
@@ -439,7 +441,7 @@ class TestKnowledgeReadInstructions:
         assert exc.value.code == 0
 
         output = "\n".join(captured)
-        assert "1. Before planning non-trivial tasks, call `knowledge_preflight`" in output
+        assert "1. Before planning a non-trivial task, check `.oem/.runtime/preflight_context.md`" in output
         assert "5. Call `knowledge_session_start`" in output
         assert "6. Use `knowledge_read`" in output
 

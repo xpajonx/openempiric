@@ -6,7 +6,7 @@ When working in a project that contains `.oem`, use OpenEmpiric as the project m
 
 Lifecycle:
 
-1. Before planning non-trivial tasks, call `knowledge_preflight` with the user task.
+1. Before planning a non-trivial task, check `.oem/.runtime/preflight_context.md` if it exists. If it contains an OEM Preflight Context with decision `required`, follow it before planning. If stale or absent, call `knowledge_preflight` directly.
 2. If `knowledge_preflight` returns `decision="required"`, read and follow the returned OEM context before planning.
 3. If `knowledge_preflight` returns `decision="suggest"`, consider the returned context and optionally use `knowledge_search` or `knowledge_source_search`.
 4. If `knowledge_preflight` returns `decision="noop"`, proceed normally.
