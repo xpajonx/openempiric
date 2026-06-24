@@ -12,6 +12,16 @@ from typing import Any, Optional
 
 from oem_knowledge.adapters.base import BaseAdapter
 from oem_knowledge.adapters.registry import register_adapter
+from oem_knowledge.platform.wsl import (
+    is_wsl,
+    detect_default_wsl_distro,
+    wsl_path_from_unc,
+    distro_from_unc_path,
+    windows_to_wsl_path,
+    get_wsl_exe_path,
+    _detect_windows_env,
+    shell_quote,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -44,13 +54,20 @@ class CodexAppAdapter(BaseAdapter):
     """Codex App adapter that bridges Windows Codex to an OEM install inside WSL."""
 
     def get_wsl_distro(self) -> str:
-        return os.environ.get("WSL_DISTRO_NAME") or self._distro_from_unc_path(Path.cwd()) or "Ubuntu"
+        env_distro = os.environ.get("WSL_DISTRO_NAME")
+        if env_distro:
+            return env_distro
+        unc_distro = distro_from_unc_path(Path.cwd())
+        if unc_distro:
+            return unc_distro.capitalize()
+        detected = detect_default_wsl_distro()
+        return detected or "Ubuntu"
 
     def get_codex_home(self) -> Path:
         raw = os.environ.get("OEM_CODEX_HOME") or os.environ.get("CODEX_HOME")
         if not raw and sys.platform != "win32":
             raw = self._detect_windows_codex_home_from_wsl()
-            if not raw and self._is_wsl():
+            if not raw and is_wsl():
                 raise RuntimeError(
                     "Could not automatically detect your Windows Codex home directory from WSL.\n"
                     "Please configure it manually by setting the OEM_CODEX_HOME environment variable.\n"
@@ -74,12 +91,12 @@ class CodexAppAdapter(BaseAdapter):
             return override
 
         raw_path = Path(self.project_path or Path.cwd())
-        unc_path = self._wsl_path_from_unc(raw_path)
+        unc_path = wsl_path_from_unc(raw_path)
         if unc_path:
             return unc_path
 
         if sys.platform == "win32":
-            converted = self._run_wslpath(str(raw_path.resolve()))
+            converted = windows_to_wsl_path(str(raw_path.resolve()))
             if converted:
                 return converted
 
@@ -129,27 +146,14 @@ class CodexAppAdapter(BaseAdapter):
         project_dir = self.get_wsl_project_dir()
         distro = self.get_wsl_distro()
         check = (
-            f"test -d {self._shell_quote(project_dir)} "
+            f"test -d {shell_quote(project_dir)} "
             "&& command -v oem >/dev/null "
             "&& oem --version >/dev/null"
         )
         return [self.get_probe_wsl_exe(), "-d", distro, "--cd", project_dir, "bash", "-lc", check]
 
     def get_windows_wsl_exe(self) -> str:
-        override = os.environ.get("OEM_CODEX_WSL_EXE")
-        if override:
-            return override
-
-        windir = os.environ.get("WINDIR") or os.environ.get("SystemRoot")
-        if windir:
-            return str(Path(windir) / "System32" / "wsl.exe")
-
-        if self._is_wsl():
-            detected = self._detect_windows_env("WINDIR") or self._detect_windows_env("SystemRoot")
-            if detected:
-                return detected.rstrip("\\/") + "\\System32\\wsl.exe"
-
-        return "C:\\Windows\\System32\\wsl.exe"
+        return get_wsl_exe_path()
 
     def get_probe_wsl_exe(self) -> str:
         if sys.platform == "win32":
@@ -354,77 +358,15 @@ class CodexAppAdapter(BaseAdapter):
 
     def _windows_path_for_current_runtime(self, raw: str) -> Path:
         if sys.platform != "win32" and re.match(r"^[A-Za-z]:[\\/]", raw):
-            converted = self._run_wslpath(raw)
+            converted = windows_to_wsl_path(raw)
             if converted:
                 return Path(converted)
         return Path(raw).expanduser()
 
-    def _run_wslpath(self, raw: str) -> str | None:
-        try:
-            proc = subprocess.run(
-                ["wslpath", "-u", raw],
-                check=False,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=5,
-            )
-            if proc.returncode == 0:
-                return proc.stdout.strip()
-        except Exception as e:
-            logger.debug(f"Failed to run wslpath: {e}")
-            return None
-        return None
-
     def _detect_windows_codex_home_from_wsl(self) -> str | None:
-        if not self._is_wsl():
+        if not is_wsl():
             return None
-        windows_profile = self._detect_windows_env("USERPROFILE")
+        windows_profile = _detect_windows_env("USERPROFILE")
         if not windows_profile:
             return None
         return windows_profile.rstrip("\\/") + "\\.codex"
-
-    def _detect_windows_env(self, name: str) -> str | None:
-        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name):
-            return None
-        try:
-            proc = subprocess.run(
-                ["powershell.exe", "-NoProfile", "-Command", f"$env:{name}"],
-                check=False,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=10,
-            )
-            if proc.returncode != 0:
-                return None
-            value = proc.stdout.strip().splitlines()[0].strip() if proc.stdout.strip() else ""
-            return value or None
-        except Exception as e:
-            logger.debug(f"Failed to detect Windows environment variable {name}: {e}")
-            return None
-
-    def _is_wsl(self) -> bool:
-        if os.environ.get("WSL_DISTRO_NAME"):
-            return True
-        try:
-            release = Path("/proc/sys/kernel/osrelease")
-            return release.exists() and "microsoft" in release.read_text(encoding="utf-8").lower()
-        except Exception as e:
-            logger.debug(f"Failed to check if WSL: {e}")
-            return False
-
-    def _distro_from_unc_path(self, path: Path) -> str | None:
-        raw = str(path)
-        match = re.match(r"^\\\\wsl(?:\.localhost)?\\([^\\]+)\\", raw, flags=re.IGNORECASE)
-        return match.group(1) if match else None
-
-    def _wsl_path_from_unc(self, path: Path) -> str | None:
-        raw = str(path)
-        match = re.match(r"^\\\\wsl(?:\.localhost)?\\([^\\]+)\\(.+)$", raw, flags=re.IGNORECASE)
-        if not match:
-            return None
-        return "/" + match.group(2).replace("\\", "/")
-
-    def _shell_quote(self, value: str) -> str:
-        return "'" + value.replace("'", "'\"'\"'") + "'"

@@ -108,8 +108,48 @@ def _remove_plugins_from_jsonc(text: str, plugin_path_str: str, remove_key: bool
     return text
 
 
-def cmd_setup_opencode(eng, project: str | None = None, repair: bool = False) -> None:
+def cmd_setup_opencode(eng, project: str | None = None, repair: bool = False, dry_run: bool = False, wsl_distro: str | None = None) -> None:
     print("OEM OpenCode Setup\n")
+
+    if dry_run:
+        from oem_knowledge.integrations.opencode import recommend_opencode_mcp_mode, OpenCodeMCPMode
+        from oem_knowledge.integrations.opencode.mcp import detect_possible_split_memory
+        project_root = Path(project or ".").resolve()
+        rec = recommend_opencode_mcp_mode(project_root, wsl_distro)
+
+        split = detect_possible_split_memory(project_root)
+        if split["split_detected"]:
+            print("⚠ SPLIT MEMORY WARNING: Project has .oem in both Windows and WSL.")
+            print("  Do not initialize a second .oem.")
+            print("  Use --wsl-distro to target the correct environment.")
+            print()
+
+        mode = rec["mode"]
+        lines = [
+            f"Project:        {project_root}",
+            f"Recommended:    {mode.value if isinstance(mode, OpenCodeMCPMode) else mode}",
+            f"Reason:         {rec.get('reason', 'unknown')}",
+        ]
+        if rec.get("wsl_distro"):
+            lines.append(f"WSL distro:     {rec['wsl_distro']}")
+
+        if mode == OpenCodeMCPMode.BLOCKED:
+            lines.append("")
+            lines.append("No changes would be made. Fix the blockers and rerun.")
+            lines.append(f"Details: {rec.get('details', {})}")
+        else:
+            from oem_knowledge.integrations.opencode import build_opencode_mcp_command
+            cmd = build_opencode_mcp_command(project_root, mode, wsl_distro)
+            if cmd:
+                lines.append("")
+                lines.append("MCP command that would be written:")
+                lines.append(f"  command: {cmd.get('command')}")
+                lines.append(f"  args:    {cmd.get('args')}")
+                lines.append(f"  timeout: {cmd.get('timeout')}ms")
+
+        print(render_panel("Dry-Run Summary", lines, status="info"))
+        print("Run without --dry-run to apply.")
+        return
     
     # 1. Resolve OpenCode config dir strictly via XDG_CONFIG_HOME or ~/.config/opencode
     xdg_config = os.environ.get("XDG_CONFIG_HOME")
@@ -533,6 +573,87 @@ def cmd_setup_opencode(eng, project: str | None = None, repair: bool = False) ->
         sys.exit(1)
 
 
+def cmd_doctor_opencode(eng, project: str | None = None, wsl_distro: str | None = None) -> None:
+    from oem_knowledge.integrations.opencode import recommend_opencode_mcp_mode, build_opencode_mcp_command, OpenCodeMCPMode
+    from oem_knowledge.integrations.opencode.mcp import detect_possible_split_memory
+    from oem_knowledge.platform.environment import detect_host, classify_project_environment, HostOS
+    from oem_knowledge.platform.wsl import list_wsl_distros, command_exists_in_wsl, is_wsl
+    from oem_knowledge.ui import render_panel
+
+    project_root = Path(project or ".").resolve()
+
+    host = detect_host()
+    env = classify_project_environment(project_root) if project else None
+
+    lines = []
+    lines.append(f"Host OS:            {host.value}")
+    lines.append(f"Project root:       {project_root}")
+    if env:
+        lines.append(f"Project env:        {env.value}")
+
+    if host in (HostOS.WINDOWS, HostOS.WSL):
+        wsl_check = is_wsl()
+        lines.append(f"Inside WSL:         {'yes' if wsl_check else 'no'}")
+        distros = list_wsl_distros()
+        lines.append(f"WSL distros:        {', '.join(distros) if distros else 'none detected'}")
+
+        from oem_knowledge.platform.wsl import detect_default_wsl_distro
+        default_d = detect_default_wsl_distro()
+        lines.append(f"Default WSL distro: {default_d or 'unknown'}")
+
+        oem_in_wsl = command_exists_in_wsl("oem", wsl_distro or default_d)
+        lines.append(f"OEM in WSL:         {'yes' if oem_in_wsl else 'no'}")
+
+    import shutil
+    oem_local = shutil.which("oem")
+    lines.append(f"OEM in local PATH:  {oem_local or 'not found'}")
+
+    rec = recommend_opencode_mcp_mode(project_root, wsl_distro)
+    mode = rec["mode"]
+    lines.append("")
+    lines.append("--- MCP Diagnosis ---")
+    lines.append(f"Recommended mode:   {mode.value if isinstance(mode, OpenCodeMCPMode) else mode}")
+
+    if mode == OpenCodeMCPMode.BLOCKED:
+        reason = rec.get("reason", "unknown")
+        details = rec.get("details", {})
+        lines.append(f"Status:             blocked")
+        lines.append(f"Reason:             {reason}")
+        if reason == "multiple_wsl_distros":
+            available = details.get("available_distros", [])
+            lines.append(f"Available distros:  {', '.join(available)}")
+            lines.append("Suggestion:         rerun with --wsl-distro DISTRO")
+        elif reason == "no_oem_cli":
+            lines.append("Suggestion:         install OEM CLI in the active environment")
+        elif reason == "no_wsl_distros":
+            lines.append("Suggestion:         install WSL and a Linux distro with OEM CLI")
+        else:
+            lines.append(f"Suggestion:         {reason}")
+    else:
+        cmd = build_opencode_mcp_command(project_root, mode, wsl_distro)
+        if cmd:
+            lines.append("")
+            lines.append("Generated MCP command:")
+            lines.append(f"  command: {cmd.get('command')}")
+            lines.append(f"  args:    {cmd.get('args')}")
+            lines.append(f"  timeout: {cmd.get('timeout')}ms")
+
+    split = detect_possible_split_memory(project_root)
+    if split["split_detected"]:
+        lines.append("")
+        lines.append("⚠ SPLIT MEMORY WARNING")
+        for w in split["warnings"]:
+            lines.append(f"  - {w}")
+        if split.get("windows_oem_path"):
+            lines.append(f"  Windows .oem: {split['windows_oem_path']}")
+        if split.get("wsl_oem_path"):
+            lines.append(f"  WSL .oem:     {split['wsl_oem_path']}")
+        lines.append("  ACTION: Do not initialize a second .oem.")
+        lines.append("  Use the WSL bridge to preserve the existing WSL memory.")
+
+    print(render_panel("OpenCode Environment Diagnosis", lines, status="ok" if mode != OpenCodeMCPMode.BLOCKED else "error"))
+
+
 def cmd_setup_codex_app(eng, project: str | None = None, repair: bool = False) -> None:
     print("OEM Codex App Setup\n")
 
@@ -662,7 +783,9 @@ def run_system_command(args):
 
     if args.command == "setup":
         if args.setup_target == "opencode":
-            cmd_setup_opencode(eng, project=project, repair=args.repair)
+            wsl_distro = getattr(args, "wsl_distro", None)
+            dry_run = getattr(args, "dry_run", False)
+            cmd_setup_opencode(eng, project=project, repair=args.repair, dry_run=dry_run, wsl_distro=wsl_distro)
         elif args.setup_target == "codex-app":
             cmd_setup_codex_app(eng, project=project, repair=args.repair)
         elif args.setup_target == "grok":
@@ -687,6 +810,12 @@ def run_system_command(args):
         print(render_panel("Model Warm-Up", [f"Status: {res['status']}", f"Model: {res['model']}", "", "Embedding model is now cached globally.", "Run `oem doctor` to verify."], status="ok"))
 
     elif args.command == "doctor":
+        doctor_target = getattr(args, "doctor_target", None)
+        if doctor_target == "opencode":
+            wsl_distro = getattr(args, "wsl_distro", None)
+            cmd_doctor_opencode(eng, project=project, wsl_distro=wsl_distro)
+            return
+
         if getattr(args, "fix", False):
             from oem_knowledge.runtime.recovery import cmd_recover
             res = cmd_recover(eng, project, scope="reflection", apply=True, backup=True, rebuild_reports=False)

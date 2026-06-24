@@ -406,6 +406,10 @@ def _setup_parser() -> argparse.ArgumentParser:
     doctor_p = sub.add_parser(
         "doctor", help="[User] Check workspace health, plugin links, and warmer status"
     )
+    doctor_sub = doctor_p.add_subparsers(dest="doctor_target")
+    doctor_sub.add_parser(
+        "opencode", help="Diagnose OpenCode Desktop Windows/WSL MCP setup"
+    ).add_argument("--wsl-distro", type=str, default=None, help="Explicit WSL distro name")
     doctor_p.add_argument("--project", type=str, default="")
     doctor_p.add_argument(
         "--fix", action="store_true", help="Automatically repair safe doctor findings"
@@ -426,6 +430,15 @@ def _setup_parser() -> argparse.ArgumentParser:
         "--repair",
         action="store_true",
         help="Forcefully overwrite and recreate all integration files",
+    )
+    setup_opencode.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Diagnose and recommend without mutating config",
+    )
+    setup_opencode.add_argument(
+        "--wsl-distro", type=str, default=None,
+        help="Explicit WSL distro name (required when multiple distros exist)",
     )
     setup_codex = setup_sub.add_parser(
         "codex-app", help="Integrate Codex App with OEM through the WSL bridge"
