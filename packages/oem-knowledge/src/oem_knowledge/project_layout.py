@@ -79,6 +79,18 @@ class ProjectLayout:
     def skill_promotions_path(self) -> Path:
         return self.root / "skill_promotions.jsonl"
 
+    @property
+    def preflight_dir(self) -> Path:
+        return self.root / "preflight"
+
+    @property
+    def preflight_events_path(self) -> Path:
+        return self.preflight_dir / "preflight_events.jsonl"
+
+    @property
+    def preflight_cache_path(self) -> Path:
+        return self.root / ".runtime" / "preflight_cache.json"
+
     def wiki_paths(self) -> dict:
         return {
             "inbox": self.concepts_dir / "inbox.md",

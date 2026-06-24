@@ -24,6 +24,7 @@ class SourceType:
     OEM_CONFIG = "oem_config"
     OEM_SKILL = "oem_skill"
     OEM_SKILL_CANDIDATE = "oem_skill_candidate"
+    OEM_PREFLIGHT = "oem_preflight"
     GENERATED_SUMMARY = "generated_summary"
     UNKNOWN = "unknown"
 
@@ -188,6 +189,14 @@ def classify_source(
                 SourceType.OEM_CONFIG,
                 False,
                 ".oem/state files are OpenEmpiric state/configuration",
+                source_path,
+            )
+
+        if oem_parts[0] == "preflight":
+            return _classification(
+                SourceType.OEM_PREFLIGHT,
+                False,
+                ".oem/preflight files are runtime audit metadata, not memory evidence, source corpus input, or concept materialization input",
                 source_path,
             )
 
