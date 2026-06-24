@@ -233,7 +233,12 @@ class GrokAdapter(BaseAdapter):
             content = (
                 "# OpenEmpiric\n\n"
                 "OpenEmpiric provides long-term project memory via MCP tools.\n"
+                "Before planning non-trivial tasks, call `knowledge_preflight` with the user task.\n"
+                "If preflight returns `required`, follow the returned OEM context before planning.\n"
+                "If preflight returns `suggest`, consider the returned context and optionally use `knowledge_search` or `knowledge_source_search`.\n"
                 "Call `knowledge_read`, `knowledge_search`, `knowledge_reflect` etc. when appropriate.\n"
+                "Do not use `knowledge_index` as a fallback for failed reflection.\n"
+                "Do not treat the source corpus as learned memory.\n"
                 "Start sessions with knowledge_session_start when using the full lifecycle.\n"
             )
             skill_file.write_text(content, encoding="utf-8")

@@ -7,6 +7,34 @@ from pathlib import Path
 from oem_knowledge.ui import render_panel
 
 
+def _humanize_preflight_reason(reason: str) -> str:
+    labels = {
+        "approved_skill_match": "approved skill matched",
+        "skill_match": "skill matched",
+        "concept_match": "concept matched",
+        "memory_match": "memory matched",
+        "no_relevant_oem_context": "no relevant OEM context",
+        "project_unresolved": "project unresolved",
+        "project_mismatch": "project mismatch",
+        "oem_missing": ".oem missing",
+        "preflight_blocked": "preflight blocked",
+        "preflight_error": "unexpected preflight error",
+        "unsupported_mode": "unsupported mode",
+    }
+    return labels.get(reason, reason.replace("_", " "))
+
+
+def _preflight_next_steps(payload: dict) -> list[str]:
+    steps: list[str] = []
+    if payload.get("matched_skills"):
+        first = payload["matched_skills"][0]
+        steps.append(f'knowledge_search "{first.get("title", "")}"')
+    if payload.get("source_suggestions"):
+        first_source = payload["source_suggestions"][0]
+        steps.append(f'knowledge_source_search "{first_source.get("title", "")}"')
+    return steps[:2]
+
+
 def run_knowledge_command(args):
     import sys
     from oem_knowledge.fs import LockTimeoutError
@@ -114,6 +142,66 @@ def _run_knowledge_command_impl(args):
             lines += [f"Tip: {res['suggestion']}"]
 
         print(render_panel("Project Memory Baseline", lines, status="ok"))
+
+    elif args.command == "preflight":
+        payload = eng.preflight(
+            task=args.task,
+            project=project,
+            limit=getattr(args, "limit", 8),
+            write_audit=not getattr(args, "no_audit", False),
+        )
+
+        if getattr(args, "json", False):
+            print(json.dumps(payload, indent=2))
+            if payload.get("status") == "error":
+                sys.exit(1)
+            return
+
+        lines = [
+            f"Decision: {payload.get('decision', 'error')}",
+            f"Reason: {_humanize_preflight_reason(payload.get('reason', 'preflight_error'))}",
+            "",
+        ]
+
+        matched_skills = payload.get("matched_skills", [])
+        lines.append("Matched skills:")
+        if matched_skills:
+            lines.extend([f"  - {item.get('title', '')}" for item in matched_skills])
+        else:
+            lines.append("  - (none)")
+        lines.append("")
+
+        relevant_memory = payload.get("matched_memory", [])
+        lines.append("Relevant memory:")
+        if relevant_memory:
+            lines.extend(
+                [
+                    f"  - {item.get('snippet') or item.get('title', '')}"
+                    for item in relevant_memory[: getattr(args, 'limit', 8)]
+                ]
+            )
+        elif matched_skills and matched_skills[0].get("snippet"):
+            lines.append(f"  - {matched_skills[0]['snippet']}")
+        elif payload.get("matched_concepts") and payload["matched_concepts"][0].get("snippet"):
+            lines.append(f"  - {payload['matched_concepts'][0]['snippet']}")
+        else:
+            lines.append("  - (none)")
+        lines.append("")
+
+        next_steps = _preflight_next_steps(payload)
+        lines.append("Suggested next steps:")
+        if next_steps:
+            lines.extend([f"  - {step}" for step in next_steps])
+        else:
+            lines.append("  - Proceed normally.")
+
+        if payload.get("warnings"):
+            lines.extend(["", "Warnings:"])
+            lines.extend([f"  - ⚠ {warning}" for warning in payload["warnings"]])
+
+        print(render_panel("OEM Preflight", lines, status="error" if payload.get("status") == "error" else "ok"))
+        if payload.get("status") == "error":
+            sys.exit(1)
 
     elif args.command == "rebuild":
         res = eng.state.rebuild_registry(project)

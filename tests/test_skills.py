@@ -57,10 +57,13 @@ def test_opencode_skill_installation(tmp_path):
     assert data["schema_version"] == 1
     assert "opencode" in data["adapters"]
     assert "Agent knowledge runtime" in data["description"]
+    assert "knowledge_preflight" in data["required"]
     assert "knowledge_search" in data["required"]
     assert "knowledge_session_start" not in data["required"]
     assert "knowledge_capture_after_work" in data["required"]
+    assert "knowledge_preflight" in data["tools"]
     assert "knowledge_search" in data["tools"]
+    assert any("knowledge_preflight" in bp for bp in data["best_practices"])
     assert any("decisions" in bp for bp in data["best_practices"])
     assert any("failures" in bp for bp in data["best_practices"])
 

@@ -161,11 +161,14 @@ class ContextAssembler {
 OpenEmpiric project memory is active for this repository.
 
 Lifecycle:
-1. Use \`knowledge_session_start\` when beginning work.
-2. Use \`knowledge_read\` whenever you need orientation, project background, recent context, conventions, or approved skills.
-3. Use \`knowledge_search\` when you have a specific memory query.
-4. Use \`knowledge_reflect\` to record important decisions, failures, constraints, risks, and outcomes.
-5. Use \`knowledge_session_end\` before finishing.
+1. Before planning non-trivial tasks, call \`knowledge_preflight\` with the user task.
+2. If preflight returns \`required\`, follow the returned OEM context before planning.
+3. If preflight returns \`suggest\`, consider the returned context and optionally use \`knowledge_search\` or \`knowledge_source_search\`.
+4. Use \`knowledge_session_start\` when beginning work.
+5. Use \`knowledge_read\` whenever you need orientation, project background, recent context, conventions, or approved skills.
+6. Use \`knowledge_search\` when you have a specific memory query.
+7. Use \`knowledge_reflect\` to record important decisions, failures, constraints, risks, and outcomes.
+8. Use \`knowledge_session_end\` before finishing.
 
 Current memory baseline:
 `;
@@ -200,6 +203,8 @@ Current memory baseline:
 
       md += `\nRules:
 - Do not manually edit \`.oem\` files.
+- Do not use \`knowledge_index\` as a fallback for failed reflection.
+- Do not treat the source corpus as learned memory.
 - Prefer structured events or explicit markers for reflection.
 - If OEM health is degraded, report it and suggest \`oem doctor\` or \`oem recover\`.
 `;

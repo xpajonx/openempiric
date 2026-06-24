@@ -127,6 +127,29 @@ def _setup_parser() -> argparse.ArgumentParser:
     )
     read_p.add_argument("--project", type=str, default="")
 
+    preflight_p = sub.add_parser(
+        "preflight",
+        help="[User] Run deterministic OEM preflight before non-trivial planning",
+    )
+    preflight_p.add_argument("task", type=str)
+    preflight_p.add_argument("--project", type=str, default="")
+    preflight_p.add_argument(
+        "--limit",
+        type=int,
+        default=8,
+        help="Max items per category (default: 8, clamped to 1..20)",
+    )
+    preflight_p.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the normalized preflight payload as JSON",
+    )
+    preflight_p.add_argument(
+        "--no-audit",
+        action="store_true",
+        help="Do not append .oem/preflight/preflight_events.jsonl",
+    )
+
     index_p = sub.add_parser("index", help="[Advanced] Rebuild derived search index for the project")
     index_p.add_argument("--project", type=str, default="")
 

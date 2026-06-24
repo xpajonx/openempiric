@@ -46,6 +46,7 @@ def main():
     elif args.command in (
         "search",
         "read",
+        "preflight",
         "concept",
         "merge",
         "status",

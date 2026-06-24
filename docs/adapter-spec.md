@@ -2,6 +2,8 @@
 
 This specification defines the integration boundaries and API contracts for building OpenEmpiric (OEM) adapters for various AI agents, IDEs, and runtimes.
 
+For the deterministic planning-stage contract introduced in v1.0.2 Batch 2, see [docs/adapters/preflight.md](./adapters/preflight.md).
+
 ## Ownership Boundaries
 
 A successful integration divides responsibilities cleanly between the shared OpenEmpiric runtime core and the agent-specific adapter wrapper:

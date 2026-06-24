@@ -2,6 +2,8 @@
 
 This document defines the integration boundaries, lifecycle phases, and expected behaviors for building OpenEmpiric (OEM) adapters. 
 
+For the Batch 2 preflight interface and adapter contract, see [docs/adapters/preflight.md](./adapters/preflight.md).
+
 Building an adapter allows you to integrate new AI agents, CLI wrappers, or editors into the OpenEmpiric platform. As a contributor, **you do not need to understand OEM's internal database layouts, event sourcing code, or fitness score math** to successfully build an adapter. You only need to implement the lifecycle hooks defined in this contract.
 
 ---

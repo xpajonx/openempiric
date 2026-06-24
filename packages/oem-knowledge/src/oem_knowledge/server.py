@@ -412,6 +412,62 @@ def mount_tools(mcp: object) -> None:
             }, indent=2)
 
     @mcp.tool()
+    def knowledge_preflight(task: str, project: str = "", mode: str = "auto", limit: int = 8, write_audit: bool = True) -> str:
+        """Run deterministic OEM preflight before non-trivial planning.
+
+        Args:
+            task: The user task or planning prompt to evaluate.
+            project: Project directory path. Defaults to current directory.
+            mode: Preflight mode. Only 'auto' is supported in Batch 2.
+            limit: Max items per result category (default 8; clamped to 1..20).
+            write_audit: Whether to append the preflight audit log.
+        """
+        if mode != "auto":
+            return json.dumps({
+                "status": "error",
+                "operation": "knowledge_preflight",
+                "decision": "error",
+                "reason": "unsupported_mode",
+                "reason_detail": f"Unsupported preflight mode: {mode}",
+                "project_root": "",
+                "memory_root": "",
+                "matched_skills": [],
+                "matched_concepts": [],
+                "matched_memory": [],
+                "source_suggestions": [],
+                "context": "",
+                "warnings": [],
+                "suggestion": "Use mode='auto'.",
+            }, indent=2)
+
+        try:
+            with KnowledgeEngine(project or None) as eng:
+                res = eng.preflight(
+                    task=task,
+                    project=project or None,
+                    limit=limit,
+                    write_audit=write_audit,
+                )
+            return json.dumps(res, indent=2)
+        except Exception as e:
+            return json.dumps({
+                "status": "error",
+                "operation": "knowledge_preflight",
+                "decision": "error",
+                "reason": "preflight_error",
+                "reason_detail": str(e),
+                "project_root": "",
+                "memory_root": "",
+                "matched_skills": [],
+                "matched_concepts": [],
+                "matched_memory": [],
+                "source_suggestions": [],
+                "context": "",
+                "warnings": [str(e)],
+                "suggestion": "Check the tool arguments or workspace lock status.",
+            }, indent=2)
+
+    @mcp.tool()
     def knowledge_materialize(project: str = "") -> str:
         """Promote candidate/emerging concepts to validated/canonical status and materialize markdown nodes.
 

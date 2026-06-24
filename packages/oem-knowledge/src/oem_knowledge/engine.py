@@ -1192,6 +1192,41 @@ project: {project or "default"}
     def session_commit(self, *args, **kwargs) -> dict:
         return self.session_end(*args, **kwargs)
 
+    def preflight(
+        self,
+        task: str,
+        project: str | None = None,
+        *,
+        session_id: str = "",
+        limit: int = 8,
+        write_audit: bool = True,
+    ) -> dict:
+        from oem_knowledge.preflight import make_preflight_budget, normalize_preflight_result, run_preflight
+        from oem_knowledge.server import ProjectResolutionError, resolve_active_project
+
+        resolved_project_arg = project or (str(self.project_path) if self.project_path else "")
+        try:
+            resolved_project_arg = str(
+                resolve_active_project(project_arg=resolved_project_arg, session_id=session_id)
+            )
+        except ProjectResolutionError:
+            pass
+
+        budget, limit_warnings, clamped_limit = make_preflight_budget(limit)
+        result = run_preflight(
+            task,
+            project=resolved_project_arg,
+            session_id=session_id,
+            write_audit=write_audit,
+            budget=budget,
+        )
+        return normalize_preflight_result(
+            result,
+            operation="knowledge_preflight",
+            limit=clamped_limit,
+            extra_warnings=limit_warnings,
+        )
+
     def knowledge_read(self, project: str | None = None, scope: str = "project", limit: int = 10) -> dict:
         from oem_knowledge.runtime.read import execute_knowledge_read
         return execute_knowledge_read(self, project, scope, limit)
@@ -1245,4 +1280,3 @@ project: {project or "default"}
             return False
         except Exception:
             return False
-

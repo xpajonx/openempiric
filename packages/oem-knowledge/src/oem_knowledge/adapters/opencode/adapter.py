@@ -55,14 +55,19 @@ class OpenCodeAdapter(BaseAdapter):
                 del updated_data["adapter"]
 
             updated_data["description"] = existing_data.get("description", "Agent knowledge runtime")
-            updated_data["required"] = existing_data.get("required", ["knowledge_search", "knowledge_capture_after_work"])
-            updated_data["tools"] = existing_data.get("tools", ["oem", "knowledge_search"])
+            updated_data["required"] = existing_data.get("required", ["knowledge_preflight", "knowledge_search", "knowledge_capture_after_work"])
+            updated_data["tools"] = existing_data.get("tools", ["oem", "knowledge_preflight", "knowledge_search"])
             updated_data["best_practices"] = existing_data.get("best_practices", [
                 "OpenEmpiric is already active for this session; do not initialize it manually.",
                 "Relevant project memory has been restored automatically into your context.",
+                "Before planning non-trivial tasks, call knowledge_preflight with the user task.",
+                "If knowledge_preflight returns required, follow the returned OEM context before planning.",
+                "If knowledge_preflight returns suggest, consider the returned context and optionally use knowledge_search or knowledge_source_search.",
                 "When OEM knowledge is relevant, prefer calling OEM tools directly instead of executing shell commands.",
                 "Do not use shell execution when a corresponding OEM tool is available.",
                 "Refer to active concepts and past failures during planning to align with existing decisions.",
+                "Do not use knowledge_index as a fallback for failed reflection.",
+                "Do not treat the source corpus as learned memory.",
                 "Report referenced memory concepts at session end using the knowledge_usage_report tool.",
                 "Use knowledge_search when additional project context is needed.",
                 "Fallback Strategy: If the MCP server is unreachable or a tool call fails, fall back to the OEM CLI (oem search)."
