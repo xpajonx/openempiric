@@ -379,20 +379,23 @@ class TestKnowledgeReadCLIAndMCP:
 
 class TestKnowledgeReadInstructions:
     def test_opencode_instructions_call_knowledge_read_first(self):
-        """The persistent instructions must list knowledge_session_start as step 1 and knowledge_read as step 2."""
+        """The persistent instructions must list knowledge_preflight as step 1, knowledge_session_start as step 5, and knowledge_read as step 6."""
         from oem_knowledge.runtime.instructions import OEM_MEMORY_INSTRUCTIONS
+        assert "knowledge_preflight" in OEM_MEMORY_INSTRUCTIONS
         assert "knowledge_session_start" in OEM_MEMORY_INSTRUCTIONS
         assert "knowledge_read" in OEM_MEMORY_INSTRUCTIONS
         lines = OEM_MEMORY_INSTRUCTIONS.splitlines()
         step_1 = next((l for l in lines if l.strip().startswith("1.")), "")
-        step_2 = next((l for l in lines if l.strip().startswith("2.")), "")
-        assert "knowledge_session_start" in step_1
-        assert "knowledge_read" in step_2
+        step_5 = next((l for l in lines if l.strip().startswith("5.")), "")
+        step_6 = next((l for l in lines if l.strip().startswith("6.")), "")
+        assert "knowledge_preflight" in step_1
+        assert "knowledge_session_start" in step_5
+        assert "knowledge_read" in step_6
 
     def test_opencode_instructions_include_session_start(self):
-        """The instructions must call knowledge_session_start as step 1."""
+        """The instructions must call knowledge_session_start as step 5."""
         from oem_knowledge.runtime.instructions import OEM_MEMORY_INSTRUCTIONS
-        assert "1. Call `knowledge_session_start`" in OEM_MEMORY_INSTRUCTIONS
+        assert "5. Call `knowledge_session_start`" in OEM_MEMORY_INSTRUCTIONS
 
     def test_opencode_instructions_describe_knowledge_read_as_learning_primitive(self):
         """The instructions must describe knowledge_read as a learning/orientation primitive."""
@@ -436,8 +439,9 @@ class TestKnowledgeReadInstructions:
         assert exc.value.code == 0
 
         output = "\n".join(captured)
-        assert "1. Call `knowledge_session_start`" in output
-        assert "2. Use `knowledge_read`" in output
+        assert "1. Before planning non-trivial tasks, call `knowledge_preflight`" in output
+        assert "5. Call `knowledge_session_start`" in output
+        assert "6. Use `knowledge_read`" in output
 
     def test_context_memory_context_calls_knowledge_read_first(self, initialized_project):
         """Compiled runtime context must include OEM_MEMORY_INSTRUCTIONS."""
