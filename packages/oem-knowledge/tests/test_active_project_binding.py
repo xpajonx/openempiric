@@ -9,8 +9,8 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 from fastmcp import FastMCP
-from oem_knowledge.server import (
-    mount_tools,
+from oem_knowledge.server import mount_tools
+from oem_knowledge.project import (
     resolve_active_project,
     SESSION_TO_PROJECT,
     ProjectMismatchError,
@@ -198,7 +198,7 @@ def test_mcp_tools_never_default_to_oem_dev_repo(temp_projects, mock_mcp, clean_
     def mock_is_oem_dev(path):
         return str(project_a) in str(path)
         
-    with patch("oem_knowledge.server.is_oem_dev_repo", side_effect=mock_is_oem_dev):
+    with patch("oem_knowledge.project.is_oem_dev_repo", side_effect=mock_is_oem_dev):
         with patch.dict(os.environ, {
             "WORKSPACE": str(project_a),
             "PWD": str(project_b),
@@ -314,7 +314,7 @@ def test_project_mismatch_error_behavior(temp_projects, clean_sessions):
         return str(project_a) in str(path)
         
     with pytest.raises(ProjectMismatchError) as exc_info:
-        with patch("oem_knowledge.server.is_oem_dev_repo", side_effect=mock_is_oem_dev):
+        with patch("oem_knowledge.project.is_oem_dev_repo", side_effect=mock_is_oem_dev):
             with patch.dict(os.environ, {
                 "WORKSPACE": str(project_a),
                 "PWD": str(project_b),

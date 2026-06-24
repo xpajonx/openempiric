@@ -169,20 +169,27 @@ def test_oem_run_opencode_succeeds_when_configured(tmp_proj):
 
 def test_oem_doctor_user_project(tmp_proj):
     """Verify that 'oem doctor' succeeds (exits 0) when run in a user project directory."""
+    import os
+    orig_cwd = os.getcwd()
+    os.chdir(tmp_proj)
     temp_home = tempfile.mkdtemp()
     try:
         with patch("pathlib.Path.home", return_value=Path(temp_home)):
             with patch("oem_knowledge.cli.check_mcp_server", return_value=(True, True, 19, "")):
-                # Run setup first
+                # Initialize project first
+                with patch.object(sys, "argv", ["oem", "init"]):
+                    main()
+                # Run setup targeting the project
                 with patch.object(sys, "argv", ["oem", "setup", "opencode"]):
                     main()
                 # Run doctor
-                with patch.object(sys, "argv", ["oem", "doctor", "--project", tmp_proj]):
+                with patch.object(sys, "argv", ["oem", "doctor"]):
                     try:
                         main()
                     except SystemExit as e:
                         assert e.code == 0 or e.code is None
     finally:
+        os.chdir(orig_cwd)
         shutil.rmtree(temp_home)
 
 
@@ -220,21 +227,28 @@ def test_retrieval_mode_defaults_to_auto(tmp_proj):
 
 
 def test_oem_doctor_allows_bm25_only_mode(tmp_proj):
+    import os
+    orig_cwd = os.getcwd()
+    os.chdir(tmp_proj)
     temp_home = tempfile.mkdtemp()
     try:
         with patch("pathlib.Path.home", return_value=Path(temp_home)):
-            with patch("oem_knowledge.cli.check_mcp_server", return_value=(True, True, 19, "")):
+            with patch("oem_knowledge.cli.commands.system.check_mcp_server", return_value=(True, True, 19, "")):
                 with patch("oem_knowledge.engine.KnowledgeEngine.embedding_cache_ready", return_value=False):
                     with patch("oem_knowledge.services.search.SearchService.semantic_dependencies_available", return_value=False):
                         with patch("oem_knowledge.cli.shutil.which", return_value="/mock/bin"):
+                            # Initialize project first
+                            with patch.object(sys, "argv", ["oem", "init"]):
+                                main()
                             with patch.object(sys, "argv", ["oem", "setup", "opencode"]):
                                 main()
-                            with patch.object(sys, "argv", ["oem", "doctor", "--project", tmp_proj]):
+                            with patch.object(sys, "argv", ["oem", "doctor"]):
                                 try:
                                     main()
                                 except SystemExit as e:
                                     assert e.code == 0 or e.code is None
     finally:
+        os.chdir(orig_cwd)
         shutil.rmtree(temp_home)
 
 

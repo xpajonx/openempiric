@@ -70,50 +70,72 @@ def test_opencode_skill_installation(tmp_path):
 
 
 def test_init_installs_skill(tmp_path):
-    with patch.object(sys, "argv", ["oem", "init", str(tmp_path)]):
-        main()
+    import os
+    orig_cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        with patch.object(sys, "argv", ["oem", "init"]):
+            main()
+            
+        skills_file = tmp_path / ".oem" / "skills" / "openempiric.yaml"
+        assert not skills_file.exists()
         
-    skills_file = tmp_path / ".oem" / "skills" / "openempiric.yaml"
-    assert skills_file.exists()
-    
-    with open(skills_file, "r") as f:
-        data = yaml.safe_load(f)
-    assert data["name"] == "openempiric"
+        with patch("oem_knowledge.cli.commands.system.check_mcp_server", return_value=(True, True, 5, "")):
+            with patch.object(sys, "argv", ["oem", "setup", "opencode"]):
+                main()
+                
+        assert skills_file.exists()
+        with open(skills_file, "r") as f:
+            data = yaml.safe_load(f)
+        assert data["name"] == "openempiric"
+    finally:
+        os.chdir(orig_cwd)
 
 
 def test_doctor_skill_check(tmp_path):
-    # Initialize project (should install skills)
-    with patch.object(sys, "argv", ["oem", "init", str(tmp_path)]):
-        main()
-        
-    # Doctor check with skill installed should succeed
-    with patch.object(sys, "argv", ["oem", "doctor", "--project", str(tmp_path)]):
-        with patch("sys.stdout") as mock_stdout:
-            try:
-                main()
-            except SystemExit:
-                pass
-                
-    skills_file = tmp_path / ".oem" / "skills" / "openempiric.yaml"
-    assert skills_file.exists()
-    
-    # Delete skill file and verify doctor flags it
-    skills_file.unlink()
-    
-    # Run doctor again
-    with patch.object(sys, "argv", ["oem", "doctor", "--project", str(tmp_path)]):
-        # Expect system exit with non-zero or doctor printing the fail line
-        with patch("builtins.print") as mock_print:
-            try:
-                main()
-            except SystemExit:
-                pass
+    import os
+    orig_cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        # Initialize project
+        with patch.object(sys, "argv", ["oem", "init"]):
+            main()
             
-            # Find if any call contains '✗ OEM Skill not installed'
-            flagged = False
-            for call in mock_print.call_args_list:
-                args = call[0]
-                if args and any("✗ OEM Skill not installed" in str(arg) for arg in args):
-                    flagged = True
-                    break
-            assert flagged, "Doctor did not flag missing skills file"
+        # Install skill explicitly
+        with patch("oem_knowledge.cli.commands.system.check_mcp_server", return_value=(True, True, 5, "")):
+            with patch.object(sys, "argv", ["oem", "setup", "opencode"]):
+                main()
+                
+        # Doctor check with skill installed should succeed
+        with patch.object(sys, "argv", ["oem", "doctor"]):
+            with patch("sys.stdout") as mock_stdout:
+                try:
+                    main()
+                except SystemExit:
+                    pass
+                    
+        skills_file = tmp_path / ".oem" / "skills" / "openempiric.yaml"
+        assert skills_file.exists()
+        
+        # Delete skill file and verify doctor flags it
+        skills_file.unlink()
+        
+        # Run doctor again
+        with patch.object(sys, "argv", ["oem", "doctor"]):
+            # Expect system exit with non-zero or doctor printing the fail line
+            with patch("builtins.print") as mock_print:
+                try:
+                    main()
+                except SystemExit:
+                    pass
+                
+                # Find if any call contains '✗ OEM Skill not installed'
+                flagged = False
+                for call in mock_print.call_args_list:
+                    args = call[0]
+                    if args and any("✗ OEM Skill not installed" in str(arg) for arg in args):
+                        flagged = True
+                        break
+                assert flagged, "Doctor did not flag missing skills file"
+    finally:
+        os.chdir(orig_cwd)

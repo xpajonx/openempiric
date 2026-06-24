@@ -289,7 +289,7 @@ class RuntimeReadiness:
                 
             # 3b. OEM local plugin file installed
             import os
-            from oem_knowledge.cli.commands.system import is_oem_managed_plugin
+            from oem_knowledge.util import is_oem_managed_plugin
             env_plugins_dir = os.environ.get("OPENCODE_PLUGINS_DIR")
             if env_plugins_dir:
                 plugins_dir = Path(env_plugins_dir)

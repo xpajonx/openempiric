@@ -206,7 +206,8 @@ def test_mcp_style_request_repetition(tmp_path, monkeypatch):
         def embedding_cache_ready(self):
             return True
 
-    monkeypatch.setattr(server_module, "KnowledgeEngine", FakeEngine)
+    monkeypatch.setattr("oem_knowledge.tools.source.KnowledgeEngine", FakeEngine)
+    monkeypatch.setattr("oem_knowledge.tools.concepts.KnowledgeEngine", FakeEngine)
 
     registered_tools = {}
     class MockMCP(FastMCP):

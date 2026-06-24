@@ -17,7 +17,7 @@ from .models import ConceptMetadata, MemoryMetadata, PreflightResult, SkillMetad
 from .scoring import REQUIRED_THRESHOLD, SUGGEST_THRESHOLD, SOURCE_HINT_WEIGHT, make_match, score_concept, score_memory, score_skill
 from .triggers import contains_phrase, normalize_text, tokenize, unique_tokens
 from ..project_layout import ProjectLayout
-from ..server import ProjectMismatchError, ProjectUnresolvedError, resolve_active_project
+from ..project import ProjectMismatchError, ProjectUnresolvedError, resolve_active_project
 
 logger = logging.getLogger(__name__)
 

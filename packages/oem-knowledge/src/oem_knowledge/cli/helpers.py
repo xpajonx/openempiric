@@ -6,10 +6,7 @@ import sys
 import time
 import subprocess
 
-def _strip_jsonc_comments(text: str) -> str:
-    """Safely strip JSONC comments without destroying comments/slashes inside string literals (like URLs)."""
-    pattern = re.compile(r'("(?:\\.|[^"\\])*")|//[^\r\n]*|/\*[\s\S]*?\*/')
-    return pattern.sub(lambda m: m.group(1) if m.group(1) else "", text)
+from oem_knowledge.util import _strip_jsonc_comments
 
 
 def _update_jsonc_mcp(original_text: str, mcp_config: dict) -> str:

@@ -527,6 +527,11 @@ def test_readiness_reports_hook_active_when_local_plugin_installed(engine, tmp_p
     monkeypatch.setenv("OPENCODE_PLUGINS_DIR", str(plugins_dir))
     monkeypatch.setattr("oem_knowledge.cli.commands.system.Path.home", lambda: tmp_path)
     
+    # Create the skill file so that skill check succeeds
+    skills_dir = tmp_path / OEM_DIR / "skills"
+    skills_dir.mkdir(parents=True, exist_ok=True)
+    (skills_dir / "openempiric.yaml").write_text("dummy", encoding="utf-8")
+    
     readiness = RuntimeReadiness()
     
     class DummyAdapter:

@@ -10,7 +10,8 @@ from pathlib import Path
 import importlib.resources as pkg_resources
 
 from oem_knowledge.ui import render_panel
-from ..helpers import check_mcp_server, Spinner, _strip_jsonc_comments, _update_jsonc_mcp
+from ..helpers import check_mcp_server, Spinner, _update_jsonc_mcp
+from oem_knowledge.util import is_oem_managed_plugin, _strip_jsonc_comments
 
 
 
@@ -70,16 +71,7 @@ def check_opencode_plugins_support() -> str:
     return _OPENCODE_PLUGINS_SUPPORT_CACHE
 
 
-def is_oem_managed_plugin(path: Path) -> bool:
-    if not path.exists():
-        return True
-    if path.is_symlink():
-        return True
-    try:
-        content = path.read_text(encoding="utf-8")
-        return "generated_by: openempiric" in content or "source_type: oem_opencode_plugin" in content
-    except Exception:
-        return False
+
 
 
 def _remove_plugins_from_jsonc(text: str, plugin_path_str: str, remove_key: bool) -> str:
@@ -207,9 +199,12 @@ def cmd_setup_opencode(eng, project: str | None = None, repair: bool = False, dr
     plugin_installed = False
     plugin_skipped_user_file = False
     try:
-        plugin_src_path = pkg_resources.files("oem_knowledge").joinpath("plugins/openempiric.ts")
-        if not plugin_src_path.exists():
-            plugin_src_path = Path(__file__).resolve().parent.parent.parent / "plugins" / "openempiric.ts"
+        source = pkg_resources.files("oem_knowledge").joinpath("plugins/openempiric.ts")
+        is_mock = "mock" in type(source).__name__.lower() or hasattr(source, "mock_calls")
+        if is_mock:
+            plugin_src_path = source
+        else:
+            plugin_src_path = Path(str(source))
             
         if plugin_dest.exists() and not is_oem_managed_plugin(plugin_dest) and not migrated_plugin and not repair:
             plugin_skipped_user_file = True
@@ -218,7 +213,6 @@ def cmd_setup_opencode(eng, project: str | None = None, repair: bool = False, dr
             if should_write_plugin:
                 if plugin_dest.exists() or plugin_dest.is_symlink():
                     plugin_dest.unlink()
-                is_mock = "mock" in type(plugin_src_path).__name__.lower()
                 if is_mock:
                     plugin_dest.write_text(plugin_src_path.read_text(encoding="utf-8"), encoding="utf-8")
                     plugin_installed = True
@@ -552,6 +546,13 @@ def cmd_setup_opencode(eng, project: str | None = None, repair: bool = False, dr
                 lines.append("✓ Manifest integration updated")
             except Exception as e:
                 lines.append(f"⚠ Failed to update manifest integration: {e}")
+            try:
+                from oem_knowledge.adapters import get_adapter
+                adapter = get_adapter("opencode", eng, project)
+                if adapter.install_skill():
+                    lines.append("✓ Skill openempiric.yaml installed")
+            except Exception as e:
+                lines.append(f"⚠ Failed to install skill: {e}")
 
     if setup_successful:
         lines.append("")

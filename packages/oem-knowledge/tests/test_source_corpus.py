@@ -7,7 +7,7 @@ from unittest.mock import patch, MagicMock
 from oem_knowledge.cli.parser import _setup_parser
 from oem_knowledge.cli.commands.knowledge import run_knowledge_command
 from oem_knowledge.engine import KnowledgeEngine
-from oem_knowledge.server import resolve_active_project, handle_resolution_error
+from oem_knowledge.project import resolve_active_project, handle_resolution_error
 
 @pytest.fixture
 def temp_project(tmp_path):

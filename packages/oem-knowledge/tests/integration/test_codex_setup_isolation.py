@@ -171,7 +171,7 @@ def test_safe_wsl_home_detection_failure(temp_env):
     adapter = CodexAppAdapter(eng, str(temp_env))
     
     # Mock behavior to simulate WSL but with failing detection
-    with patch.object(adapter, "_is_wsl", return_value=True):
+    with patch("oem_knowledge.adapters.codex_app.adapter.is_wsl", return_value=True):
         with patch.object(adapter, "_detect_windows_codex_home_from_wsl", return_value=None):
             with patch.dict(os.environ, {}, clear=True):
                 with patch("sys.platform", "linux"):
@@ -190,7 +190,6 @@ def test_multi_adapter_skill_merging(temp_env):
     
     # Skills yaml path
     skills_file = temp_env / ".oem" / "skills" / "openempiric.yaml"
-    assert skills_file.exists()
     
     # 1. Run setup for opencode
     with patch("pathlib.Path.home", return_value=temp_env), patch("os.getcwd", return_value=str(temp_env)):
@@ -227,6 +226,7 @@ def test_legacy_skill_migration_to_adapters(temp_env):
     eng.init_project(str(temp_env))
     
     skills_file = temp_env / ".oem" / "skills" / "openempiric.yaml"
+    skills_file.parent.mkdir(parents=True, exist_ok=True)
     
     # Write legacy format
     legacy_data = {

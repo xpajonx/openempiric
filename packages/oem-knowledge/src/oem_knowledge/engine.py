@@ -226,14 +226,6 @@ class KnowledgeEngine:
             if not sfs.exists(fp):
                 sfs.write_text(fp, content, force_allow_truncation=True)
 
-        # Install default skills
-        try:
-            from oem_knowledge.adapters import get_adapter
-            adapter = get_adapter("opencode", self, project_path)
-            adapter.install_skill()
-        except Exception:
-            pass
-
     @property
     def model(self):
         if self._model is None:
@@ -359,15 +351,6 @@ class KnowledgeEngine:
                 except Exception:
                     pass
                 created_files.append("init.sh")
-        except Exception:
-            pass
-
-        # Install adapter skills
-        try:
-            from oem_knowledge.adapters import get_adapter
-            adapter = get_adapter("opencode", self, project_dir)
-            if adapter.install_skill():
-                created_files.append("skills/openempiric.yaml")
         except Exception:
             pass
 
@@ -1202,7 +1185,7 @@ project: {project or "default"}
         write_audit: bool = True,
     ) -> dict:
         from oem_knowledge.preflight import make_preflight_budget, normalize_preflight_result, run_preflight
-        from oem_knowledge.server import ProjectResolutionError, resolve_active_project
+        from oem_knowledge.project import ProjectResolutionError, resolve_active_project
 
         resolved_project_arg = project or (str(self.project_path) if self.project_path else "")
         try:

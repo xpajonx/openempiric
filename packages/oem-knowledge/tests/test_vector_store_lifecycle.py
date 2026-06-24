@@ -195,7 +195,8 @@ def test_server_mcp_handler_closes_engine_resources(tmp_path, monkeypatch):
         def _ensure_open(self):
             pass
 
-    monkeypatch.setattr(server_module, "KnowledgeEngine", FakeEngine)
+    monkeypatch.setattr("oem_knowledge.tools.source.KnowledgeEngine", FakeEngine)
+    monkeypatch.setattr("oem_knowledge.tools.concepts.KnowledgeEngine", FakeEngine)
 
     registered_tools = {}
 
@@ -233,7 +234,7 @@ def test_server_mcp_handler_closes_engine_resources(tmp_path, monkeypatch):
         def __exit__(self, *args):
             self.close()
 
-    monkeypatch.setattr(server_module, "KnowledgeEngine", FailingFakeEngine)
+    monkeypatch.setattr("oem_knowledge.tools.concepts.KnowledgeEngine", FailingFakeEngine)
 
     # Re-register tools with failing engine
     registered_tools2 = {}

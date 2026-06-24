@@ -153,6 +153,9 @@ class CodexAppAdapter(BaseAdapter):
         return [self.get_probe_wsl_exe(), "-d", distro, "--cd", project_dir, "bash", "-lc", check]
 
     def get_windows_wsl_exe(self) -> str:
+        override = os.environ.get("OEM_CODEX_WSL_EXE")
+        if override:
+            return override
         return get_wsl_exe_path()
 
     def get_probe_wsl_exe(self) -> str:

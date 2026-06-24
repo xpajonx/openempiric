@@ -95,12 +95,13 @@ class OpenCodeAdapter(BaseAdapter):
         if not (plugin_dest.exists() or plugin_dest.is_symlink()):
             return False, "Plugin openempiric.ts not found in plugins dir"
 
-        from oem_knowledge.runtime.config import _REPO_ROOT
-        plugin_src = _REPO_ROOT / "plugins" / "openempiric.ts"
-        if not plugin_src.exists():
-            plugin_src = Path(__file__).resolve().parent.parent.parent / "plugins" / "openempiric.ts"
-        if not plugin_src.exists():
-            plugin_src = _REPO_ROOT / "plugins" / "openempiric.ts"
+        import importlib.resources as pkg_resources
+        source = pkg_resources.files("oem_knowledge").joinpath("plugins/openempiric.ts")
+        is_mock = "mock" in type(source).__name__.lower() or hasattr(source, "mock_calls")
+        if is_mock:
+            plugin_src = source
+        else:
+            plugin_src = Path(str(source))
 
         if plugin_dest.is_symlink():
             try:

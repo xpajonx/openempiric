@@ -114,16 +114,22 @@ def test_doctor_cmd(tmp_proj):
     venv = Path(tmp_proj) / ".venv"
     venv.mkdir()
 
+    import os
+    orig_cwd = os.getcwd()
+    os.chdir(tmp_proj)
     temp_home = tempfile.mkdtemp()
     try:
         with patch("pathlib.Path.home", return_value=Path(temp_home)):
-            with patch("oem_knowledge.cli.check_mcp_server", return_value=(True, True, 5, "")):
-                # Run setup first to ensure configuration is present
+            with patch("oem_knowledge.cli.commands.system.check_mcp_server", return_value=(True, True, 5, "")):
+                # Initialize project first
+                with patch.object(sys, "argv", ["oem", "init"]):
+                    main()
+                # Run setup targeting the project
                 with patch.object(sys, "argv", ["oem", "setup", "opencode"]):
                     main()
 
                 # Call main with doctor
-                with patch.object(sys, "argv", ["oem", "doctor", "--project", tmp_proj]):
+                with patch.object(sys, "argv", ["oem", "doctor"]):
                     try:
                         main()
                     except SystemExit as e:
@@ -135,10 +141,11 @@ def test_doctor_cmd(tmp_proj):
                 sub_venv = sub_package / ".venv"
                 sub_venv.mkdir(parents=True)
 
-                with patch.object(sys, "argv", ["oem", "doctor", "--project", tmp_proj]):
+                with patch.object(sys, "argv", ["oem", "doctor"]):
                     with pytest.raises(SystemExit) as exc:
                         main()
                     assert exc.value.code == 1
     finally:
+        os.chdir(orig_cwd)
         shutil.rmtree(temp_home)
 
