@@ -99,6 +99,18 @@ class ProjectLayout:
     def pending_dense_reflections_path(self) -> Path:
         return self.root / "state" / "pending_dense_reflections.jsonl"
 
+    @property
+    def instruction_ledger_path(self) -> Path:
+        return self.root / "instructions" / "instruction_ledger.sqlite"
+
+    @property
+    def instruction_candidates_dir(self) -> Path:
+        return self.root / "instructions" / "candidates"
+
+    @property
+    def current_directives_path(self) -> Path:
+        return self.root / ".runtime" / "current_directives.md"
+
     def wiki_paths(self) -> dict:
         return {
             "inbox": self.concepts_dir / "inbox.md",

@@ -512,6 +512,21 @@ def _setup_parser() -> argparse.ArgumentParser:
     skills_edit.add_argument("--behavior", type=str, default=None)
     skills_edit.add_argument("--project", type=str, default="")
 
+    instructions_p = sub.add_parser("instructions", help="[User] Review and manage instruction directives")
+    instructions_sub = instructions_p.add_subparsers(dest="instructions_action", required=True)
+
+    inst_index = instructions_sub.add_parser("index", help="Index project instruction files")
+    inst_index.add_argument("--project", type=str, default="")
+
+    inst_list = instructions_sub.add_parser("list", help="List active directives")
+    inst_list.add_argument("--project", type=str, default="")
+
+    inst_doctor = instructions_sub.add_parser("doctor", help="Check instructions health status")
+    inst_doctor.add_argument("--project", type=str, default="")
+
+    inst_candidates = instructions_sub.add_parser("candidates", help="List instruction update candidates")
+    inst_candidates.add_argument("--project", type=str, default="")
+
     sub._choices_actions = [
         a for a in sub._choices_actions if a.help is not argparse.SUPPRESS
     ]

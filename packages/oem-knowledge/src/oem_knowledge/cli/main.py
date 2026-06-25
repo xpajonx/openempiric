@@ -66,3 +66,6 @@ def main():
     elif args.command == "skills":
         from .commands.skills import run_skills_command
         run_skills_command(args)
+    elif args.command == "instructions":
+        from .commands.instructions import run_instructions_command
+        run_instructions_command(args)

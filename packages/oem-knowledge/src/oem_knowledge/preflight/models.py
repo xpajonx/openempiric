@@ -27,6 +27,8 @@ class PreflightResult:
     matched_concepts: list[PreflightMatch] = field(default_factory=list)
     matched_memory: list[PreflightMatch] = field(default_factory=list)
     source_suggestions: list[PreflightMatch] = field(default_factory=list)
+    matched_directives: list[dict] = field(default_factory=list)
+    selected_workflow: dict | None = None
     context: str = ""
     warnings: list[str] = field(default_factory=list)
 

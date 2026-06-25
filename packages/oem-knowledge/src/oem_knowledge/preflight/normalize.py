@@ -118,6 +118,8 @@ def normalize_preflight_result(
         "matched_concepts": [_serialize_match(match) for match in result.matched_concepts[:clamped_limit]],
         "matched_memory": [_serialize_match(match) for match in result.matched_memory[:clamped_limit]],
         "source_suggestions": [_serialize_match(match) for match in result.source_suggestions[:clamped_limit]],
+        "matched_directives": result.matched_directives,
+        "selected_workflow": result.selected_workflow,
         "context": result.context,
         "warnings": warnings,
     }

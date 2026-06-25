@@ -496,6 +496,37 @@ def run_preflight(
         matched_memory = _sort_matches(matched_memory)
         source_suggestions = _sort_matches(_build_source_suggestions(task, layout, matched_skills, matched_concepts))
 
+        # Directives and workflows matching
+        import hashlib
+        matched_directives = []
+        selected_workflow = None
+        try:
+            from oem_knowledge.instructions import (
+                get_db_connection,
+                get_active_directives,
+                match_directives,
+                resolve_selected_workflow
+            )
+            if layout.instruction_ledger_path.exists():
+                conn = get_db_connection(layout.instruction_ledger_path)
+                active_dirs = get_active_directives(conn)
+                matched_directives = match_directives(task, active_dirs, matched_skills, matched_concepts)
+                selected_workflow = resolve_selected_workflow(task, matched_directives)
+                
+                # Record match history
+                from datetime import datetime
+                now_str = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+                task_hash = hashlib.sha256(task.encode("utf-8")).hexdigest()[:12]
+                for md in matched_directives:
+                    conn.execute("""
+                        INSERT OR REPLACE INTO session_directive_matches (
+                            session_id, directive_id, task_hash, match_score, reason, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?)
+                    """, (session_id or "default_session", md["id"], task_hash, md["score"], md["reason"], now_str))
+                conn.close()
+        except Exception as e:
+            warnings.append(f"Failed to match directives: {e}")
+
         decision = "noop"
         reason = "no strong OEM preflight signals"
         top_match = None
@@ -503,12 +534,28 @@ def run_preflight(
             if top_match is None or candidate.score > top_match.score:
                 top_match = candidate
 
+        top_directive_score = 0.0
+        top_directive_title = ""
+        is_critical_directive = False
+        for md in matched_directives:
+            score_val = md["score"]
+            if score_val > top_directive_score:
+                top_directive_score = score_val
+                top_directive_title = md["title"]
+                is_critical_directive = (md.get("priority") == "critical")
+
         if top_match is not None and top_match.score >= REQUIRED_THRESHOLD:
             decision = "required"
             reason = f"{top_match.kind} matched strongly: {top_match.title}"
+        elif is_critical_directive or top_directive_score >= REQUIRED_THRESHOLD:
+            decision = "required"
+            reason = f"critical directive matched: {top_directive_title}"
         elif top_match is not None and top_match.score >= SUGGEST_THRESHOLD:
             decision = "suggest"
             reason = f"{top_match.kind} matched: {top_match.title}"
+        elif top_directive_score >= SUGGEST_THRESHOLD:
+            decision = "suggest"
+            reason = f"directive matched: {top_directive_title}"
 
         result = PreflightResult(
             status=decision,
@@ -522,6 +569,8 @@ def run_preflight(
             matched_concepts=matched_concepts,
             matched_memory=matched_memory,
             source_suggestions=source_suggestions,
+            matched_directives=matched_directives,
+            selected_workflow=selected_workflow,
             context="",
             warnings=warnings,
         )

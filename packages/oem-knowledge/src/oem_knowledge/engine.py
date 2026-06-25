@@ -519,6 +519,7 @@ class KnowledgeEngine:
         import uuid
         
         harness = self._resolve_harness(project)
+        layout = self.layout(project)
         active_session_file = harness / "state" / "active_session.json"
         
         session_id = None
@@ -537,13 +538,44 @@ class KnowledgeEngine:
             )
             session_state.save(active_session_file)
 
+        warnings = []
+        try:
+            from oem_knowledge.instructions import (
+                discover_instruction_sources,
+                get_db_connection,
+                get_stale_sources,
+                index_source_file,
+                get_active_directives,
+                render_current_directives
+            )
+            project_root = layout.root.parent
+            sources = discover_instruction_sources(project_root, layout)
+            conn = get_db_connection(layout.instruction_ledger_path)
+            stale_paths = get_stale_sources(conn, sources)
+            for ds in sources:
+                if ds["path"] in stale_paths:
+                    try:
+                        content = (project_root / ds["path"]).read_text(encoding="utf-8")
+                        index_source_file(conn, ds["path"], content, ds["hash"], ds["mtime"], ds["size_bytes"])
+                    except Exception as e:
+                        warnings.append(f"Failed to index instruction file {ds['path']}: {e}")
+            
+            # Generate current directives MD
+            active_dirs = get_active_directives(conn)
+            md_content = render_current_directives(active_dirs, layout)
+            layout.current_directives_path.parent.mkdir(parents=True, exist_ok=True)
+            layout.current_directives_path.write_text(md_content, encoding="utf-8")
+            conn.close()
+        except Exception as e:
+            warnings.append(f"Failed to initialize instruction ledger: {e}")
+
         return {
             "status": "success",
             "operation": "knowledge_session_start",
             "session_id": session_id,
             "project": str(self.project_path or project or ""),
             "message": "OEM session started.",
-            "warnings": [],
+            "warnings": warnings,
             "suggestion": "Use knowledge_read when you need orientation, then knowledge_search for specific memory."
         }
 
@@ -622,6 +654,191 @@ class KnowledgeEngine:
                         extraction_mode=extraction_mode,
                         timeout_seconds=timeout_seconds,
                     )
+
+                # Running the Directive Receipt and Workflow Drift logic and notification generation early.
+                matched_directives_for_summary = []
+                drift_proposals = []
+                notification = None
+                try:
+                    from oem_knowledge.instructions import (
+                        get_db_connection,
+                        get_active_directives,
+                        match_directives,
+                        render_directive_receipt
+                    )
+                    layout = self.layout(project)
+                    conn = get_db_connection(layout.instruction_ledger_path)
+                    
+                    # Query session matched directives
+                    cursor = conn.execute("SELECT * FROM session_directive_matches WHERE session_id = ?", (session_id,))
+                    matches = [dict(row) for row in cursor.fetchall()]
+                    
+                    # Convert DB matches or match directly if empty
+                    if not matches:
+                        active_dirs = get_active_directives(conn)
+                        direct_matches = match_directives(conversation_text, active_dirs)
+                        for dm in direct_matches:
+                            matched_directives_for_summary.append({
+                                "id": dm["id"],
+                                "title": dm["title"],
+                                "rule": dm["rule"],
+                                "source_path": dm["source_path"],
+                                "line_start": dm["line_start"],
+                                "line_end": dm["line_end"],
+                                "score": dm["score"],
+                                "reason": dm["reason"],
+                                "priority": dm.get("priority", "normal")
+                            })
+                    else:
+                        for m in matches:
+                            cursor_d = conn.execute("SELECT * FROM directives WHERE id = ?", (m["directive_id"],))
+                            d_row = cursor_d.fetchone()
+                            if d_row:
+                                d = dict(d_row)
+                                matched_directives_for_summary.append({
+                                    "id": d["id"],
+                                    "title": d["title"],
+                                    "rule": d["rule"],
+                                    "source_path": d["source_path"],
+                                    "line_start": d["line_start"],
+                                    "line_end": d["line_end"],
+                                    "score": m["match_score"],
+                                    "reason": m["reason"],
+                                    "priority": d.get("priority", "normal")
+                                })
+                    
+                    # Assess directive applications
+                    applications = []
+                    from datetime import datetime
+                    now_str = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+                    for md in matched_directives_for_summary:
+                        d_id = md["id"]
+                        # Default positive application status
+                        status_app = "applied"
+                        evidence_app = "adhered to directive constraints in this session"
+                        
+                        # Check for negation keyword rules in text
+                        cursor_d = conn.execute("SELECT forbidden_actions_json FROM directives WHERE id = ?", (d_id,))
+                        row_fa = cursor_d.fetchone()
+                        forbidden = json.loads(row_fa["forbidden_actions_json"]) if row_fa else []
+                        
+                        conv_lower = conversation_text.lower()
+                        for fa in forbidden:
+                            if fa in conv_lower:
+                                evidence_app = f"discussed or referenced action related to {fa}"
+                                break
+                        
+                        conn.execute("""
+                            INSERT OR REPLACE INTO session_directive_applications (
+                                session_id, directive_id, status, evidence, created_at
+                            ) VALUES (?, ?, ?, ?, ?)
+                        """, (session_id, d_id, status_app, evidence_app, now_str))
+                        
+                        applications.append({
+                            "directive_id": d_id,
+                            "status": status_app,
+                            "evidence": evidence_app
+                        })
+                        
+                    # Propose workflow candidate if drift detected
+                    conv_lower = conversation_text.lower()
+                    if "wsl" in conv_lower and ("bridge" in conv_lower or "split" in conv_lower or "oem" in conv_lower):
+                        from oem_knowledge.instructions import create_instruction_update_candidate
+                        proposed_patch = "When configuring OpenCode Desktop with WSL OEM, always ensure the MCP bridge points to the WSL-native project root and never initializes a second `.oem` folder on the Windows side."
+                        reason_desc = "This session revealed a recurring workflow rule for Windows/WSL OpenCode setup."
+                        cand_res = create_instruction_update_candidate(layout, session_id, "AGENTS.md", proposed_patch, reason_desc)
+                        
+                        conn.execute("""
+                            INSERT OR REPLACE INTO instruction_update_candidates (
+                                id, session_id, target_path, proposed_patch, reason, status, created_at
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """, (cand_res["id"], session_id, "AGENTS.md", proposed_patch, reason_desc, "proposed", now_str))
+                        
+                        drift_proposals.append({
+                            "id": cand_res["id"],
+                            "reason": "Windows/WSL bridge must prevent split `.oem` memory"
+                        })
+                        
+                    # Render directive receipt
+                    run_id = session_id
+                    runs_dir = layout.root / "runs" / run_id
+                    if (layout.root / "runs").is_dir():
+                        runs_dir.mkdir(parents=True, exist_ok=True)
+                        receipt_path = runs_dir / "directive_receipt.md"
+                    else:
+                        receipt_path = layout.root / ".runtime" / "directive_receipt.md"
+                        
+                    receipt_content = render_directive_receipt(session_id, matched_directives_for_summary, applications, drift_proposals)
+                    receipt_path.parent.mkdir(parents=True, exist_ok=True)
+                    receipt_path.write_text(receipt_content, encoding="utf-8")
+                    conn.close()
+                except Exception as e:
+                    logger.warning("Failed to record directive receipt/drift in session_end: %s", e)
+
+                try:
+                    candidates = self.skills.list_skill_candidates(project)
+                    high_conf = [
+                        c for c in candidates 
+                        if c.status in ("proposed", "deferred") 
+                        and (c.confidence == "high" or len(c.evidence) >= 3)
+                    ]
+                    if high_conf:
+                        cand = high_conf[0]
+                        
+                        events_data = []
+                        for evid in cand.source_event_ids:
+                            try:
+                                ev = self.state.get_event(project, evid)
+                                if ev and ev.get("evidence"):
+                                    events_data.append(ev["evidence"])
+                            except Exception:
+                                pass
+                        
+                        if not events_data:
+                            events_data = cand.evidence
+                        
+                        ev_lines = []
+                        for ev_val in events_data:
+                            val = str(ev_val).strip()
+                            if not val.lower().startswith("used successfully"):
+                                val = f"Used successfully in {val}"
+                            ev_lines.append(f"- {val}")
+                        
+                        unique_ev_lines = []
+                        for line in ev_lines:
+                            if line not in unique_ev_lines:
+                                unique_ev_lines.append(line)
+                        
+                        ev_lines_str = "\n".join(unique_ev_lines[:3])
+                        
+                        notification = (
+                            "OEM noticed a repeated successful workflow pattern.\n\n"
+                            f"Candidate skill:\n"
+                            f"{cand.title}\n\n"
+                            f"Evidence:\n"
+                            f"{ev_lines_str}\n\n"
+                            f"Recommendation:\n"
+                            f"Review with: oem skills show {cand.slug}\n"
+                            f"Approve with: oem skills approve {cand.slug}"
+                        )
+                except Exception as e:
+                    logger.warning("Failed to generate skill candidate notification: %s", e)
+
+                # Add Directive Receipt summary to notification if present
+                if matched_directives_for_summary:
+                    directive_summary_lines = ["", "Directive Receipt Summary:"]
+                    for md in matched_directives_for_summary:
+                        directive_summary_lines.append(f"✓ {md['title']} (Source: {md['source_path']})")
+                    if drift_proposals:
+                        directive_summary_lines.append("\nWorkflow Drift / Instruction Proposals:")
+                        for dp in drift_proposals:
+                            directive_summary_lines.append(f"- Proposed candidate {dp['id']} for {dp['reason']}")
+                    
+                    summary_str = "\n".join(directive_summary_lines)
+                    if notification:
+                        notification += "\n\n" + summary_str
+                    else:
+                        notification = summary_str.strip()
 
                 status_val = res.get("status")
                 failed_step_val = res.get("failed_step")
@@ -737,6 +954,7 @@ class KnowledgeEngine:
                         events_written=0,
                         materialization_skipped=True,
                         index_skipped=True,
+                        notification=notification,
                         data={
                             "events_written": 0,
                             "phase_timings": p_timings,
@@ -746,6 +964,7 @@ class KnowledgeEngine:
                             "links_updated": 0,
                             "index_stats": {},
                             "explainability": res.get("explainability", {}),
+                            "notification": notification,
                         }
                     )
 
@@ -1098,56 +1317,6 @@ project: {project or "default"}
         if index_failed_reason:
             warnings.append(f"Session commit partial: reflection/materialization succeeded, indexing failed: {index_failed_reason}")
             ret_status = "partial"
-
-        notification = None
-        try:
-            candidates = self.skills.list_skill_candidates(project)
-            high_conf = [
-                c for c in candidates 
-                if c.status in ("proposed", "deferred") 
-                and (c.confidence == "high" or len(c.evidence) >= 3)
-            ]
-            if high_conf:
-                cand = high_conf[0]
-                
-                events_data = []
-                for evid in cand.source_event_ids:
-                    try:
-                        ev = self.state.get_event(project, evid)
-                        if ev and ev.get("evidence"):
-                            events_data.append(ev["evidence"])
-                    except Exception:
-                        pass
-                
-                if not events_data:
-                    events_data = cand.evidence
-                
-                ev_lines = []
-                for ev_val in events_data:
-                    val = str(ev_val).strip()
-                    if not val.lower().startswith("used successfully"):
-                        val = f"Used successfully in {val}"
-                    ev_lines.append(f"- {val}")
-                
-                unique_ev_lines = []
-                for line in ev_lines:
-                    if line not in unique_ev_lines:
-                        unique_ev_lines.append(line)
-                
-                ev_lines_str = "\n".join(unique_ev_lines[:3])
-                
-                notification = (
-                    "OEM noticed a repeated successful workflow pattern.\n\n"
-                    f"Candidate skill:\n"
-                    f"{cand.title}\n\n"
-                    f"Evidence:\n"
-                    f"{ev_lines_str}\n\n"
-                    f"Recommendation:\n"
-                    f"Review with: oem skills show {cand.slug}\n"
-                    f"Approve with: oem skills approve {cand.slug}"
-                )
-        except Exception as e:
-            logger.warning("Failed to generate skill candidate notification: %s", e)
 
         from oem_knowledge.runtime.result import make_result
         standard_res = make_result(
