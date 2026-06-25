@@ -231,6 +231,160 @@ class ReflectionService:
                     break
         return extracted
 
+    def load_reflection_config(self, project: str | None = None) -> dict:
+        import yaml
+        default_config = {
+            "reflection": {
+                "mode": "auto",
+                "structured": {
+                    "enabled": True
+                },
+                "marker": {
+                    "enabled": True
+                },
+                "dense": {
+                    "enabled": False,
+                    "on_unavailable": "skip",
+                    "max_retry_count": 0,
+                    "queue_pending": False,
+                    "max_pending_items": 20,
+                    "max_pending_bytes": 500 * 1024,
+                    "max_age_days": 7
+                }
+            }
+        }
+        try:
+            layout = self.engine.layout(project)
+            config_path = layout.reflection_config_path
+            if config_path.exists():
+                with open(config_path, "r", encoding="utf-8") as f:
+                    loaded = yaml.safe_load(f)
+                if isinstance(loaded, dict) and "reflection" in loaded:
+                    ref_config = loaded["reflection"]
+                    if not isinstance(ref_config, dict):
+                        return default_config
+                    
+                    merged = {
+                        "mode": str(ref_config.get("mode", "auto")),
+                        "structured": {
+                            "enabled": bool(ref_config.get("structured", {}).get("enabled", True))
+                            if isinstance(ref_config.get("structured"), dict) else True
+                        },
+                        "marker": {
+                            "enabled": bool(ref_config.get("marker", {}).get("enabled", True))
+                            if isinstance(ref_config.get("marker"), dict) else True
+                        },
+                        "dense": {
+                            "enabled": bool(ref_config.get("dense", {}).get("enabled", False))
+                            if isinstance(ref_config.get("dense"), dict) else False,
+                            "on_unavailable": str(ref_config.get("dense", {}).get("on_unavailable", "skip"))
+                            if isinstance(ref_config.get("dense"), dict) else "skip",
+                            "max_retry_count": int(ref_config.get("dense", {}).get("max_retry_count", 0))
+                            if isinstance(ref_config.get("dense"), dict) else 0,
+                            "queue_pending": bool(ref_config.get("dense", {}).get("queue_pending", False))
+                            if isinstance(ref_config.get("dense"), dict) else False,
+                            "max_pending_items": int(ref_config.get("dense", {}).get("max_pending_items", 20))
+                            if isinstance(ref_config.get("dense"), dict) else 20,
+                            "max_pending_bytes": int(ref_config.get("dense", {}).get("max_pending_bytes", 500 * 1024))
+                            if isinstance(ref_config.get("dense"), dict) else 500 * 1024,
+                            "max_age_days": int(ref_config.get("dense", {}).get("max_age_days", 7))
+                            if isinstance(ref_config.get("dense"), dict) else 7
+                        }
+                    }
+                    return {"reflection": merged}
+        except Exception as e:
+            logger.warning("Failed to load reflection config: %s", e)
+        return default_config
+
+    def prune_pending_reflections(self, project: str | None = None) -> list[dict]:
+        import time
+        from datetime import datetime, timedelta
+        layout = self.engine.layout(project)
+        queue_file = layout.pending_dense_reflections_path
+        if not queue_file.exists():
+            return []
+        
+        config = self.load_reflection_config(project)["reflection"]
+        dense_cfg = config.get("dense", {})
+        max_items = int(dense_cfg.get("max_pending_items", 20))
+        max_bytes = int(dense_cfg.get("max_pending_bytes", 500 * 1024))
+        max_age_days = int(dense_cfg.get("max_age_days", 7))
+        max_retry = int(dense_cfg.get("max_retry_count", 2))
+        
+        items = []
+        try:
+            with open(queue_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        try:
+                            items.append(json.loads(line))
+                        except Exception:
+                            pass
+        except Exception as e:
+            logger.warning("Failed to read pending reflections: %s", e)
+            return []
+            
+        now = datetime.utcnow()
+        valid_items = []
+        for item in items:
+            if int(item.get("retry_count", 0)) > max_retry:
+                continue
+            ts_str = item.get("timestamp")
+            if ts_str:
+                try:
+                    dt = datetime.strptime(ts_str.replace("Z", ""), "%Y-%m-%dT%H:%M:%S")
+                    if now - dt > timedelta(days=max_age_days):
+                        continue
+                except Exception:
+                    pass
+            valid_items.append(item)
+            
+        final_items = []
+        current_bytes = 0
+        for item in reversed(valid_items):
+            item_bytes = len(json.dumps(item, ensure_ascii=False).encode("utf-8"))
+            if len(final_items) >= max_items:
+                break
+            if current_bytes + item_bytes > max_bytes:
+                break
+            final_items.append(item)
+            current_bytes += item_bytes
+            
+        final_items.reverse()
+        
+        try:
+            queue_file.parent.mkdir(parents=True, exist_ok=True)
+            if final_items:
+                with open(queue_file, "w", encoding="utf-8") as f:
+                    for item in final_items:
+                        f.write(json.dumps(item, ensure_ascii=False) + "\n")
+            else:
+                queue_file.unlink(missing_ok=True)
+        except Exception as e:
+            logger.warning("Failed to save pruned pending reflections: %s", e)
+            
+        return final_items
+
+    def queue_dense_reflection(self, project: str | None, session_id: str, conversation_text: str) -> None:
+        import time
+        layout = self.engine.layout(project)
+        queue_file = layout.pending_dense_reflections_path
+        item = {
+            "session_id": session_id,
+            "project": project or "default",
+            "conversation_text": conversation_text,
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "retry_count": 0
+        }
+        try:
+            queue_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(queue_file, "a", encoding="utf-8") as f:
+                f.write(json.dumps(item, ensure_ascii=False) + "\n")
+            self.prune_pending_reflections(project)
+        except Exception as e:
+            logger.warning("Failed to queue pending reflection: %s", e)
+
     def extract_session_events(
         self,
         project: str | None = None,
@@ -417,11 +571,20 @@ class ReflectionService:
             logger.warning("Failed to extract codebase modifications via git diff: %s", e)
             warnings_list.append("Git diff extraction failed, so code modification evidence may be incomplete.")
 
+        # Load config and resolve extraction mode
+        config = self.load_reflection_config(project)["reflection"]
+        structured_enabled = config.get("structured", {}).get("enabled", True)
+        marker_enabled = config.get("marker", {}).get("enabled", True)
+        dense_enabled = config.get("dense", {}).get("enabled", False)
+        queue_pending = config.get("dense", {}).get("queue_pending", False)
+        on_unavailable = config.get("dense", {}).get("on_unavailable", "skip")
+
         resolved_mode = extraction_mode
         if resolved_mode == "auto":
-            if events is not None:
+            has_struct = bool(events or pending_events)
+            if has_struct and structured_enabled:
                 resolved_mode = "structured"
-            elif self._detect_markers(conversation_text):
+            elif self._detect_markers(conversation_text) and marker_enabled:
                 resolved_mode = "markers"
             else:
                 resolved_mode = "llm"
@@ -447,6 +610,20 @@ class ReflectionService:
                 "session_markers_detected": session_markers_detected,
             }
 
+        reflection_status = {
+            "structured": "used" if resolved_mode == "structured" else "skipped",
+            "marker": "used" if resolved_mode == "markers" else "skipped",
+            "dense": {
+                "status": "skipped",
+                "reason": "dense_disabled"
+            }
+        }
+        if dense_enabled:
+            reflection_status["dense"] = {
+                "status": "skipped",
+                "reason": "none"
+            }
+
         if telemetry:
             duration = telemetry.get("duration_sec", 0)
             tool_calls = telemetry.get("total_tool_calls", 0)
@@ -459,25 +636,26 @@ class ReflectionService:
             })
 
         # Process any structured/pending events
-        for ev in all_events:
-            norm_ev = self._validate_and_normalize_event(ev, warnings_list)
-            if norm_ev:
-                knowledge_events.append({
-                    "type": norm_ev["event_type"],
-                    "concept": norm_ev["concept_candidates"][0] if norm_ev["concept_candidates"] else "General Learning",
-                    "evidence": norm_ev["evidence"],
-                    "confidence": norm_ev["confidence"],
-                    "source": norm_ev["source"] if norm_ev["source"] != "chat" else "opencode_hook",
-                    "event_id": norm_ev["event_id"],
-                    "timestamp": norm_ev["timestamp"],
-                    "concept_candidates": norm_ev["concept_candidates"],
-                    "summary": norm_ev["summary"],
-                    "source_type": "agent_runtime_signal",
-                    "ingestion_eligible": True,
-                })
-                structured_events_found += 1
-            else:
-                events_rejected += 1
+        if structured_enabled:
+            for ev in all_events:
+                norm_ev = self._validate_and_normalize_event(ev, warnings_list)
+                if norm_ev:
+                    knowledge_events.append({
+                        "type": norm_ev["event_type"],
+                        "concept": norm_ev["concept_candidates"][0] if norm_ev["concept_candidates"] else "General Learning",
+                        "evidence": norm_ev["evidence"],
+                        "confidence": norm_ev["confidence"],
+                        "source": norm_ev["source"] if norm_ev["source"] != "chat" else "opencode_hook",
+                        "event_id": norm_ev["event_id"],
+                        "timestamp": norm_ev["timestamp"],
+                        "concept_candidates": norm_ev["concept_candidates"],
+                        "summary": norm_ev["summary"],
+                        "source_type": "agent_runtime_signal",
+                        "ingestion_eligible": True,
+                    })
+                    structured_events_found += 1
+                else:
+                    events_rejected += 1
 
         if resolved_mode == "structured":
             # Already processed all_events in the shared block above
@@ -493,11 +671,12 @@ class ReflectionService:
                     "knowledge_events": [],
                     "canonical_events": [],
                     "explainability": make_explainability(),
-                    "phase_timings": {}
+                    "phase_timings": {},
+                    "reflection": reflection_status
                 }
 
         elif resolved_mode == "markers":
-            extracted_markers = self._parse_markers(conversation_text)
+            extracted_markers = self._parse_markers(conversation_text) if marker_enabled else []
             if extracted_markers:
                 for ev in extracted_markers:
                     knowledge_events.append({
@@ -529,56 +708,72 @@ class ReflectionService:
                         "knowledge_events": [],
                         "canonical_events": [],
                         "explainability": make_explainability(),
-                        "phase_timings": {}
+                        "phase_timings": {},
+                        "reflection": reflection_status
                     }
 
         llm_skipped = False
+        dense_reason = "none"
         if resolved_mode == "llm":
-            if not llm_extraction_available():
+            import os
+            is_explicit_llm = (extraction_mode == "llm")
+            is_mock_llm = (os.environ.get("OEM_MOCK_LLM") == "true")
+            if not is_explicit_llm and not dense_enabled and not is_mock_llm:
                 llm_skipped = True
+                dense_reason = "dense_disabled"
+                reflection_status["dense"] = {
+                    "status": "skipped",
+                    "reason": "dense_disabled",
+                    "severity": "info"
+                }
+            elif not llm_extraction_available():
+                llm_skipped = True
+                dense_reason = "dense_llm_unavailable"
+                reflection_status["dense"] = {
+                    "status": "skipped",
+                    "reason": "dense_llm_unavailable",
+                    "severity": "warning"
+                }
                 warnings_list.append("LLM extraction unavailable.")
                 warnings_list.append("No reflection events were produced.")
-                # Suggest structured events or markers
                 warnings_list.append("Use structured events or Observation:/Decision:/Outcome: markers to record memory without LLM.")
-            try:
-                extracted_llm = self._run_llm_extraction(conversation_text, timeout_seconds)
-                if extracted_llm:
-                    knowledge_events.extend(extracted_llm)
-                    fallback_extraction_used = True
-                    fallback_extractions_count = len(extracted_llm)
-            except TimeoutError:
-                return {
-                    "status": "partial",
-                    "failed_step": "llm_extraction",
-                    "mode": resolved_mode,
-                    "events_written": 0,
-                    "events_rejected": 0,
-                    "message": "Session closed with partial reflection; LLM extraction timed out.",
-                    "suggestion": "Retry with structured events or explicit markers.",
-                    "warnings": ["LLM extraction timed out before producing validated events."],
-                    "report_path": None,
-                    "knowledge_events": [],
-                    "canonical_events": [],
-                    "explainability": make_explainability(),
-                    "phase_timings": {}
-                }
-
-        if not knowledge_events:
-            return {
-                "status": "warn" if llm_skipped else "empty",
-                "mode": resolved_mode,
-                "events_written": 0,
-                "events_rejected": events_rejected,
-                "warnings": warnings_list,
-                "suggestion": "Use explicit markers or pass structured events.",
-                "report_path": None,
-                "knowledge_events": [],
-                "canonical_events": [],
-                "explainability": make_explainability(),
-                "phase_timings": {}
-            }
-
-        reflection_time = time.perf_counter() - start_t
+                if queue_pending:
+                    self.queue_dense_reflection(project, session_id, conversation_text)
+            else:
+                try:
+                    extracted_llm = self._run_llm_extraction(conversation_text, timeout_seconds)
+                    if extracted_llm:
+                        knowledge_events.extend(extracted_llm)
+                        fallback_extraction_used = True
+                        fallback_extractions_count = len(extracted_llm)
+                    reflection_status["dense"] = {
+                        "status": "completed",
+                        "reason": "none"
+                    }
+                except TimeoutError:
+                    reflection_status["dense"] = {
+                        "status": "failed",
+                        "reason": "timeout",
+                        "severity": "warning"
+                    }
+                    if queue_pending:
+                        self.queue_dense_reflection(project, session_id, conversation_text)
+                    return {
+                        "status": "partial",
+                        "failed_step": "llm_extraction",
+                        "mode": resolved_mode,
+                        "events_written": 0,
+                        "events_rejected": 0,
+                        "message": "Session closed with partial reflection; LLM extraction timed out.",
+                        "suggestion": "Retry with structured events or explicit markers.",
+                        "warnings": ["LLM extraction timed out before producing validated events."],
+                        "report_path": None,
+                        "knowledge_events": [],
+                        "canonical_events": [],
+                        "explainability": make_explainability(),
+                        "phase_timings": {},
+                        "reflection": reflection_status
+                    }
 
         seen = set()
         canonical_events = []
@@ -666,7 +861,19 @@ class ReflectionService:
             ),
         }
 
-        status_val = "warn" if llm_skipped else ("partial" if (resolved_mode == "structured" and events_rejected > 0) else "success")
+        if llm_skipped:
+            if dense_reason == "dense_llm_unavailable":
+                status_val = "warn"
+            else:
+                status_val = "success" if len(canonical_events) > 0 else "empty"
+        else:
+            status_val = "partial" if (resolved_mode == "structured" and events_rejected > 0) else "success"
+            if not canonical_events:
+                status_val = "empty"
+
+        suggestion_val = None
+        if not canonical_events:
+            suggestion_val = "Use explicit markers or pass structured events."
 
         return {
             "status": status_val,
@@ -674,11 +881,13 @@ class ReflectionService:
             "events_written": len(canonical_events),
             "events_rejected": events_rejected,
             "warnings": warnings_list,
-            "suggestion": None,
+            "suggestion": suggestion_val,
+            "report_path": None,
             "knowledge_events": yaml_events,
             "canonical_events": canonical_events,
             "explainability": explainability,
-            "reflection_time": reflection_time,
+            "reflection_time": time.perf_counter() - start_t,
+            "reflection": reflection_status
         }
 
     def reflect_session(
@@ -806,6 +1015,7 @@ project: {project or "default"}
             "canonical_events": canonical_events,
             "explainability": res.get("explainability"),
             "phase_timings": phase_timings,
+            "reflection": res.get("reflection"),
         }
 
     _original_reflect_session_func = reflect_session

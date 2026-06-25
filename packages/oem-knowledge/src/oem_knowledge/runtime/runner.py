@@ -696,6 +696,7 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None,
                         "Session Closed with Warnings",
                         [
                             commit_res.get("message", "Session closed, but dense LLM reflection was skipped because no LLM provider is configured."),
+                            "Dense reflection: skipped, no LLM configured",
                             commit_res.get("suggestion") or "Use explicit markers or pass structured events."
                         ],
                         status="info"
@@ -707,6 +708,7 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None,
                         "Session Closed (Timeout)",
                         [
                             commit_res.get("message", "Session closed with partial reflection; LLM extraction timed out."),
+                            "Dense reflection: failed, timeout",
                             commit_res.get("suggestion") or "Retry with structured events or explicit markers."
                         ],
                         status="info"
@@ -714,12 +716,29 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None,
                     committed = True
                 elif commit_res.get("status") == "empty":
                     from oem_knowledge.ui import render_panel
+                    ref_diag = commit_res.get("reflection", {})
+                    dense_diag = ref_diag.get("dense", {})
+                    dense_status = dense_diag.get("status", "skipped")
+                    dense_reason = dense_diag.get("reason", "dense_disabled")
+                    
+                    dense_msg = ""
+                    if dense_status == "skipped":
+                        if dense_reason == "dense_disabled":
+                            dense_msg = "Dense reflection: skipped, dense_disabled"
+                        else:
+                            dense_msg = "Dense reflection: skipped, no LLM configured"
+                    
+                    lines = [
+                        "OEM session closed.",
+                        "No extractable knowledge events found.",
+                    ]
+                    if dense_msg:
+                        lines.append(dense_msg)
+                    lines.append(commit_res.get("suggestion") or "Use explicit markers or pass structured events.")
+                    
                     print(render_panel(
                         "Session End Complete",
-                        [
-                            "No extractable knowledge events found.",
-                            commit_res.get("suggestion") or "Use explicit markers or pass structured events."
-                        ],
+                        lines,
                         status="info"
                     ))
                     committed = True
@@ -743,7 +762,8 @@ def run_agent(agent_name: str, eng: KnowledgeEngine, project: str | None = None,
                             fallback_concepts=exp.get("fallback_extractions", 0),
                             file_observations=exp.get("file_observations", 0),
                             index_stats=commit_res.get("index_stats"),
-                            retrieval_mode=eng.search.resolve_retrieval_mode()
+                            retrieval_mode=eng.search.resolve_retrieval_mode(),
+                            reflection_status=commit_res.get("reflection")
                         )
                     )
                     committed = True

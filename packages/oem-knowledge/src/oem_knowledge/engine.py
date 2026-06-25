@@ -317,6 +317,22 @@ class KnowledgeEngine:
                     "- What goals/concepts should be mapped next?\n"
                 ),
             ),
+            (
+                "config/reflection.yml",
+                (
+                    "reflection:\n"
+                    "  mode: auto\n\n"
+                    "  structured:\n"
+                    "    enabled: true\n\n"
+                    "  marker:\n"
+                    "    enabled: true\n\n"
+                    "  dense:\n"
+                    "    enabled: false\n"
+                    "    on_unavailable: skip\n"
+                    "    max_retry_count: 0\n"
+                    "    queue_pending: false\n"
+                ),
+            ),
         ]:
             fp = harness / fname
             if not fp.exists():
@@ -717,6 +733,7 @@ class KnowledgeEngine:
                         suggestion=res.get("suggestion"),
                         failed_step=failed_step_val,
                         warnings=res.get("warnings", []),
+                        reflection=res.get("reflection"),
                         events_written=0,
                         materialization_skipped=True,
                         index_skipped=True,
@@ -751,6 +768,7 @@ class KnowledgeEngine:
                         message=res.get("message", "Reflection failed"),
                         failed_step="reflection",
                         warnings=res.get("warnings", []),
+                        reflection=res.get("reflection"),
                         data={
                             "report_path": res.get("report_path"),
                             "knowledge_events": res.get("knowledge_events", []),
@@ -1146,6 +1164,7 @@ project: {project or "default"}
             items_rejected=res.get("events_rejected", 0),
             materialization_skipped=(events_written == 0),
             index_skipped=(events_written == 0),
+            reflection=res.get("reflection"),
             data={
                 "knowledge_events": res.get("knowledge_events", []),
                 "materialized_log": mat_log,

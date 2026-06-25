@@ -891,6 +891,22 @@ def run_system_command(args):
         
         print(render_panel("Runtime Health", runtime_lines, status=status_map.get(res["runtime"]["status"], "ok")))
 
+        # 5. Reflection Status Panel
+        diag = res.get("reflection_diagnostic")
+        if diag:
+            ref_lines = [
+                f"  structured: {'enabled' if diag['structured_enabled'] else 'disabled'}",
+                f"  marker: {'enabled' if diag['marker_enabled'] else 'disabled'}",
+                f"  dense LLM: {diag['dense_llm']}",
+                f"  shutdown policy: {diag['shutdown_policy']}",
+                f"  pending dense reflections: {diag['pending_count']}",
+                f"  status: {diag['status']}"
+            ]
+            if diag['status'] == "warning":
+                ref_lines.append(f"  suggestion: {diag['suggestion']}")
+            status_val = "ok" if diag['status'] == "healthy" else "warn"
+            print(render_panel("Reflection Status", ref_lines, status=status_val))
+
         if res["environment"]["status"] == "error" or res["runtime"]["status"] == "error" or (res["codex_app"]["active"] and res["codex_app"]["status"] == "error"):
             sys.exit(1)
 

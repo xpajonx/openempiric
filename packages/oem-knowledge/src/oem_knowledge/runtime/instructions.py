@@ -26,6 +26,7 @@ Rules:
 - `knowledge_source_search` retrieves implementation paths from the separate source corpus.
 - `knowledge_source_read` reads exact project files with hard line and character limits.
 - Do not use `knowledge_index` as a fallback for failed reflection.
+- If `dense_llm_unavailable` is returned, do not repeatedly retry dense reflection. Use structured or marker-based reflection instead, then call session_end/session_commit, report the warning, and stop.
 - Do not treat the source corpus as learned memory.
 - Prefer structured events or explicit markers for reflection.
 - Do not manually edit `.oem` files.

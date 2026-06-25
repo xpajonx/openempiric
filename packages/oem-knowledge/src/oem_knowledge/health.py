@@ -339,20 +339,48 @@ def build_runtime_health(project: str | None = None) -> dict:
         runtime_checks.append({"name": f"Marker Reflection not ready: {e}", "status": "error"})
         runtime_status = "error"
 
+    # Check reflection config
+    try:
+        config = eng.reflection.load_reflection_config(project)["reflection"]
+    except Exception:
+        config = {}
+    structured_enabled = config.get("structured", {}).get("enabled", True)
+    marker_enabled = config.get("marker", {}).get("enabled", True)
+    dense_enabled = config.get("dense", {}).get("enabled", False)
+    queue_pending = config.get("dense", {}).get("queue_pending", False)
+    
+    # Calculate pending count
+    layout = eng.layout(project)
+    queue_file = layout.pending_dense_reflections_path
+    pending_count = 0
+    if queue_file.exists():
+        try:
+            with open(queue_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.strip():
+                        pending_count += 1
+        except Exception:
+            pass
+
     # LLM Reflection (Capability/Config check, NO slow LLM call)
+    from oem_knowledge.services.reflection import llm_extraction_available
+    llm_avail = llm_extraction_available()
+
     if os.environ.get("OEM_LLM_DEGRADED") == "true":
         runtime_checks.append({"name": "LLM Reflection Degraded", "status": "warn"})
         if runtime_status == "success":
             runtime_status = "warn"
     else:
         # Check environment/config keys for LLM
-        from oem_knowledge.services.reflection import llm_extraction_available
-        if llm_extraction_available():
-            runtime_checks.append({"name": "LLM Reflection Ready", "status": "success"})
+        if dense_enabled:
+            if llm_avail:
+                runtime_checks.append({"name": "LLM Reflection Ready", "status": "success"})
+            else:
+                runtime_checks.append({"name": "LLM Reflection Degraded (No API key or provider found)", "status": "warn"})
+                if runtime_status == "success":
+                    runtime_status = "warn"
         else:
-            runtime_checks.append({"name": "LLM Reflection Degraded (No API key or provider found)", "status": "warn"})
-            if runtime_status == "success":
-                runtime_status = "warn"
+            runtime_checks.append({"name": "LLM Reflection Disabled (Configured)", "status": "success"})
 
     # Materialization
     try:
@@ -376,11 +404,25 @@ def build_runtime_health(project: str | None = None) -> dict:
         runtime_checks.append({"name": f"Outcome Tracking not ready: {e}", "status": "error"})
         runtime_status = "error"
 
+    # Reflection Diagnostics
+    reflection_diagnostic = {
+        "structured_enabled": structured_enabled,
+        "marker_enabled": marker_enabled,
+        "dense_llm": "configured" if llm_avail else ("unavailable" if dense_enabled else "not configured"),
+        "shutdown_policy": "queue pending" if (dense_enabled and queue_pending) else "skip dense",
+        "pending_count": pending_count,
+        "status": "warning" if pending_count > 0 else "healthy",
+        "suggestion": "configure local LLM or prune pending dense reflections" if pending_count > 0 else None
+    }
+
     # Overall Status Map
     overall_status = "success"
     if env_status == "error" or runtime_status == "error" or (opencode_active and opencode_status == "error") or (codex_active and codex_status == "error"):
         overall_status = "error"
     elif env_status == "warn" or runtime_status == "warn" or (opencode_active and opencode_status == "warn") or (codex_active and codex_status == "warn"):
+        overall_status = "warn"
+
+    if reflection_diagnostic["status"] == "warning" and overall_status == "success":
         overall_status = "warn"
 
     # Knowledge checks (Separate, but computed here for convenience)
@@ -414,5 +456,6 @@ def build_runtime_health(project: str | None = None) -> dict:
             "status": runtime_status,
             "checks": runtime_checks,
         },
+        "reflection_diagnostic": reflection_diagnostic,
         "knowledge_stats": knowledge_stats,
     }

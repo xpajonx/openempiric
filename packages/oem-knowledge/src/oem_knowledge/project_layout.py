@@ -91,6 +91,14 @@ class ProjectLayout:
     def preflight_cache_path(self) -> Path:
         return self.root / ".runtime" / "preflight_cache.json"
 
+    @property
+    def reflection_config_path(self) -> Path:
+        return self.root / "config" / "reflection.yml"
+
+    @property
+    def pending_dense_reflections_path(self) -> Path:
+        return self.root / "state" / "pending_dense_reflections.jsonl"
+
     def wiki_paths(self) -> dict:
         return {
             "inbox": self.concepts_dir / "inbox.md",

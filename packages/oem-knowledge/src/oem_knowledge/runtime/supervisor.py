@@ -233,6 +233,7 @@ def render_commit_complete_panel(
     file_observations: int = 0,
     index_stats: dict | None = None,
     retrieval_mode: str = "bm25",
+    reflection_status: dict | None = None,
     width: int = 60
 ) -> str:
     from oem_knowledge.ui import render_panel
@@ -246,6 +247,19 @@ def render_commit_complete_panel(
         f"  Fallback Concepts: {fallback_concepts}",
         f"  File Observations: {file_observations}"
     ]
+    if reflection_status and "dense" in reflection_status:
+        dense_diag = reflection_status["dense"]
+        d_status = dense_diag.get("status", "skipped")
+        d_reason = dense_diag.get("reason", "dense_disabled")
+        if d_status == "skipped":
+            if d_reason == "dense_disabled":
+                lines.append("Dense reflection: skipped, dense_disabled")
+            else:
+                lines.append("Dense reflection: skipped, no LLM configured")
+        elif d_status == "failed" and d_reason == "timeout":
+            lines.append("Dense reflection: failed, timeout")
+        else:
+            lines.append(f"Dense reflection: {d_status}")
     if index_stats:
         lines.append("")
         lines.append("Search Index Changes:")
