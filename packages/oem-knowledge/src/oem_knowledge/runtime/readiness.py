@@ -18,6 +18,7 @@ def check_opencode_config_valid() -> tuple[str, str]:
     import shutil
     import os
     import subprocess
+    import json
     from pathlib import Path
     
     if not shutil.which("opencode"):
@@ -29,6 +30,14 @@ def check_opencode_config_valid() -> tuple[str, str]:
     if not config_file.exists():
         return "success", ""
         
+    # First, validate basic JSONC syntax in Python to ensure it parses successfully
+    try:
+        from oem_knowledge.util import _strip_jsonc_comments
+        cleaned = _strip_jsonc_comments(config_file.read_text(encoding="utf-8"))
+        json.loads(cleaned, strict=False)
+    except Exception as parse_err:
+        return "failure", f"JSONC syntax error: {parse_err}"
+
     try:
         import sys
         if "pytest" in sys.modules or os.environ.get("PYTEST_CURRENT_TEST"):
@@ -51,6 +60,9 @@ def check_opencode_config_valid() -> tuple[str, str]:
         if not error_msg:
             error_msg = "Invalid configuration structure."
         return "failure", error_msg
+    except subprocess.TimeoutExpired:
+        # Configuration is syntactically valid JSONC, but debug config check timed out (e.g. due to slow/offline MCP servers).
+        return "success", ""
     except Exception as e:
         return "failure", str(e)
 

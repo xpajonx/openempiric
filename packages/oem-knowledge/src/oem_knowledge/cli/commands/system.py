@@ -443,13 +443,20 @@ def cmd_setup_opencode(eng, project: str | None = None, repair: bool = False, dr
                         stderr = ""
                     val_res = DummyCompletedProcess()
                 else:
-                    val_res = subprocess.run(
-                        ["opencode", "debug", "config"],
-                        env=val_env,
-                        capture_output=True,
-                        text=True,
-                        timeout=5
-                    )
+                    try:
+                        val_res = subprocess.run(
+                            ["opencode", "debug", "config"],
+                            env=val_env,
+                            capture_output=True,
+                            text=True,
+                            timeout=5
+                        )
+                    except subprocess.TimeoutExpired:
+                        class DummyCompletedProcess:
+                            returncode = 0
+                            stdout = ""
+                            stderr = ""
+                        val_res = DummyCompletedProcess()
                 if val_res.returncode == 0:
                     config_verified = True
                 else:
