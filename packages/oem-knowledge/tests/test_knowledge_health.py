@@ -4,8 +4,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from fastmcp import FastMCP
 from oem_knowledge.engine import KnowledgeEngine
+from oem_knowledge.health import build_health_report
 from oem_knowledge.cli import main
+from oem_knowledge.server import mount_tools
 
 @pytest.fixture
 def engine(tmp_path):
@@ -138,3 +141,72 @@ def test_health_cli_command(engine, tmp_path):
                 if args and any("Knowledge Health Scan" in str(arg) for arg in args):
                     called = True
             assert called
+
+
+def _write_active_project_conflict(harness: Path) -> None:
+    (harness / "session-handoff.json").write_text(
+        json.dumps({"project_root": "/project/alpha"}),
+        encoding="utf-8",
+    )
+    runtime_dir = harness / ".runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / "context.md").write_text("Active project: /project/beta\n", encoding="utf-8")
+
+
+def test_doctor_and_knowledge_health_check_report_same_contradictions(engine, tmp_path):
+    harness = engine._resolve_harness(str(tmp_path))
+    _write_active_project_conflict(harness)
+    report = build_health_report(str(tmp_path), include_daemon_runtime=False)
+
+    mcp = FastMCP("oem-test")
+    mount_tools(mcp)
+    import asyncio
+    result = asyncio.run(mcp.call_tool("knowledge_health_check", {"project": str(tmp_path)}))
+    payload = json.loads(result.content[0].text)
+
+    assert payload["contradictions"] == report["contradictions"]
+    assert payload["concept_contradictions"] == payload["conflicts"]
+
+
+def test_knowledge_read_health_includes_doctor_contradictions(engine, tmp_path):
+    harness = engine._resolve_harness(str(tmp_path))
+    _write_active_project_conflict(harness)
+    report = build_health_report(str(tmp_path), include_daemon_runtime=False)
+
+    result = engine.knowledge_read(str(tmp_path), scope="health")
+
+    assert result["sections"]["contradictions"] == report["contradictions"]
+
+
+def test_oem_health_knowledge_panel_shows_active_project_mismatch(engine, tmp_path):
+    harness = engine._resolve_harness(str(tmp_path))
+    _write_active_project_conflict(harness)
+
+    with patch.object(sys, "argv", ["oem", "health", "--project", str(tmp_path)]):
+        with patch("builtins.print") as mock_print:
+            try:
+                main()
+            except SystemExit:
+                pass
+
+    output = "\n".join(" ".join(str(arg) for arg in call[0]) for call in mock_print.call_args_list)
+    assert "active_project_mismatch" in output
+    assert "Contradictions Detected:" in output
+    assert "Contradictions Detected:\n  None" not in output
+
+
+def test_health_surfaces_do_not_disagree_on_contradiction_count(engine, tmp_path):
+    harness = engine._resolve_harness(str(tmp_path))
+    _write_active_project_conflict(harness)
+    report = build_health_report(str(tmp_path), include_daemon_runtime=False)
+    read_result = engine.knowledge_read(str(tmp_path), scope="health")
+
+    mcp = FastMCP("oem-test")
+    mount_tools(mcp)
+    import asyncio
+    mcp_result = asyncio.run(mcp.call_tool("knowledge_health_check", {"project": str(tmp_path)}))
+    mcp_payload = json.loads(mcp_result.content[0].text)
+
+    assert len(report["contradictions"]) == 1
+    assert len(read_result["sections"]["contradictions"]) == 1
+    assert len(mcp_payload["contradictions"]) == 1

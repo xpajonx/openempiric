@@ -185,12 +185,30 @@ def execute_knowledge_read(
         msg = "OEM project memory approved skills loaded."
         suggestion = None
     elif scope == "health":
+        from oem_knowledge.health import build_health_report
+
+        health_report = build_health_report(
+            str(proj_path),
+            include_daemon_runtime=False,
+            include_active_project=True,
+            include_concept_integrity=True,
+        )
+        runtime_status = [
+            f"{check.get('status', 'success')}: {check.get('name', 'unknown')}"
+            for check in health_report.get("checks", [])
+        ] or runtime_status
+        all_warnings = path_warnings + registry_warnings + skills_warnings + [
+            w.get("message", str(w)) if isinstance(w, dict) else str(w)
+            for w in health_report.get("warnings", [])
+        ]
         sections = {
             "runtime_status": runtime_status,
+            "contradictions": health_report.get("contradictions", []),
+            "active_project": health_report.get("active_project", {}),
             "warnings": all_warnings,
         }
         msg = "OEM project memory health status loaded."
-        suggestion = "Run `oem doctor` for full health diagnostics." if all_warnings else None
+        suggestion = "Run `oem doctor` for full health diagnostics." if all_warnings or health_report.get("contradictions") else None
     else:
         return {
             "status": "error",

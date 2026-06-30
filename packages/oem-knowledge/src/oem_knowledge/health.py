@@ -170,7 +170,167 @@ def _aggregate_health_status(checks: list[dict], default: str) -> dict:
     return {"status": status, "checks": checks}
 
 
+def _legacy_status(status: str) -> str:
+    return "success" if status == "ok" else status
+
+
+def _canonical_status(status: str) -> str:
+    return "ok" if status == "success" else status
+
+
+def _status_from_checks(checks: list[dict], default: str = "ok") -> str:
+    statuses = {c.get("status") for c in checks}
+    if "error" in statuses:
+        return "error"
+    if "warn" in statuses or "warning" in statuses:
+        return "warn"
+    return default
+
+
+def _build_active_project_health(project: str | None = None) -> dict:
+    from oem_knowledge.engine import KnowledgeEngine
+    from oem_knowledge.runtime.active_work import resolve_active_project
+
+    eng = KnowledgeEngine(project)
+    memory_root = eng._resolve_harness(project)
+    project_root = memory_root.parent
+    result = resolve_active_project(Path(memory_root))
+    contradictions = [c.to_dict() for c in result.conflicts]
+    warnings = result.warnings[:]
+
+    checks: list[dict] = []
+    if result.latest_project:
+        checks.append({
+            "name": f"Active project selected from {result.selected_source}",
+            "status": "success",
+            "source": result.selected_source,
+            "project": result.latest_project,
+        })
+    else:
+        checks.append({
+            "name": "No active project selected from memory state",
+            "status": "success",
+            "reason": "active_project_source_missing",
+        })
+
+    for warning in warnings:
+        checks.append({
+            "name": warning.get("message", warning.get("reason", "Active-project warning")),
+            "status": "warn",
+            "reason": warning.get("reason"),
+            "path": warning.get("path"),
+        })
+
+    for contradiction in contradictions:
+        checks.append({
+            "name": contradiction["message"],
+            "status": "error" if contradiction["severity"] == "error" else "warn",
+            "type": contradiction["type"],
+            "sources": contradiction["sources"],
+        })
+
+    status = _status_from_checks(checks)
+    return {
+        "status": status,
+        "project_root": str(project_root),
+        "memory_root": str(memory_root),
+        "checks": checks,
+        "contradictions": contradictions,
+        "warnings": warnings,
+        "active_project": result.to_dict(),
+    }
+
+
+def build_health_report(
+    project: str | None = None,
+    *,
+    include_daemon_runtime: bool = True,
+    include_active_project: bool = True,
+    include_concept_integrity: bool = True,
+) -> dict:
+    active_health = None
+    if include_active_project:
+        active_health = _build_active_project_health(project)
+
+    if include_daemon_runtime:
+        legacy = _build_runtime_health_legacy(project)
+    else:
+        project_root = Path(project or ".").resolve()
+        memory_root = project_root / ".oem"
+        if active_health:
+            project_root = Path(active_health["project_root"])
+            memory_root = Path(active_health["memory_root"])
+        legacy = {
+            "status": "success",
+            "operation": "runtime_health",
+            "project": str(project_root),
+            "environment": {"status": "success", "checks": []},
+            "runtime": {"status": "success", "checks": []},
+            "opencode": {"active": False, "status": "success", "checks": []},
+            "codex_app": {"active": False, "status": "success", "checks": []},
+            "reflection_diagnostic": None,
+            "knowledge_stats": {},
+            "concept_integrity": {"status": "success", "checks": []},
+        }
+
+    if include_concept_integrity and not include_daemon_runtime:
+        legacy["concept_integrity"] = validate_concept_frontmatter(project)
+
+    checks: list[dict] = []
+    for section in ("environment", "opencode", "codex_app", "runtime"):
+        value = legacy.get(section, {})
+        checks.extend(value.get("checks", []))
+    checks.extend(legacy.get("concept_integrity", {}).get("checks", []))
+
+    contradictions: list[dict] = []
+    warnings: list[dict] = []
+    active_project = {}
+    project_root = str(project or legacy.get("project", "."))
+    memory_root = str(Path(project_root) / ".oem")
+    if active_health:
+        checks.extend(active_health["checks"])
+        contradictions = active_health["contradictions"]
+        warnings = active_health["warnings"]
+        active_project = active_health["active_project"]
+        project_root = active_health["project_root"]
+        memory_root = active_health["memory_root"]
+
+    status = _canonical_status(legacy.get("status", "success"))
+    if any(c.get("severity") == "error" for c in contradictions):
+        status = "error"
+    elif contradictions or warnings:
+        if status == "ok":
+            status = "warn"
+
+    report = {
+        **legacy,
+        "status": status,
+        "operation": "health_report",
+        "project_root": project_root,
+        "memory_root": memory_root,
+        "checks": checks,
+        "contradictions": contradictions,
+        "warnings": warnings,
+        "active_project": active_project,
+        "concept_integrity": legacy.get("concept_integrity", {}),
+    }
+    return report
+
+
 def build_runtime_health(project: str | None = None) -> dict:
+    report = build_health_report(
+        project,
+        include_daemon_runtime=True,
+        include_active_project=True,
+        include_concept_integrity=True,
+    )
+    legacy = dict(report)
+    legacy["status"] = _legacy_status(report["status"])
+    legacy["operation"] = "runtime_health"
+    return legacy
+
+
+def _build_runtime_health_legacy(project: str | None = None) -> dict:
     from oem_knowledge.engine import KnowledgeEngine
     from oem_knowledge.runtime import SessionState
 
@@ -320,8 +480,13 @@ def build_runtime_health(project: str | None = None) -> dict:
 
     # Search pipeline available
     try:
-        _ = eng.search.stats()
-        env_checks.append({"name": "Search Pipeline Available", "status": "success"})
+        vector_db_file = eng.layout(project).vector_db_path / "vectors.db"
+        if vector_db_file.exists():
+            env_checks.append({"name": "Search Pipeline Available", "status": "success"})
+        else:
+            env_checks.append({"name": "Search Pipeline index not initialized", "status": "warn"})
+            if env_status == "success":
+                env_status = "warn"
     except Exception as e:
         env_checks.append({"name": f"Search Pipeline not available: {e}", "status": "error"})
         env_status = "error"
@@ -521,8 +686,12 @@ def build_runtime_health(project: str | None = None) -> dict:
     # Outcome tracking
     try:
         outcomes_file = resolved_dir / "state" / "outcomes.jsonl"
-        outcomes_file.parent.mkdir(parents=True, exist_ok=True)
-        runtime_checks.append({"name": "Outcome Tracking Ready", "status": "success"})
+        if outcomes_file.parent.exists():
+            runtime_checks.append({"name": "Outcome Tracking Ready", "status": "success"})
+        else:
+            runtime_checks.append({"name": "Outcome Tracking state directory missing", "status": "warn"})
+            if runtime_status == "success":
+                runtime_status = "warn"
     except Exception as e:
         runtime_checks.append({"name": f"Outcome Tracking not ready: {e}", "status": "error"})
         runtime_status = "error"

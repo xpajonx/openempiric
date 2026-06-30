@@ -898,6 +898,16 @@ def run_system_command(args):
         
         print(render_panel("Runtime Health", runtime_lines, status=status_map.get(res["runtime"]["status"], "ok")))
 
+        contradiction_lines = []
+        for c in res.get("contradictions", []):
+            symbol = "✗" if c.get("severity") == "error" else "⚠"
+            contradiction_lines.append(f"{symbol} {c.get('type')}")
+            for source, detail in c.get("sources", {}).items():
+                contradiction_lines.append(f"  {source}: {detail.get('project') or detail.get('value')}")
+        if contradiction_lines:
+            contradiction_status = "error" if any(c.get("severity") == "error" for c in res.get("contradictions", [])) else "warn"
+            print(render_panel("Contradictions", contradiction_lines, status=contradiction_status))
+
         # 5. Reflection Status Panel
         diag = res.get("reflection_diagnostic")
         if diag:

@@ -127,6 +127,25 @@ def _run_knowledge_command_impl(args):
             lines += _section_lines("Project", "project")
         if "runtime_status" in sections:
             lines += _section_lines("Runtime", "runtime_status")
+        if "contradictions" in sections:
+            contradictions = sections.get("contradictions", [])
+            lines.append("Contradictions:")
+            if contradictions:
+                for c in contradictions[:limit]:
+                    symbol = "✗" if c.get("severity") == "error" else "⚠"
+                    lines.append(f"  {symbol} {c.get('type')}")
+                    for source, detail in c.get("sources", {}).items():
+                        lines.append(f"    {source}: {detail.get('project') or detail.get('value')}")
+            else:
+                lines.append("  (none)")
+            lines.append("")
+        if "active_project" in sections:
+            active_project = sections.get("active_project", {})
+            lines.append("Active project:")
+            selected = active_project.get("selected_project") or active_project.get("latest_project")
+            lines.append(f"  - selected: {selected or '(none)'}")
+            lines.append(f"  - source: {active_project.get('selected_source') or '(none)'}")
+            lines.append("")
         if "recent_sessions" in sections:
             lines += _section_lines("Recent memory", "recent_sessions")
         if "important_concepts" in sections:
@@ -458,13 +477,12 @@ def _run_knowledge_command_impl(args):
         print(render_panel("Contradiction Scan", lines, status="error" if contradictions else "ok"))
 
     elif args.command == "health":
-        from oem_knowledge.health import build_runtime_health
-        from oem_knowledge.runtime.active_work import resolve_active_project
-        health_res = build_runtime_health(project)
+        from oem_knowledge.health import build_health_report
+        health_res = build_health_report(project)
 
         stale = eng.state.detect_stale_concepts(args.stale_sessions, project)
         merges = eng.propose_merges(args.similarity_threshold, project)
-        conflicts = eng.detect_contradictions(project)
+        concept_conflicts = eng.detect_contradictions(project)
         
         lines = []
 
@@ -507,24 +525,23 @@ def _run_knowledge_command_impl(args):
         
         # Contradictions section
         lines.append("Contradictions Detected:")
-        if conflicts:
-            for c in conflicts:
-                lines.append(f"  ✗ Conflict between {c['name_a']} ({c['concept_a']}) and {c['name_b']} ({c['concept_b']})")
-
-        # Active-project conflicts
-        harness = eng._resolve_harness(project)
-        proj_result = resolve_active_project(Path(harness))
-        if proj_result.conflicts:
-            for c in proj_result.conflicts:
-                vals = ", ".join(
-                    f"{s.source}={s.project or '?'}"
-                    for s in proj_result.sources
-                    if s.project is not None
-                )
-                lines.append(f"  {'✗' if c.severity == 'error' else '⚠'} Active project mismatch ({c.severity}): [{vals}]")
-        if not conflicts and not proj_result.conflicts:
+        if health_res.get("contradictions"):
+            for c in health_res["contradictions"]:
+                symbol = "✗" if c.get("severity") == "error" else "⚠"
+                lines.append(f"  {symbol} {c.get('type')}")
+                for source, detail in c.get("sources", {}).items():
+                    lines.append(f"    {source}: {detail.get('project') or detail.get('value')}")
+        else:
             lines.append("  None")
-            
+
+        lines.append("")
+        lines.append("Concept Contradictions Detected:")
+        if concept_conflicts:
+            for c in concept_conflicts:
+                lines.append(f"  ✗ Conflict between {c['name_a']} ({c['concept_a']}) and {c['name_b']} ({c['concept_b']})")
+        else:
+            lines.append("  None")
+             
         print(render_panel("Knowledge Health Scan", lines, status="stats"))
 
 

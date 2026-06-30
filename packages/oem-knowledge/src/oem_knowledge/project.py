@@ -113,11 +113,6 @@ def resolve_active_project(project_arg: str = "", session_id: str = "") -> Path:
             if root:
                 return root
 
-    # Check active_session.json under CWD
-    root_from_cwd_session = get_project_root_from_active_session(Path.cwd())
-    if root_from_cwd_session:
-        return root_from_cwd_session
-
     # 3. Environment variables provided by agent runtime
     for env_var in ["OEM_PROJECT_ROOT", "WORKSPACE", "PWD"]:
         val = os.environ.get(env_var)
@@ -133,6 +128,11 @@ def resolve_active_project(project_arg: str = "", session_id: str = "") -> Path:
                             if chk_p.is_dir() and not is_path_inside(chk_p, root):
                                 raise ProjectMismatchError(str(root), str(chk_p))
                 return root
+
+    # Check active_session.json under CWD after explicit environment roots.
+    root_from_cwd_session = get_project_root_from_active_session(Path.cwd())
+    if root_from_cwd_session:
+        return root_from_cwd_session
 
     # 4. Nearest parent directory containing .oem starting from os.getcwd()
     cwd_path = Path.cwd().resolve()

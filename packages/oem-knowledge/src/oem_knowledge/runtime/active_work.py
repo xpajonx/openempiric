@@ -40,7 +40,23 @@ class ActiveProjectSource:
     source: str
     project: str | None
     raw_value: str | None
-    confidence: str  # "high" or "low"
+    confidence: str  # "high", "medium", or "low"
+    path: str | None = None
+    evidence: str | None = None
+
+    @property
+    def value(self) -> str | None:
+        return self.project
+
+    def to_dict(self) -> dict[str, str | None]:
+        return {
+            "source": self.source,
+            "value": self.project,
+            "project": self.project,
+            "confidence": self.confidence,
+            "path": self.path,
+            "evidence": self.evidence,
+        }
 
 
 @dataclass
@@ -48,6 +64,18 @@ class ActiveProjectConflict:
     type: str  # "active_project_mismatch"
     sources: list[str]
     severity: str  # "error" or "warning"
+    message: str = "Active-project sources disagree."
+    source_details: dict[str, dict[str, str | None]] = field(default_factory=dict)
+    suggestion: str = "Inspect session handoff and runtime context before continuing current-project work."
+
+    def to_dict(self) -> dict:
+        return {
+            "type": self.type,
+            "severity": self.severity,
+            "message": self.message,
+            "sources": self.source_details,
+            "suggestion": self.suggestion,
+        }
 
 
 @dataclass
@@ -57,7 +85,19 @@ class ActiveProjectResult:
     active_projects_by_source: dict[str, str | None]
     sources: list[ActiveProjectSource]
     conflicts: list[ActiveProjectConflict]
-    warnings: list[str] = field(default_factory=list)
+    warnings: list[dict] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {
+            "selected_project": self.latest_project,
+            "latest_project": self.latest_project,
+            "selected_source": self.selected_source,
+            "projects_by_source": self.active_projects_by_source,
+            "active_projects_by_source": self.active_projects_by_source,
+            "sources": [s.to_dict() for s in self.sources],
+            "conflicts": [c.to_dict() for c in self.conflicts],
+            "warnings": self.warnings,
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -143,36 +183,48 @@ def _projects_match(p1: str | None, p2: str | None) -> bool:
 # Per-source project parsers
 # ---------------------------------------------------------------------------
 
-_HANDOFF_MD_PROJECT_MARKERS = [
-    re.compile(r"(?im)^\s*(?:[-*]\s+)?Project\s*:\s*(.+?)\s*$"),
-    re.compile(r"(?im)^\s*(?:[-*]\s+)?Active\s+project\s*:\s*(.+?)\s*$"),
-    re.compile(r"(?im)^\s*(?:[-*]\s+)?Project\s+root\s*:\s*(.+?)\s*$"),
-    re.compile(r"(?im)^\s*(?:[-*]\s+)?Memory\s+root\s*:\s*(.+?)\s*$"),
+_EXPLICIT_PROJECT_MARKERS = [
+    ("Active project:", re.compile(r"(?im)^\s*(?:[-*]\s+)?Active\s+project\s*:\s*(.+?)\s*$")),
+    ("Open project:", re.compile(r"(?im)^\s*(?:[-*]\s+)?Open\s+project\s*:\s*(.+?)\s*$")),
+    ("Current project:", re.compile(r"(?im)^\s*(?:[-*]\s+)?Current\s+project\s*:\s*(.+?)\s*$")),
+    ("Project root:", re.compile(r"(?im)^\s*(?:[-*]\s+)?Project\s+root\s*:\s*(.+?)\s*$")),
+    ("Project:", re.compile(r"(?im)^\s*(?:[-*]\s+)?Project\s*:\s*(.+?)\s*$")),
+    ("Memory root:", re.compile(r"(?im)^\s*(?:[-*]\s+)?Memory\s+root\s*:\s*(.+?)\s*$")),
+    ("Primary file:", re.compile(r"(?im)^\s*(?:[-*]\s+)?Primary\s+file\s*:\s*(.+?)\s*$")),
+    ("Current file:", re.compile(r"(?im)^\s*(?:[-*]\s+)?Current\s+file\s*:\s*(.+?)\s*$")),
 ]
+_OPEN_PROJECT_SENTENCE = re.compile(r"(?im)^\s*(?:[-*]\s+)?(.+?)\s+is\s+the\s+open\s+project\s*\.?.*$")
+_NEXT_ACTION = re.compile(r"(?im)^\s*(?:[-*]\s+)?Next\s+action\s*:\s*(.+?)\s*$")
+_FILE_SIGNAL = re.compile(r"(?:^|\s)([\w./~-]+(?:/|\\)[\w./~-]+|[\w.-]+\.(?:md|txt|py|ts|tsx|js|jsx|json|yaml|yml))")
 
-_CONTEXT_MD_PROJECT_MARKERS = [
-    re.compile(r"(?im)^\s*(?:[-*]\s+)?Project\s*:\s*(.+?)\s*$"),
-    re.compile(r"(?im)^\s*(?:[-*]\s+)?Active\s+project\s*:\s*(.+?)\s*$"),
-    re.compile(r"(?im)^\s*(?:[-*]\s+)?Project\s+root\s*:\s*(.+?)\s*$"),
-    re.compile(r"(?im)^\s*(?:[-*]\s+)?Memory\s+root\s*:\s*(.+?)\s*$"),
-    re.compile(r"(?im)(.+?)\s+is\s+the\s+open\s+project"),
-]
+
+def _parse_project_from_markdown(text: str) -> tuple[str | None, str, str]:
+    for evidence, pattern in _EXPLICIT_PROJECT_MARKERS:
+        m = pattern.search(text)
+        if m:
+            return m.group(1).strip(), "high", evidence
+
+    m = _OPEN_PROJECT_SENTENCE.search(text)
+    if m:
+        return m.group(1).strip(), "high", "open_project_sentence"
+
+    m = _NEXT_ACTION.search(text)
+    if m:
+        signal = _FILE_SIGNAL.search(m.group(1).strip())
+        if signal:
+            return signal.group(1).strip(), "medium", "Next action:"
+
+    return None, "low", "no_explicit_project_marker"
 
 
 def _parse_project_from_handoff_md(text: str) -> tuple[str | None, str]:
-    for pattern in _HANDOFF_MD_PROJECT_MARKERS:
-        m = pattern.search(text)
-        if m:
-            return m.group(1).strip(), "high"
-    return None, "low"
+    project, confidence, _evidence = _parse_project_from_markdown(text)
+    return project, confidence
 
 
 def _parse_project_from_context_md(text: str) -> tuple[str | None, str]:
-    for pattern in _CONTEXT_MD_PROJECT_MARKERS:
-        m = pattern.search(text)
-        if m:
-            return m.group(1).strip(), "high"
-    return None, "low"
+    project, confidence, _evidence = _parse_project_from_markdown(text)
+    return project, confidence
 
 
 def _parse_project_from_handoff_json(data: Any) -> tuple[str | None, str, str | None]:
@@ -180,13 +232,13 @@ def _parse_project_from_handoff_json(data: Any) -> tuple[str | None, str, str | 
         return None, "low", None
     project_root = data.get("project_root")
     if project_root and isinstance(project_root, str):
-        return project_root.strip(), "high", data.get("project_label")
+        return project_root.strip(), "high", "project_root"
     project_label = data.get("project_label")
     if project_label and isinstance(project_label, str):
-        return project_label.strip(), "high", None
+        return project_label.strip(), "high", "project_label"
     project = data.get("project")
     if project and isinstance(project, str):
-        return project.strip(), "high", None
+        return project.strip(), "high", "project"
     return None, "low", None
 
 
@@ -200,6 +252,18 @@ def _parse_project_from_outcome(record: dict) -> tuple[str | None, str]:
     return None, "low"
 
 
+def _parse_project_from_active_session(data: Any) -> tuple[str | None, str, str | None]:
+    if not isinstance(data, dict):
+        return None, "low", None
+    project = data.get("project")
+    if project and isinstance(project, str):
+        return project.strip(), "high", "project"
+    project_root = data.get("project_root")
+    if project_root and isinstance(project_root, str):
+        return project_root.strip(), "high", "project_root"
+    return None, "low", None
+
+
 # ---------------------------------------------------------------------------
 # Canonical active-project resolver
 # ---------------------------------------------------------------------------
@@ -209,11 +273,18 @@ SOURCE_HANDOFF_MD = "session_handoff_md"
 SOURCE_STATE_HANDOFF_MD = "state_session_handoff_md"
 SOURCE_RUNTIME_CONTEXT = "runtime_context_md"
 SOURCE_LATEST_OUTCOME = "latest_outcome"
+SOURCE_ACTIVE_SESSION = "active_session_json"
 
 
 def resolve_active_project(memory_root: Path) -> ActiveProjectResult:
     sources: list[ActiveProjectSource] = []
-    warnings: list[str] = []
+    warnings: list[dict] = []
+
+    def rel(path: Path) -> str:
+        try:
+            return str(path.relative_to(memory_root))
+        except ValueError:
+            return str(path)
 
     # 1. session-handoff.json (canonical)
     json_path = memory_root / "session-handoff.json"
@@ -225,50 +296,65 @@ def resolve_active_project(memory_root: Path) -> ActiveProjectResult:
             project=project,
             raw_value=project,
             confidence=conf,
+            path=rel(json_path),
+            evidence=label,
         ))
     elif json_path.exists():
-        warnings.append(f"Malformed session-handoff.json at {json_path}, falling back to Markdown")
+        warnings.append({
+            "reason": "malformed_handoff_json",
+            "severity": "warning",
+            "message": f"Malformed session-handoff.json at {json_path}, falling back to Markdown",
+            "path": rel(json_path),
+        })
         sources.append(ActiveProjectSource(
             source=SOURCE_HANDOFF_JSON,
             project=None,
             raw_value=None,
             confidence="low",
+            path=rel(json_path),
+            evidence="malformed_json",
         ))
 
     # 2. session-handoff.md (root level)
     md_path = memory_root / "session-handoff.md"
     md_text = _read_text_safe(md_path)
     if md_text:
-        project, conf = _parse_project_from_handoff_md(md_text)
+        project, conf, evidence = _parse_project_from_markdown(md_text)
         sources.append(ActiveProjectSource(
             source=SOURCE_HANDOFF_MD,
             project=project,
             raw_value=project,
             confidence=conf,
+            path=rel(md_path),
+            evidence=evidence,
         ))
 
     # 3. state/session-handoff.md (legacy compat)
     state_md_path = memory_root / "state" / "session-handoff.md"
     state_md_text = _read_text_safe(state_md_path)
     if state_md_text:
-        project, conf = _parse_project_from_handoff_md(state_md_text)
+        project, conf, evidence = _parse_project_from_markdown(state_md_text)
         sources.append(ActiveProjectSource(
             source=SOURCE_STATE_HANDOFF_MD,
             project=project,
             raw_value=project,
             confidence=conf,
+            path=rel(state_md_path),
+            evidence=evidence,
         ))
 
     # 4. .runtime/context.md
     context_path = memory_root / ".runtime" / "context.md"
     context_text = _read_text_safe(context_path)
     if context_text:
-        project, conf = _parse_project_from_context_md(context_text)
+        project, conf, evidence = _parse_project_from_markdown(context_text)
         sources.append(ActiveProjectSource(
             source=SOURCE_RUNTIME_CONTEXT,
             project=project,
             raw_value=project,
             confidence=conf,
+            path=rel(context_path),
+            evidence=evidence,
         ))
 
     # 5. outcomes.jsonl tail
@@ -285,10 +371,26 @@ def resolve_active_project(memory_root: Path) -> ActiveProjectResult:
                         project=project,
                         raw_value=project,
                         confidence=conf,
+                        path=rel(outcomes_path),
+                        evidence="project" if rec.get("project") else "project_root",
                     ))
                     break
             except json.JSONDecodeError:
                 pass
+
+    # 6. active_session.json
+    active_session_path = memory_root / "state" / "active_session.json"
+    active_session_data = _read_json_safe(active_session_path)
+    if active_session_data is not None:
+        project, conf, evidence = _parse_project_from_active_session(active_session_data)
+        sources.append(ActiveProjectSource(
+            source=SOURCE_ACTIVE_SESSION,
+            project=project,
+            raw_value=project,
+            confidence=conf,
+            path=rel(active_session_path),
+            evidence=evidence,
+        ))
 
     # Build active_projects_by_source dict
     active_projects_by_source: dict[str, str | None] = {}
@@ -302,6 +404,7 @@ def resolve_active_project(memory_root: Path) -> ActiveProjectResult:
         SOURCE_STATE_HANDOFF_MD,
         SOURCE_RUNTIME_CONTEXT,
         SOURCE_LATEST_OUTCOME,
+        SOURCE_ACTIVE_SESSION,
     ]
     latest_project: str | None = None
     selected_source: str | None = None
@@ -328,10 +431,12 @@ def resolve_active_project(memory_root: Path) -> ActiveProjectResult:
 
 
 def _detect_project_conflicts(sources: list[ActiveProjectSource]) -> list[ActiveProjectConflict]:
+    comparable_sources = [
+        s for s in sources
+        if s.project is not None and s.confidence in {"high", "medium"}
+    ]
     seen: dict[str, str] = {}
-    for s in sources:
-        if s.project is None:
-            continue
+    for s in comparable_sources:
         norm = _normalize_project_identity(s.project)
         if not norm:
             continue
@@ -344,54 +449,53 @@ def _detect_project_conflicts(sources: list[ActiveProjectSource]) -> list[Active
     if len(unique_norms) <= 1:
         return []
 
-    conflicting_sources: list[str] = []
-    high_confidence_count = 0
-    for s in sources:
-        if s.project is None:
-            continue
-        norm = _normalize_project_identity(s.project)
-        if norm and norm != unique_norms[0]:
-            if s.source not in conflicting_sources:
-                conflicting_sources.append(s.source)
-                if s.confidence == "high":
-                    high_confidence_count += 1
-        else:
-            if s.source not in conflicting_sources and s.confidence == "high":
-                if s.source not in conflicting_sources:
-                    conflicting_sources.append(s.source)
-
-    all_conflict_sources: list[str] = []
-    for s in sources:
-        if s.project is not None and s.source not in all_conflict_sources:
-            all_conflict_sources.append(s.source)
-
     high_conflict_sources = [
-        s.source for s in sources
+        s.source for s in comparable_sources
         if s.project is not None and s.confidence == "high"
     ]
 
     unique_high = set()
-    for s in sources:
+    for s in comparable_sources:
         if s.project is not None and s.confidence == "high":
             unique_high.add(_normalize_project_identity(s.project))
+
+    source_details = {
+        s.source: {
+            "project": s.project,
+            "value": s.project,
+            "path": s.path,
+            "confidence": s.confidence,
+            "evidence": s.evidence,
+        }
+        for s in comparable_sources
+        if s.project is not None
+    }
+
+    all_conflict_sources = list(source_details.keys())
 
     if len(unique_high) >= 3:
         return [ActiveProjectConflict(
             type="active_project_mismatch",
             sources=high_conflict_sources,
             severity="error",
+            message="Three or more high-confidence active-project sources disagree.",
+            source_details={k: source_details[k] for k in high_conflict_sources if k in source_details},
         )]
     elif len(unique_high) >= 2:
         return [ActiveProjectConflict(
             type="active_project_mismatch",
             sources=high_conflict_sources,
             severity="warning",
+            message="High-confidence active-project sources disagree.",
+            source_details={k: source_details[k] for k in high_conflict_sources if k in source_details},
         )]
     elif len(unique_norms) >= 2:
         return [ActiveProjectConflict(
             type="active_project_mismatch",
             sources=all_conflict_sources,
             severity="warning",
+            message="Active-project sources disagree.",
+            source_details=source_details,
         )]
     return []
 
@@ -489,15 +593,8 @@ def resolve_active_work(memory_root: Path) -> ActiveWorkResult:
             score=1.0,
         ))
 
-    # Contradiction detection — topic-level text comparison (legacy)
+    # Contradiction detection uses structured active-project signals only.
     contradictions: list[str] = []
-    if context_topic and handoff_topic:
-        if context_topic[:40] != handoff_topic[:40]:
-            contradictions.append(
-                f"context.md topic `{context_topic[:60]}...` vs "
-                f"session-handoff.md topic `{handoff_topic[:60]}...`"
-            )
-    # Also collect project-level contradictions from canonical resolver
     proj_result = resolve_active_project(memory_root)
     for c in proj_result.conflicts:
         contradictions.append(
@@ -505,8 +602,9 @@ def resolve_active_work(memory_root: Path) -> ActiveWorkResult:
             f"(severity: {c.severity})"
         )
     for w in proj_result.warnings:
-        if w not in contradictions:
-            contradictions.append(w)
+        message = w.get("message", str(w)) if isinstance(w, dict) else str(w)
+        if message not in contradictions:
+            contradictions.append(message)
 
     has_active_work = len(items) > 0
     score = min(sum(item.score for item in items), 10.0)

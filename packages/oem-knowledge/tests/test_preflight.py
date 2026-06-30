@@ -443,8 +443,8 @@ def test_preflight_continuation_contradiction_adds_warning(preflight_project: Pa
     )
     runtime_dir = preflight_project / ".oem" / ".runtime"
     runtime_dir.mkdir(parents=True, exist_ok=True)
-    (runtime_dir / "context.md").write_text("Working on user authentication\n", encoding="utf-8")
-    (state_dir / "session-handoff.md").write_text("Finishing the payment flow\n", encoding="utf-8")
+    (runtime_dir / "context.md").write_text("Active project: /project/alpha\n", encoding="utf-8")
+    (state_dir / "session-handoff.md").write_text("Project: /project/beta\n", encoding="utf-8")
 
     result = run_preflight("continue where I left off", project=str(preflight_project), write_audit=False)
 

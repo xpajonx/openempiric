@@ -10,7 +10,7 @@ from ..project import (
     ProjectResolutionError
 )
 from ..ui import render_panel
-from ..health import build_runtime_health
+from ..health import build_health_report
 
 def register(mcp: object) -> None:
     from fastmcp import FastMCP
@@ -32,12 +32,12 @@ def register(mcp: object) -> None:
         try:
             project_root = resolve_active_project(project)
             memory_root = project_root / ".oem"
-            res = build_runtime_health(str(project_root))
+            res = build_health_report(str(project_root), include_daemon_runtime=False)
 
             with KnowledgeEngine(str(project_root)) as eng:
                 stale = eng.state.detect_stale_concepts(stale_sessions, str(project_root))
                 merges = eng.propose_merges(similarity_threshold, str(project_root))
-                conflicts = eng.detect_contradictions(str(project_root))
+                concept_conflicts = eng.detect_contradictions(str(project_root))
         except ProjectResolutionError as e:
             return handle_resolution_error("knowledge_health_check", e)
         except Exception as e:
@@ -77,8 +77,19 @@ def register(mcp: object) -> None:
         lines.append("")
         
         lines.append("Contradictions Detected:")
-        if conflicts:
-            for c in conflicts:
+        if res.get("contradictions"):
+            for c in res["contradictions"]:
+                symbol = "✗" if c.get("severity") == "error" else "⚠"
+                lines.append(f"  {symbol} {c.get('type')}")
+                for source, detail in c.get("sources", {}).items():
+                    lines.append(f"    {source}: {detail.get('project') or detail.get('value')}")
+        else:
+            lines.append("  None")
+
+        lines.append("")
+        lines.append("Concept Contradictions Detected:")
+        if concept_conflicts:
+            for c in concept_conflicts:
                 lines.append(f"  ✗ Conflict between {c['name_a']} ({c['concept_a']}) and {c['name_b']} ({c['concept_b']})")
                 lines.append(f"    Description: {c['description']}")
         else:
@@ -92,9 +103,12 @@ def register(mcp: object) -> None:
             "memory_root": str(memory_root),
             "message": panel,
             "health": res,
+            "contradictions": res.get("contradictions", []),
+            "active_project": res.get("active_project", {}),
             "stale": stale,
             "merges": merges,
-            "conflicts": conflicts
+            "concept_contradictions": concept_conflicts,
+            "conflicts": concept_conflicts
         }, indent=2)
 
     @mcp.tool()

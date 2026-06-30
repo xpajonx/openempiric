@@ -5,8 +5,11 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from fastmcp import FastMCP
 from oem_knowledge.engine import KnowledgeEngine, OEM_DIR
+from oem_knowledge.health import build_health_report, build_runtime_health
 from oem_knowledge.cli.commands.system import run_system_command
+from oem_knowledge.server import mount_tools
 from oem_knowledge.runtime.recovery import cmd_recover, parse_markdown_report, build_markdown_report
 
 @pytest.fixture
@@ -101,6 +104,97 @@ def test_runtime_health_includes_reflection_fallback_suggestion(engine, tmp_path
             output_blob = "\n".join(output_lines)
             assert "Use structured events" in output_blob
             assert "oem recover --scope reflection" in output_blob
+
+
+def _snapshot_tree(path: Path) -> dict[str, tuple[int, int]]:
+    if not path.exists():
+        return {}
+    return {
+        str(p.relative_to(path)): (p.stat().st_size, p.stat().st_mtime_ns)
+        for p in path.rglob("*")
+        if p.is_file()
+    }
+
+
+def _write_active_project_conflict(harness: Path) -> None:
+    (harness / "session-handoff.json").write_text(
+        json.dumps({"project_root": "/project/alpha"}),
+        encoding="utf-8",
+    )
+    runtime_dir = harness / ".runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / "context.md").write_text(
+        "Active project: /project/beta\n",
+        encoding="utf-8",
+    )
+
+
+def test_health_report_contains_contradictions_field(engine, tmp_path):
+    harness = Path(tmp_path) / OEM_DIR
+    _write_active_project_conflict(harness)
+
+    report = build_health_report(str(tmp_path), include_daemon_runtime=False)
+
+    assert "contradictions" in report
+    assert report["contradictions"][0]["type"] == "active_project_mismatch"
+    assert report["active_project"]["selected_source"] == "session_handoff_json"
+
+
+def test_health_report_status_warn_when_contradiction_exists(engine, tmp_path):
+    harness = Path(tmp_path) / OEM_DIR
+    _write_active_project_conflict(harness)
+
+    report = build_health_report(str(tmp_path), include_daemon_runtime=False)
+
+    assert report["status"] == "warn"
+    assert build_runtime_health(str(tmp_path))["status"] in {"warn", "error"}
+
+
+def test_health_detects_three_way_active_project_conflict_as_error(engine, tmp_path):
+    harness = Path(tmp_path) / OEM_DIR
+    (harness / "session-handoff.json").write_text(json.dumps({"project_root": "/project/alpha"}), encoding="utf-8")
+    (harness / "session-handoff.md").write_text("Project: /project/beta\n", encoding="utf-8")
+    runtime_dir = harness / ".runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / "context.md").write_text("Project: /project/gamma\n", encoding="utf-8")
+
+    report = build_health_report(str(tmp_path), include_daemon_runtime=False)
+
+    assert report["status"] == "error"
+    assert report["contradictions"][0]["severity"] == "error"
+
+
+def test_health_missing_source_is_info_not_contradiction(engine, tmp_path):
+    report = build_health_report(str(tmp_path), include_daemon_runtime=False)
+
+    assert report["contradictions"] == []
+
+
+def test_knowledge_read_health_include_runtime_false_still_reports_active_project_conflict(engine, tmp_path):
+    harness = Path(tmp_path) / OEM_DIR
+    _write_active_project_conflict(harness)
+
+    result = engine.knowledge_read(str(tmp_path), scope="health")
+
+    assert result["sections"]["contradictions"][0]["type"] == "active_project_mismatch"
+    assert result["sections"]["active_project"]["selected_source"] == "session_handoff_json"
+
+
+def test_all_health_surfaces_read_only_or_shared_report_read_only(engine, tmp_path):
+    harness = Path(tmp_path) / OEM_DIR
+    _write_active_project_conflict(harness)
+    before = _snapshot_tree(harness)
+
+    build_health_report(str(tmp_path), include_daemon_runtime=False)
+    build_runtime_health(str(tmp_path))
+    engine.knowledge_read(str(tmp_path), scope="health")
+    mcp = FastMCP("oem-test")
+    mount_tools(mcp)
+    import asyncio
+    asyncio.run(mcp.call_tool("knowledge_health_check", {"project": str(tmp_path)}))
+
+    after = _snapshot_tree(harness)
+    assert before == after
 
 def test_recovery_reflection_scope_dry_run_and_apply(engine, tmp_path):
     """Test recover --scope reflection checks and repairs orphans, missing metadata, invalid JSONL, duplicates, and report inconsistency."""

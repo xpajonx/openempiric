@@ -87,7 +87,7 @@ def test_resolve_active_work_finds_handoff(tmp_path: Path):
     assert any(item.source == "session-handoff.md" for item in result.items)
 
 
-def test_resolve_active_work_detects_contradiction(tmp_path: Path):
+def test_resolve_active_work_ignores_topic_text_difference(tmp_path: Path):
     runtime_dir = tmp_path / ".runtime"
     runtime_dir.mkdir(parents=True)
     (runtime_dir / "context.md").write_text(
@@ -103,7 +103,7 @@ def test_resolve_active_work_detects_contradiction(tmp_path: Path):
 
     result = resolve_active_work(tmp_path)
 
-    assert len(result.contradictions) >= 1
+    assert result.contradictions == []
 
 
 def test_resolve_active_work_no_contradiction_when_same(tmp_path: Path):
@@ -230,7 +230,7 @@ class TestResolveActiveProject:
 
         result = resolve_active_project(tmp_path)
         assert len(result.warnings) >= 1
-        assert "Malformed" in result.warnings[0]
+        assert result.warnings[0]["reason"] == "malformed_handoff_json"
         assert result.latest_project == "markdown-project"
 
     def test_2way_high_confidence_conflict(self, tmp_path: Path):
@@ -258,6 +258,122 @@ class TestResolveActiveProject:
         result = resolve_active_project(tmp_path)
         has_3way = any(c.severity == "error" for c in result.conflicts)
         assert has_3way
+
+    def test_health_extracts_project_from_session_handoff_json(self, tmp_path: Path):
+        (tmp_path / "session-handoff.json").write_text(
+            json.dumps({"project_root": "2_Essay/expertise-debt/Essay_ID.md"}),
+            encoding="utf-8",
+        )
+
+        result = resolve_active_project(tmp_path)
+
+        assert result.latest_project == "2_Essay/expertise-debt/Essay_ID.md"
+        assert result.selected_source == SOURCE_HANDOFF_JSON
+        source = result.sources[0]
+        assert source.confidence == "high"
+        assert source.evidence == "project_root"
+
+    def test_health_extracts_project_from_runtime_context_marker(self, tmp_path: Path):
+        runtime_dir = tmp_path / ".runtime"
+        runtime_dir.mkdir()
+        (runtime_dir / "context.md").write_text(
+            "# OEM Runtime Context\n\nActive project: x-becoming-television\n",
+            encoding="utf-8",
+        )
+
+        result = resolve_active_project(tmp_path)
+
+        assert result.latest_project == "x-becoming-television"
+        assert result.selected_source == SOURCE_RUNTIME_CONTEXT
+        source = result.sources[0]
+        assert source.confidence == "high"
+        assert source.evidence == "Active project:"
+
+    def test_health_ignores_markdown_header_as_project(self, tmp_path: Path):
+        (tmp_path / "session-handoff.md").write_text(
+            "# Session Handoff\n\n## Historical Context\n",
+            encoding="utf-8",
+        )
+
+        result = resolve_active_project(tmp_path)
+
+        assert result.latest_project is None
+        assert result.conflicts == []
+        assert result.sources[0].confidence == "low"
+        assert result.sources[0].project is None
+
+    def test_health_does_not_compare_session_handoff_header(self, tmp_path: Path):
+        runtime_dir = tmp_path / ".runtime"
+        runtime_dir.mkdir()
+        (runtime_dir / "context.md").write_text(
+            "# OEM Runtime Context\n\nOpenEmpiric project memory is active for this repository.\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "session-handoff.md").write_text(
+            "# Session Handoff\n\nInitialized project layout.\n",
+            encoding="utf-8",
+        )
+
+        active_work = resolve_active_work(tmp_path)
+        active_project = resolve_active_project(tmp_path)
+
+        assert active_project.conflicts == []
+        assert active_work.contradictions == []
+
+    def test_health_next_action_without_path_not_project_identity(self, tmp_path: Path):
+        (tmp_path / "session-handoff.md").write_text(
+            "Next action: continue writing\n",
+            encoding="utf-8",
+        )
+
+        result = resolve_active_project(tmp_path)
+
+        assert result.latest_project is None
+        assert result.conflicts == []
+
+    def test_health_next_action_with_file_path_is_project_signal(self, tmp_path: Path):
+        (tmp_path / "session-handoff.md").write_text(
+            "Next action: polish 2_Essay/expertise-debt/Essay_ID.md\n",
+            encoding="utf-8",
+        )
+
+        result = resolve_active_project(tmp_path)
+
+        assert result.latest_project == "2_Essay/expertise-debt/Essay_ID.md"
+        assert result.sources[0].confidence == "medium"
+        assert result.sources[0].evidence == "Next action:"
+
+    def test_health_source_confidence_high_for_explicit_active_project_marker(self, tmp_path: Path):
+        (tmp_path / "session-handoff.md").write_text(
+            "Active project: x-becoming-television\n",
+            encoding="utf-8",
+        )
+
+        result = resolve_active_project(tmp_path)
+
+        assert result.sources[0].confidence == "high"
+        assert result.sources[0].evidence == "Active project:"
+
+    def test_health_source_confidence_low_for_header_ignored(self, tmp_path: Path):
+        (tmp_path / "session-handoff.md").write_text(
+            "# Session Handoff\n",
+            encoding="utf-8",
+        )
+
+        result = resolve_active_project(tmp_path)
+
+        assert result.sources[0].confidence == "low"
+        assert result.sources[0].evidence == "no_explicit_project_marker"
+
+    def test_malformed_handoff_json_warns_even_when_markdown_fallback_succeeds(self, tmp_path: Path):
+        (tmp_path / "session-handoff.json").write_text("not valid json {{", encoding="utf-8")
+        (tmp_path / "session-handoff.md").write_text("Project: markdown-project\n", encoding="utf-8")
+
+        result = resolve_active_project(tmp_path)
+
+        assert result.latest_project == "markdown-project"
+        assert result.selected_source == SOURCE_HANDOFF_MD
+        assert any(w.get("reason") == "malformed_handoff_json" for w in result.warnings)
 
 
 class TestParseProjectFromHandoffMd:
@@ -314,8 +430,17 @@ class TestParseProjectFromHandoffJson:
 
     def test_project_label(self):
         data = {"project_root": "/home/user/app", "project_label": "My App"}
-        proj, conf, label = _parse_project_from_handoff_json(data)
-        assert label == "My App"
+        proj, conf, evidence = _parse_project_from_handoff_json(data)
+        assert proj == "/home/user/app"
+        assert conf == "high"
+        assert evidence == "project_root"
+
+    def test_project_label_without_root(self):
+        data = {"project_label": "My App"}
+        proj, conf, evidence = _parse_project_from_handoff_json(data)
+        assert proj == "My App"
+        assert conf == "high"
+        assert evidence == "project_label"
 
     def test_non_dict(self):
         proj, conf, label = _parse_project_from_handoff_json("string")
