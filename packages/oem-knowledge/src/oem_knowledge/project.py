@@ -49,11 +49,9 @@ def find_nearest_oem_root(path: Path) -> Path | None:
 def is_oem_dev_repo(path: Path) -> bool:
     try:
         resolved = path.resolve()
-        current_file = Path(__file__).resolve()
-        for parent in [current_file] + list(current_file.parents):
-            if (parent / ".git").exists() and (parent / "packages" / "oem-knowledge").is_dir():
-                if resolved == parent:
-                    return True
+        for parent in [resolved] + list(resolved.parents):
+            if (parent / ".git").exists() and (parent / "packages" / "oem-knowledge" / "pyproject.toml").is_file():
+                return True
     except Exception:
         pass
     return False

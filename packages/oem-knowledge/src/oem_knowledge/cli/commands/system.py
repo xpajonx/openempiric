@@ -283,10 +283,10 @@ def cmd_setup_opencode(eng, project: str | None = None, repair: bool = False, dr
             }
         else:
             resolved_oem = shutil.which("oem")
+            oem_path = str(Path(resolved_oem).resolve()) if resolved_oem else "oem"
             mcp_config = {
                 "type": "local",
-                "command": str(Path(resolved_oem).resolve()) if resolved_oem else "oem",
-                "args": ["mcp"],
+                "command": [oem_path, "mcp"],
                 "enabled": True,
                 "timeout": 60000
             }

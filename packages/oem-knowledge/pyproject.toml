@@ -1,6 +1,6 @@
 [project]
 name = "oem-knowledge"
-version = "1.0.2"
+version = "1.0.4"
 description = "Local-first hybrid RAG knowledge layer — concept registry, knowledge events, vector search, and OEM bootstrapper"
 requires-python = ">=3.12"
 dependencies = [

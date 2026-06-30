@@ -420,6 +420,55 @@ def build_runtime_health(project: str | None = None) -> dict:
         if runtime_status == "success":
             runtime_status = "warn"
 
+    # Runtime provenance — detect dev checkout serving as runtime for non-dev project
+    try:
+        from oem_knowledge.runtime.provenance import detect_runtime, RUNTIME_KIND_REPO_VENV, RUNTIME_KIND_EDITABLE, RUNTIME_KIND_UV_TOOL
+        prov = detect_runtime()
+        runtime_checks.append({"name": f"Runtime: {prov['runtime_kind']} ({prov['executable_path']})", "status": "success"})
+        if prov["package_path"]:
+            runtime_checks.append({"name": f"Package path: {prov['package_path']}", "status": "success"})
+        if prov["version"]:
+            runtime_checks.append({"name": f"Package version: {prov['version']}", "status": "success"})
+
+        dev_runtime_on_nondev = (
+            prov["runtime_kind"] in (RUNTIME_KIND_REPO_VENV, RUNTIME_KIND_EDITABLE)
+            and project is not None
+            and not is_dev_workspace
+        )
+        if dev_runtime_on_nondev and not os.environ.get("OEM_ALLOW_DEV_RUNTIME") == "1":
+            runtime_checks.append({
+                "name": "Dev checkout runtime serving non-dev project — set OEM_ALLOW_DEV_RUNTIME=1 to suppress",
+                "status": "warn"
+            })
+            if runtime_status == "success":
+                runtime_status = "warn"
+    except Exception as e:
+        runtime_checks.append({"name": f"Runtime provenance check failed: {e}", "status": "warn"})
+        if runtime_status == "success":
+            runtime_status = "warn"
+
+    # Stale active-session detection
+    try:
+        active_file = resolved_dir / "state" / "active_session.json"
+        if active_file.exists():
+            data = json.loads(active_file.read_text(encoding="utf-8"))
+            if data.get("status") == "running":
+                missing_fields = [
+                    f for f in ("context_path", "temp_instructions")
+                    if f not in data or not data[f]
+                ]
+                if missing_fields:
+                    runtime_checks.append({
+                        "name": f"Stale active session: status=running but missing: {', '.join(missing_fields)}",
+                        "status": "warn"
+                    })
+                    if runtime_status == "success":
+                        runtime_status = "warn"
+    except Exception as e:
+        runtime_checks.append({"name": f"Stale session check failed: {e}", "status": "warn"})
+        if runtime_status == "success":
+            runtime_status = "warn"
+
     # Reflection Diagnostics
     reflection_diagnostic = {
         "structured_enabled": structured_enabled,
