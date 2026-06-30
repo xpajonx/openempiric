@@ -31,6 +31,10 @@ class PreflightResult:
     selected_workflow: dict | None = None
     context: str = ""
     warnings: list[str] = field(default_factory=list)
+    active_project: dict | None = None
+    matched_memory_summary: list[dict] = field(default_factory=list)
+    reason_detail: str = ""
+    supporting_reasons: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

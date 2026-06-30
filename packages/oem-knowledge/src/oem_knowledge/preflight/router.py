@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -224,6 +225,193 @@ def _load_concepts(layout: ProjectLayout, warnings: list[str]) -> list[ConceptMe
             )
 
     return [concepts_by_id[key] for key in sorted(concepts_by_id)]
+
+
+# ---------------------------------------------------------------------------
+# Target extraction from task text
+# ---------------------------------------------------------------------------
+
+_TASK_PATH_RE = re.compile(
+    r"\b(?:\.\/|~\/)?[a-zA-Z0-9_\-\.\/]+\.(?:md|json|py|ts|js|yaml|yml|toml|txt)\b"
+)
+_TASK_IDENTIFIER_RE = re.compile(r"\b([A-Z][a-z]+_[A-Z][a-z]+(?:_[a-zA-Z0-9]+)*|[a-z]+(?:_[a-z]+)+)\b")
+_GENERIC_CONTINUATION_TRIGGERS = frozenset({
+    "current project", "this project", "the current project",
+    "what should i work on", "what is the current",
+})
+
+
+def _extract_task_targets(task: str) -> dict:
+    task_lower = task.lower().strip()
+
+    raw_files: list[str] = _TASK_PATH_RE.findall(task)
+    files: list[str] = [f for f in raw_files if f]
+
+    raw_identifiers: list[str] = _TASK_IDENTIFIER_RE.findall(task)
+    identifiers: list[str] = [i for i in raw_identifiers if len(i) >= 3]
+
+    stems: list[str] = []
+    for f in files:
+        clean = f.lstrip("./~")
+        parts = clean.rsplit(".", 1)
+        stems.append(clean)
+        if parts[0]:
+            stems.append(parts[0])
+        stem_parts = parts[0].split("/")
+        if stem_parts:
+            stems.append(stem_parts[-1])
+
+    # Normalize: strip common prefixes for cross-matching
+    stems_norm: set[str] = set()
+    for s in stems:
+        # /path/to/Essay_ID.md → Essay_ID
+        # Essay_ID.md → Essay_ID
+        # 2_Essay/expertise-debt/Essay_ID.md → expertise-debt, Essay_ID
+        for part in s.replace("/", " ").replace("_", " ").replace("-", " ").split():
+            cleaned = part.strip("._-").lower()
+            if len(cleaned) >= 3:
+                stems_norm.add(cleaned)
+    # Also keep the original stems
+    stems_norm.update(s.lower() for s in stems)
+
+    return {
+        "files": files,
+        "identifiers": [i.lower() for i in identifiers],
+        "stems": sorted(stems_norm),
+        "has_continuation_phrase": any(
+            phrase in task_lower for phrase in _GENERIC_CONTINUATION_TRIGGERS
+        ),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Memory relevance classification
+# ---------------------------------------------------------------------------
+
+_DECISION_TYPES = frozenset({"decision", "failure"})
+_OPEN_PROJECT_SIGNALS = (
+    "is the open project",
+    "open project",
+    "current project",
+    "active project",
+)
+
+
+def _detect_memory_chunk_type(memory) -> str:
+    """Return the classified chunk type (decision/failure/outcome/observation)."""
+    from .scoring import _detect_memory_type  # defer import
+
+    return _detect_memory_type(memory.title, memory.snippet)
+
+
+def _classify_memory_relevance(
+    memory, task_targets: dict, task_lower: str
+) -> tuple[str, list[str]]:
+    """Returns (relevance_level, signals).
+
+    relevance_level is "strong", "medium", or "weak".
+    """
+    chunk_type = _detect_memory_chunk_type(memory)
+    title_lower = (memory.title or "").lower()
+    snippet_lower = (memory.snippet or "").lower()
+    combined = title_lower + " " + snippet_lower
+
+    signals: list[str] = []
+
+    # Check file/stem/identifier overlap
+    target_hit = False
+    for stem in task_targets["stems"]:
+        if stem in combined:
+            target_hit = True
+            signals.append(f"stem_match:{stem}")
+            break
+    if not target_hit:
+        for fid in task_targets["identifiers"]:
+            if fid in combined:
+                target_hit = True
+                signals.append(f"id_match:{fid}")
+                break
+    if not target_hit:
+        for f in task_targets["files"]:
+            if f.lower() in combined:
+                target_hit = True
+                signals.append(f"file_match:{f}")
+                break
+
+    is_decision_type = chunk_type in _DECISION_TYPES
+    has_open_project = any(sig in combined for sig in _OPEN_PROJECT_SIGNALS)
+    is_continuation = task_targets.get("has_continuation_phrase", False)
+
+    # Strong: Decision/Failure + target match, or open project + continuation
+    if is_decision_type and target_hit:
+        signals.append(f"type:{chunk_type}")
+        return "strong", signals
+    if has_open_project and is_continuation:
+        signals.append("open_project")
+        return "strong", signals
+
+    # Medium: Decision/Failure without file match, or target hit without Decision type
+    if is_decision_type:
+        signals.append(f"type:{chunk_type}")
+        return "medium", signals
+    if target_hit:
+        return "medium", signals
+
+    return "weak", signals
+
+
+def _evaluate_matched_memory_relevance(
+    matched_memory: list, task_targets: dict, task: str
+) -> dict:
+    task_lower = task.lower()
+    strong: list[dict] = []
+    medium: list[dict] = []
+    weak: list[dict] = []
+    has_open_project_signal = False
+
+    for mem in matched_memory:
+        level, signals = _classify_memory_relevance(mem, task_targets, task_lower)
+        detail = {
+            "title": mem.title,
+            "type": _detect_memory_chunk_type(mem),
+            "relevance": level,
+            "signals": signals,
+        }
+        if level == "strong":
+            strong.append(detail)
+        elif level == "medium":
+            medium.append(detail)
+        else:
+            weak.append(detail)
+
+        if not has_open_project_signal:
+            has_open_project_signal = any(
+                sig in (mem.title or "").lower() + " " + (mem.snippet or "").lower()
+                for sig in _OPEN_PROJECT_SIGNALS
+            )
+
+    max_relevance = "strong" if strong else ("medium" if medium else "weak")
+    return {
+        "max_relevance": max_relevance,
+        "strong_count": len(strong),
+        "medium_count": len(medium),
+        "details": strong + medium + weak,
+        "has_open_project_signal": has_open_project_signal,
+    }
+
+
+def is_generic_continuation(task: str) -> bool:
+    """Returns True for continuation prompts that should route through
+    active-project resolution before directive matching.
+
+    This covers prompts that explicitly reference 'current project' /
+    'this project' — not every continuation phrase.
+    """
+    task_lower = task.strip().casefold()
+    for phrase in _GENERIC_CONTINUATION_TRIGGERS:
+        if phrase in task_lower:
+            return True
+    return False
 
 
 def _extract_memory_title(document: str, metadata: dict[str, Any], fallback: str) -> str:
@@ -497,8 +685,18 @@ def run_preflight(
         except Exception as e:
             warnings.append(f"Failed to match directives: {e}")
 
+        # Extract task targets for relevance classification
+        task_targets = _extract_task_targets(task)
+        memory_relevance = _evaluate_matched_memory_relevance(
+            matched_memory, task_targets, task
+        )
+
         decision = "noop"
         reason = "no strong OEM preflight signals"
+        reason_detail = ""
+        supporting_reasons: list[str] = []
+        active_project_data: dict | None = None
+
         top_match = None
         for candidate in matched_skills + matched_concepts + matched_memory:
             if top_match is None or candidate.score > top_match.score:
@@ -507,44 +705,182 @@ def run_preflight(
         top_directive_score = 0.0
         top_directive_title = ""
         is_critical_directive = False
+        is_directive_generic_title_match = False
+        top_directive_scope = ""
+        top_directive_always_on = False
         for md in matched_directives:
             score_val = md["score"]
             if score_val > top_directive_score:
                 top_directive_score = score_val
                 top_directive_title = md["title"]
-                is_critical_directive = (md.get("priority") == "critical")
+                is_critical_directive = md.get("priority") == "critical"
+                is_directive_generic_title_match = md.get("title_match_is_generic", False)
+                top_directive_scope = md.get("scope", "")
+                top_directive_always_on = md.get("always_on", False)
+        # A critical directive only counts as semantically relevant if its
+        # title match is not purely from generic tokens, or if it is global/always-on.
+        semantic_critical = is_critical_directive and (
+            top_directive_scope == "global"
+            or top_directive_always_on
+            or not is_directive_generic_title_match
+        )
 
-        # Active-work resolver for continuation prompts
+        # Generic continuation: resolve active project first
+        is_generic = is_generic_continuation(task)
+        if is_generic:
+            try:
+                proj = resolve_active_project_identity(layout.root)
+                active_project_data = {
+                    "latest_project": proj.latest_project,
+                    "selected_source": proj.selected_source,
+                    "active_projects_by_source": dict(
+                        proj.active_projects_by_source
+                    ),
+                    "conflicts": [
+                        {
+                            "type": c.type,
+                            "sources": c.sources,
+                            "severity": c.severity,
+                        }
+                        for c in proj.conflicts
+                    ],
+                    "warnings": list(proj.warnings),
+                }
+
+                if proj.latest_project:
+                    # Active project resolved — primary reason
+                    decision = "suggest"
+                    reason = "active_project_resolved"
+                    reason_detail = (
+                        f"Active project resolved to {proj.latest_project}"
+                        f" via {proj.selected_source}"
+                    )
+                    supporting_reasons.append(
+                        f"active_project_source:{proj.selected_source}"
+                    )
+                else:
+                    # No active project found
+                    decision = "suggest"
+                    reason = "active_project_unknown"
+                    reason_detail = (
+                        "Generic continuation detected but no active project "
+                        "found in session-handoff or runtime context."
+                    )
+                    warnings.append("No active project found; inspect memory or ask user.")
+
+                # Surface conflicts
+                for c in proj.conflicts:
+                    warnings.append(
+                        f"Active project conflict ({c.severity}): "
+                        f"{', '.join(c.sources)}"
+                    )
+
+                # Escalate to required for 3-way conflict
+                if proj.conflicts and proj.latest_project:
+                    for c in proj.conflicts:
+                        unique_high = set(
+                            s.project
+                            for s in proj.sources
+                            if s.confidence == "high" and s.project is not None
+                        )
+                        if c.severity == "error" and len(unique_high) >= 3:
+                            decision = "required"
+                            reason = "active_project_conflict_3way"
+                            reason_detail = (
+                                "Generic continuation with 3-way active-project conflict"
+                            )
+                            break
+
+                # Append relevant directives as supporting context
+                for md in matched_directives:
+                    if md.get("title_match_is_generic"):
+                        continue
+                    supporting_reasons.append(f"directive:{md['title']}")
+            except Exception as e:
+                logger.warning("Active-project resolution failed: %s", e)
+
+        # ---- Decision cascade (posts for generic continuation) ----
+        # Steps below only fire if generic continuation didn't already decide.
+        # For generic continuation, finished above.
+
+        # Step: strong Decision/Failure target match → required
+        if (
+            decision == "noop"
+            and memory_relevance.get("max_relevance") == "strong"
+            and not is_generic
+        ):
+            strong_details = [
+                d for d in memory_relevance["details"] if d["relevance"] == "strong"
+            ]
+            decision = "required"
+            reason = "target_file_decision_matched"
+            reason_detail = (
+                f"Matched memory contains {memory_relevance['strong_count']} strong "
+                f"Decision/Failure chunk(s) tied to task target."
+            )
+            for d in strong_details:
+                supporting_reasons.append(f"strong_memory:{d['type']}:{d['title'][:60]}")
+
+        # top_match ≥ 8.0 → required
+        if decision == "noop" and top_match is not None and top_match.score >= REQUIRED_THRESHOLD:
+            decision = "required"
+            reason = f"{top_match.kind} matched strongly: {top_match.title}"
+
+        # semantically-relevant critical directive → required
+        if decision == "noop" and semantic_critical:
+            decision = "required"
+            reason = f"critical directive matched: {top_directive_title}"
+
+        # active_work.has_active_work → required
         active_work: ActiveWorkResult | None = None
         if is_continuation_prompt(task):
             active_work = resolve_active_work(layout.root)
             if active_work.contradictions:
                 warnings.extend(
-                    f"Active-work contradiction: {c}" for c in active_work.contradictions
+                    f"Active-work contradiction: {c}"
+                    for c in active_work.contradictions
                 )
-
-        if top_match is not None and top_match.score >= REQUIRED_THRESHOLD:
-            decision = "required"
-            reason = f"{top_match.kind} matched strongly: {top_match.title}"
-        elif is_critical_directive or top_directive_score >= REQUIRED_THRESHOLD:
-            decision = "required"
-            reason = f"critical directive matched: {top_directive_title}"
-        elif active_work is not None and active_work.has_active_work:
+        if decision == "noop" and active_work is not None and active_work.has_active_work:
             decision = "required"
             n_items = len(active_work.items)
             reason = f"active work detected ({n_items} item{'s' if n_items != 1 else ''})"
             if active_work.contradictions:
                 reason += "; state surfaces conflict"
-        elif top_match is not None and top_match.score >= SUGGEST_THRESHOLD:
+
+        # top_match ≥ 4.0 → suggest
+        if decision == "noop" and top_match is not None and top_match.score >= SUGGEST_THRESHOLD:
             decision = "suggest"
             reason = f"{top_match.kind} matched: {top_match.title}"
-        elif top_directive_score >= SUGGEST_THRESHOLD:
+
+        # medium memory relevance → suggest
+        if (
+            decision == "noop"
+            and memory_relevance.get("max_relevance") == "medium"
+            and not is_generic
+        ):
+            decision = "suggest"
+            reason = "relevant_memory_matched"
+            reason_detail = (
+                f"Matched memory contains {memory_relevance['medium_count']} medium-relevance "
+                f"chunk(s) related to task domain."
+            )
+
+        # directive score ≥ 4.0, non-generic → suggest
+        if (
+            decision == "noop"
+            and top_directive_score >= SUGGEST_THRESHOLD
+            and not is_directive_generic_title_match
+        ):
             decision = "suggest"
             reason = f"directive matched: {top_directive_title}"
-        elif active_work is not None and active_work.score >= 2.0:
+
+        # active_work.score ≥ 2.0 → suggest
+        if decision == "noop" and active_work is not None and active_work.score >= 2.0:
             decision = "suggest"
             reason = f"active work signals detected (score {active_work.score:.1f})"
-        elif len(matched_memory) >= 3:
+
+        # aggregate memory → suggest
+        if decision == "noop" and len(matched_memory) >= 3:
             top_scores = sorted((m.score for m in matched_memory), reverse=True)[:5]
             if sum(top_scores) >= 8.0:
                 decision = "suggest"
@@ -554,11 +890,24 @@ def run_preflight(
         if decision == "noop":
             try:
                 proj = resolve_active_project_identity(layout.root)
+                if active_project_data is None:
+                    active_project_data = {
+                        "latest_project": proj.latest_project,
+                        "selected_source": proj.selected_source,
+                        "active_projects_by_source": dict(
+                            proj.active_projects_by_source
+                        ),
+                        "conflicts": [
+                            {
+                                "type": c.type,
+                                "sources": c.sources,
+                                "severity": c.severity,
+                            }
+                            for c in proj.conflicts
+                        ],
+                        "warnings": list(proj.warnings),
+                    }
                 for c in proj.conflicts:
-                    high_confidence_count = sum(
-                        1 for s in proj.sources
-                        if s.confidence == "high" and s.project is not None
-                    )
                     unique_high = set(
                         s.project for s in proj.sources
                         if s.confidence == "high" and s.project is not None
@@ -583,6 +932,9 @@ def run_preflight(
             except Exception as e:
                 logger.warning("Project conflict check failed: %s", e)
 
+        # Build matched_memory_summary
+        matched_memory_summary = memory_relevance.get("details", [])
+
         result = PreflightResult(
             status=decision,
             operation=OPERATION,
@@ -599,6 +951,10 @@ def run_preflight(
             selected_workflow=selected_workflow,
             context="",
             warnings=warnings,
+            active_project=active_project_data,
+            matched_memory_summary=matched_memory_summary,
+            reason_detail=reason_detail,
+            supporting_reasons=supporting_reasons,
         )
 
         context, context_warnings = render_context(result, budget)

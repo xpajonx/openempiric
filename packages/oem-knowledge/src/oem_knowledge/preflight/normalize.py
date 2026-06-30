@@ -113,7 +113,7 @@ def normalize_preflight_result(
         "memory_root": result.memory_root,
         "decision": result.decision,
         "reason": reason_code,
-        "reason_detail": result.reason,
+        "reason_detail": result.reason_detail or result.reason,
         "matched_skills": [_serialize_match(match) for match in result.matched_skills[:clamped_limit]],
         "matched_concepts": [_serialize_match(match) for match in result.matched_concepts[:clamped_limit]],
         "matched_memory": [_serialize_match(match) for match in result.matched_memory[:clamped_limit]],
@@ -123,6 +123,21 @@ def normalize_preflight_result(
         "context": result.context,
         "warnings": warnings,
     }
+
+    if result.active_project:
+        payload["active_project"] = result.active_project
+    else:
+        payload["active_project"] = None
+
+    if result.matched_memory_summary:
+        payload["matched_memory_summary"] = result.matched_memory_summary
+    else:
+        payload["matched_memory_summary"] = []
+
+    if result.supporting_reasons:
+        payload["supporting_reasons"] = result.supporting_reasons
+    else:
+        payload["supporting_reasons"] = []
 
     if suggestion:
         payload["suggestion"] = suggestion

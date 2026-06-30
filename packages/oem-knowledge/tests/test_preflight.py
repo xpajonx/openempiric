@@ -659,3 +659,222 @@ status: validated
 
     frontmatter_warnings = [w for w in result.warnings if "frontmatter" in w.lower()]
     assert len(frontmatter_warnings) >= 1
+
+
+# ---------------------------------------------------------------------------
+# P0: Exact task + target file Decision => required, never noop
+# ---------------------------------------------------------------------------
+
+
+def test_preflight_exact_task_with_target_file_decision_never_noop(preflight_project: Path):
+    db_path = preflight_project / ".oem" / ".local_vector_db" / "vectors.db"
+    _add_memory_rows(db_path, [
+        (
+            "mem_dec_essay",
+            "Decision: 2_Essay/expertise-debt/Essay_ID.md is the open project.\nIndonesian master draft, personal conversational tone.",
+            {"source": ".oem/memory/decision.md", "title": "Decision: Essay_ID.md"},
+        ),
+    ])
+    result = run_preflight(
+        "continue working on Essay_ID.md, the Indonesian expertise debt essay, polish typos and tighten prose",
+        project=str(preflight_project),
+        write_audit=False,
+    )
+    assert result.decision != "noop"
+    assert result.decision in ("suggest", "required")
+
+
+def test_preflight_exact_task_with_failure_chunk_never_noop(preflight_project: Path):
+    db_path = preflight_project / ".oem" / ".local_vector_db" / "vectors.db"
+    _add_memory_rows(db_path, [
+        (
+            "mem_fail_essay",
+            "Failure: I treated Essay_ID.md as raw material to overwrite instead of inspecting tone first.",
+            {"source": ".oem/memory/failure.md", "title": "Failure: overwrite Essay_ID.md"},
+        ),
+    ])
+    result = run_preflight(
+        "Essay_ID.md overwrite tone",
+        project=str(preflight_project),
+        write_audit=False,
+    )
+    assert result.decision != "noop"
+
+
+def test_preflight_noop_only_when_no_relevant_memory(preflight_project: Path):
+    db_path = preflight_project / ".oem" / ".local_vector_db" / "vectors.db"
+    _add_memory_rows(db_path, [
+        (
+            "mem_obs_unrelated",
+            "Observation: Something about a completely different topic.",
+            {"source": ".oem/memory/obs.md", "title": "Observation: unrelated"},
+        ),
+    ])
+    result = run_preflight(
+        "hello there",
+        project=str(preflight_project),
+        write_audit=False,
+    )
+    assert result.decision == "noop"
+
+
+# ---------------------------------------------------------------------------
+# P0: Generic current-project continuation => active-project resolver
+# ---------------------------------------------------------------------------
+
+
+def test_preflight_current_project_uses_active_project_resolver(preflight_project: Path):
+    # Seed handoff with a known project
+    handoff_dir = preflight_project / ".oem"
+    (handoff_dir / "session-handoff.md").write_text(
+        "# Current Project State\n"
+        "- Project: 2_Essay/expertise-debt/Essay_ID.md\n"
+        "- Next step: polish prose\n",
+        encoding="utf-8",
+    )
+    result = run_preflight(
+        "continue working on the current project",
+        project=str(preflight_project),
+        write_audit=False,
+    )
+    assert result.decision != "noop"
+    assert result.active_project is not None
+    assert result.active_project.get("latest_project") is not None
+    assert "active_project" in result.reason
+
+
+def test_preflight_current_project_conflict_returns_suggest(preflight_project: Path):
+    handoff_dir = preflight_project / ".oem"
+    (handoff_dir / "session-handoff.md").write_text(
+        "# Current Project State\n"
+        "- Project: 2_Essay/expertise-debt/Essay_ID.md\n",
+        encoding="utf-8",
+    )
+    runtime_dir = preflight_project / ".oem" / ".runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / "context.md").write_text("Project: /other/project\n", encoding="utf-8")
+
+    result = run_preflight(
+        "continue working on the current project",
+        project=str(preflight_project),
+        write_audit=False,
+    )
+    assert result.decision == "suggest"
+    conflict_warnings = [w for w in result.warnings if "conflict" in w.lower()]
+    assert len(conflict_warnings) >= 1
+
+
+# ---------------------------------------------------------------------------
+# P0: Directive guardrail — generic token overlap does not force required
+# ---------------------------------------------------------------------------
+
+
+def test_preflight_directive_title_generic_token_overlap_downgraded(preflight_project: Path):
+    from oem_knowledge.instructions.matcher import _title_overlap_is_generic
+
+    assert _title_overlap_is_generic(
+        "Current Content-Machine Contract", "continue working on the current project"
+    )
+    assert not _title_overlap_is_generic(
+        "Deployment Rules", "deploy the new feature"
+    )
+
+
+def test_preflight_semantically_irrelevant_critical_directive_does_not_force_required(
+    preflight_project: Path,
+):
+    from oem_knowledge.instructions import get_db_connection
+    from oem_knowledge.instructions.ledger import ensure_schema
+    from oem_knowledge.runtime.active_work import _read_json_safe
+
+    ledger_path = preflight_project / ".oem" / "instructions" / "ledger.db"
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = get_db_connection(ledger_path)
+    ensure_schema(conn)
+    conn.execute(
+        """INSERT OR REPLACE INTO directives (
+            id, source_id, source_path, source_hash,
+            line_start, line_end, title, scope, triggers_json,
+            priority, rule, forbidden_actions_json, related_concepts_json,
+            related_skills_json, related_workflows_json, status, indexed_at
+        ) VALUES (
+            'dir_001', 'src_001', '/fake/rules.md', 'abc123',
+            1, 3, 'Current Content-Machine Contract', 'project', '[]',
+            'critical', 'Always follow the content-machine contract. Must use approved tone.',
+            '[]', '[]', '[]', '[]', 'active', '2025-01-01T00:00:00Z'
+        )"""
+    )
+    conn.commit()
+    conn.close()
+
+    # handoff and context define a current project
+    handoff_dir = preflight_project / ".oem"
+    (handoff_dir / "session-handoff.md").write_text(
+        "# Current Project State\n"
+        "- Project: 2_Essay/expertise-debt/Essay_ID.md\n",
+        encoding="utf-8",
+    )
+
+    result = run_preflight(
+        "continue working on the current project",
+        project=str(preflight_project),
+        write_audit=False,
+    )
+    # Must not be required from the generic-only title match
+    assert result.decision != "required"
+
+
+# ---------------------------------------------------------------------------
+# P0: Explanation / structured output
+# ---------------------------------------------------------------------------
+
+
+def test_preflight_matched_memory_summary_present(preflight_project: Path):
+    db_path = preflight_project / ".oem" / ".local_vector_db" / "vectors.db"
+    _add_memory_rows(db_path, [
+        (
+            "mem_dec_essay",
+            "Decision: Essay_ID.md is the open project.\nIndonesian master draft.",
+            {"source": ".oem/memory/decision.md", "title": "Decision: Essay_ID.md"},
+        ),
+    ])
+    result = run_preflight(
+        "continue working on Essay_ID.md, polish prose",
+        project=str(preflight_project),
+        write_audit=False,
+    )
+    assert len(result.matched_memory_summary) >= 1
+    assert any(d["relevance"] in ("strong", "medium") for d in result.matched_memory_summary)
+
+
+def test_preflight_supporting_reasons_includes_relevant_info(preflight_project: Path):
+    db_path = preflight_project / ".oem" / ".local_vector_db" / "vectors.db"
+    _add_memory_rows(db_path, [
+        (
+            "mem_dec_essay",
+            "Decision: Essay_ID.md is the open project.\nIndonesian master draft.",
+            {"source": ".oem/memory/decision.md", "title": "Decision: Essay_ID.md"},
+        ),
+    ])
+    result = run_preflight(
+        "continue working on Essay_ID.md, polish prose",
+        project=str(preflight_project),
+        write_audit=False,
+    )
+    assert result.decision != "noop"
+    assert result.matched_memory_summary  # non-empty list
+
+
+def test_preflight_result_json_serializable(preflight_project: Path):
+    import json
+    result = run_preflight("hello there", project=str(preflight_project), write_audit=False)
+    from oem_knowledge.preflight.normalize import normalize_preflight_result
+    payload = normalize_preflight_result(result)
+    # Verify backward compatible
+    assert "decision" in payload
+    assert "reason" in payload
+    # Verify new fields are present
+    assert "active_project" in payload
+    assert "matched_memory_summary" in payload
+    assert "supporting_reasons" in payload
+    json.dumps(payload)  # must not raise

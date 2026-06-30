@@ -4,6 +4,29 @@ import json
 import fnmatch
 from typing import Any
 
+GENERIC_WORDS: frozenset[str] = frozenset({
+    "current", "project", "content", "work", "continue",
+    "session", "context", "file", "task", "next", "now",
+    "state", "start", "working", "pick", "left", "resume",
+    "machine", "contract",
+})
+
+
+def _tokenize_lower(text: str) -> set[str]:
+    return set(re.findall(r"\b[a-zA-Z0-9_\-]{3,}\b", text.lower()))
+
+
+def _title_overlap_is_generic(title: str, task: str) -> bool:
+    """Return True if the only tokens overlapping between title and task
+    are generic words."""
+    title_tokens = _tokenize_lower(title)
+    task_tokens = _tokenize_lower(task)
+    overlap = title_tokens & task_tokens
+    if not overlap:
+        return False
+    non_generic = overlap - GENERIC_WORDS
+    return len(non_generic) == 0
+
 def match_directives(
     task: str,
     active_directives: list[dict],
@@ -57,10 +80,16 @@ def match_directives(
             score += 6.0
             reasons.append("workflow directive match")
             
-        # 4. Directive title match: +5
+        # 4. Directive title match: +5 (halved if generic-token-only overlap)
+        title_match_is_generic = False
         if title_lower and title_lower in task_lower:
-            score += 5.0
-            reasons.append(f"title match: '{title_lower}'")
+            title_match_is_generic = _title_overlap_is_generic(title_lower, task_lower)
+            if title_match_is_generic:
+                score += 2.5
+                reasons.append(f"title match (generic overlap): '{title_lower}'")
+            else:
+                score += 5.0
+                reasons.append(f"title match: '{title_lower}'")
             
         # 5. Directive scope match: +4
         if scope_lower and (scope_lower in task_lower or scope_lower.replace("_", " ") in task_lower):
@@ -103,7 +132,9 @@ def match_directives(
                 "related_concepts": list(related_concepts),
                 "related_skills": list(related_skills),
                 "priority": priority,
-                "scope": d["scope"]
+                "scope": d["scope"],
+                "title_match_is_generic": title_match_is_generic,
+                "always_on": d.get("always_on", False) or d.get("scope") == "global",
             })
             
     # Sort matched descending by score
