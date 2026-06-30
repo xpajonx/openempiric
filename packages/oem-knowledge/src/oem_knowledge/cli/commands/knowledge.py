@@ -459,6 +459,7 @@ def _run_knowledge_command_impl(args):
 
     elif args.command == "health":
         from oem_knowledge.health import build_runtime_health
+        from oem_knowledge.runtime.active_work import resolve_active_project
         health_res = build_runtime_health(project)
 
         stale = eng.state.detect_stale_concepts(args.stale_sessions, project)
@@ -498,8 +499,19 @@ def _run_knowledge_command_impl(args):
         if conflicts:
             for c in conflicts:
                 lines.append(f"  ✗ Conflict between {c['name_a']} ({c['concept_a']}) and {c['name_b']} ({c['concept_b']})")
-                lines.append(f"    Description: {c['description']}")
-        else:
+
+        # Active-project conflicts
+        harness = eng._resolve_harness(project)
+        proj_result = resolve_active_project(Path(harness))
+        if proj_result.conflicts:
+            for c in proj_result.conflicts:
+                vals = ", ".join(
+                    f"{s.source}={s.project or '?'}"
+                    for s in proj_result.sources
+                    if s.project is not None
+                )
+                lines.append(f"  {'✗' if c.severity == 'error' else '⚠'} Active project mismatch ({c.severity}): [{vals}]")
+        if not conflicts and not proj_result.conflicts:
             lines.append("  None")
             
         print(render_panel("Knowledge Health Scan", lines, status="stats"))

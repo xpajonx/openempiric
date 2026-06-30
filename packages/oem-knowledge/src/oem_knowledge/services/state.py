@@ -653,8 +653,19 @@ class StateService:
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
 
+        # Include explicit project in outcomes entry when provided
+        if project and isinstance(project, str):
+            log_entry["project"] = project
+
         with open(outcomes_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(log_entry) + "\n")
+
+        # Conditional structured handoff update — only for explicit project-level outcomes
+        if project and isinstance(project, str) and outcome in ("success", "failure", "partial"):
+            try:
+                self._update_structured_handoff(harness, project, resolved_session_id)
+            except Exception as e:
+                logger.warning("Failed to update structured handoff: %s", e)
 
         self.engine.materialization._log_action(
             f"Outcome | Logged session outcome '{outcome}' for {resolved_session_id} (satisfaction: {resolved_satisfaction})",
@@ -671,6 +682,49 @@ class StateService:
             "goal_satisfaction": resolved_satisfaction,
             "metrics": log_entry["metrics"],
         }
+
+    def _update_structured_handoff(self, harness: Path, project_val: str, session_id: str) -> None:
+        """Update .oem/session-handoff.json only when explicit project is supplied
+        and handoff is missing or the project differs."""
+        from oem_knowledge.runtime.active_work import _normalize_project_identity
+        import datetime
+
+        handoff_json = harness / "session-handoff.json"
+        now_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        current: dict = {}
+        if handoff_json.exists():
+            try:
+                current = json.loads(handoff_json.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                current = {}
+
+        existing_project = current.get("project_root") or current.get("project")
+        existing_norm = _normalize_project_identity(existing_project) if existing_project else ""
+        new_norm = _normalize_project_identity(project_val)
+
+        if existing_norm == new_norm:
+            return  # Same project, no update needed
+
+        previous_entry: dict = {}
+        if existing_project:
+            previous_entry = {
+                "project_root": current.get("project_root") or existing_project,
+                "project_label": current.get("project_label"),
+                "updated_at": current.get("updated_at", now_iso),
+            }
+
+        handoff_json.write_text(json.dumps({
+            "schema_version": "1.0.0",
+            "project_root": str(Path(project_val).resolve()) if Path(project_val).is_absolute() else project_val,
+            "project_label": Path(project_val).name if Path(project_val).is_absolute() else project_val,
+            "updated_at": now_iso,
+            "source_session_id": session_id,
+            "status": "active",
+            "primary_objective": current.get("primary_objective", ""),
+            "next_action": current.get("next_action", ""),
+            "previous": previous_entry,
+        }, indent=2) + "\n", encoding="utf-8")
 
     def detect_stale_concepts(self, n_sessions: int = 5, project: str | None = None) -> list[dict]:
         """Identify concepts that have not been referenced in the last N sessions."""

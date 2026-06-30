@@ -404,9 +404,9 @@ def build_runtime_health(project: str | None = None) -> dict:
         runtime_checks.append({"name": f"Outcome Tracking not ready: {e}", "status": "error"})
         runtime_status = "error"
 
-    # Active-work surface consistency
+    # Active-work surface consistency + project conflict detection
     try:
-        from oem_knowledge.runtime.active_work import resolve_active_work
+        from oem_knowledge.runtime.active_work import resolve_active_work, resolve_active_project
         aw_memory_root = eng._resolve_harness(project)
         aw = resolve_active_work(Path(aw_memory_root))
         if aw.contradictions:
@@ -415,6 +415,28 @@ def build_runtime_health(project: str | None = None) -> dict:
             runtime_status = "error"
         else:
             runtime_checks.append({"name": "Active-work surfaces consistent", "status": "success"})
+
+        # Project-level conflict detection
+        proj = resolve_active_project(Path(aw_memory_root))
+        if proj.conflicts:
+            for c in proj.conflicts:
+                severity = "error" if c.severity == "error" else "warn"
+                sources = ", ".join(c.sources)
+                vals = ", ".join(
+                    f"{s.source}={s.project or '?'}"
+                    for s in proj.sources
+                    if s.project is not None
+                )
+                runtime_checks.append({
+                    "name": f"Active project conflict ({c.type}): [{vals}]",
+                    "status": severity,
+                })
+                if severity == "error":
+                    runtime_status = "error"
+                elif runtime_status == "success":
+                    runtime_status = "warn"
+        else:
+            runtime_checks.append({"name": "Active-project sources agree", "status": "success"})
     except Exception as e:
         runtime_checks.append({"name": f"Active-work consistency check failed: {e}", "status": "warn"})
         if runtime_status == "success":

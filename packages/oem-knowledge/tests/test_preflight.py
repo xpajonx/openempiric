@@ -590,3 +590,23 @@ def test_preflight_memory_decision_consistent_across_audit_modes(preflight_proje
     )
     assert with_audit.decision == without_audit.decision
     assert with_audit.reason == without_audit.reason
+
+
+def test_preflight_low_confidence_handoff_conflict_does_not_become_required(preflight_project: Path):
+    runtime_dir = preflight_project / ".oem" / ".runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / "context.md").write_text(
+        "Project: /project/alpha\n",
+        encoding="utf-8",
+    )
+    handoff_dir = preflight_project / ".oem"
+    (handoff_dir / "session-handoff.md").write_text(
+        "# Current Project State\n"
+        "- Primary objective: fix onboarding copy\n"
+        "- Next: deploy to prod\n",
+        encoding="utf-8",
+    )
+
+    result = run_preflight("hello there", project=str(preflight_project), write_audit=False)
+    assert result.decision != "required"
+    assert result.decision in ("noop", "suggest")

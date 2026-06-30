@@ -18,7 +18,12 @@ from .scoring import REQUIRED_THRESHOLD, SUGGEST_THRESHOLD, SOURCE_HINT_WEIGHT, 
 from .triggers import contains_phrase, normalize_text, tokenize, unique_tokens
 from ..project_layout import ProjectLayout
 from ..project import ProjectMismatchError, ProjectUnresolvedError, resolve_active_project
-from ..runtime.active_work import is_continuation_prompt, resolve_active_work, ActiveWorkResult
+from ..runtime.active_work import (
+    is_continuation_prompt,
+    resolve_active_work,
+    resolve_active_project as resolve_active_project_identity,
+    ActiveWorkResult,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -580,6 +585,39 @@ def run_preflight(
             if sum(top_scores) >= 8.0:
                 decision = "suggest"
                 reason = f"multiple memory signals detected ({len(matched_memory)} hits, aggregate {sum(top_scores):.1f})"
+
+        # Active-project conflict escalation — only if no higher-priority decision
+        if decision == "noop":
+            try:
+                proj = resolve_active_project_identity(layout.root)
+                for c in proj.conflicts:
+                    high_confidence_count = sum(
+                        1 for s in proj.sources
+                        if s.confidence == "high" and s.project is not None
+                    )
+                    unique_high = set(
+                        s.project for s in proj.sources
+                        if s.confidence == "high" and s.project is not None
+                    )
+                    if c.severity == "error" and len(unique_high) >= 3:
+                        decision = "required"
+                        reason = f"active project conflict (3-way): {', '.join(c.sources)}"
+                        break
+                    elif c.severity == "warning" and len(unique_high) >= 2:
+                        decision = "suggest"
+                        reason = f"active project conflict (2-way): {', '.join(c.sources)}"
+                        break
+                    else:
+                        decision = "suggest"
+                        reason = f"active project signals differ: {', '.join(c.sources)}"
+                        break
+                for c in proj.conflicts:
+                    warnings.append(
+                        f"Active project conflict ({c.severity}): "
+                        f"{', '.join(c.sources)}"
+                    )
+            except Exception as e:
+                logger.warning("Project conflict check failed: %s", e)
 
         result = PreflightResult(
             status=decision,

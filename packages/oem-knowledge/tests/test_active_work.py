@@ -8,7 +8,19 @@ import pytest
 from oem_knowledge.runtime.active_work import (
     is_continuation_prompt,
     resolve_active_work,
+    resolve_active_project,
+    _normalize_project_identity,
+    _parse_project_from_handoff_md,
+    _parse_project_from_context_md,
+    _parse_project_from_handoff_json,
+    _parse_project_from_outcome,
     ActiveWorkResult,
+    ActiveProjectResult,
+    SOURCE_HANDOFF_JSON,
+    SOURCE_HANDOFF_MD,
+    SOURCE_STATE_HANDOFF_MD,
+    SOURCE_RUNTIME_CONTEXT,
+    SOURCE_LATEST_OUTCOME,
 )
 
 
@@ -137,6 +149,190 @@ def test_resolve_active_work_outcomes_tail(tmp_path: Path):
 
     assert result.has_active_work is True
     assert any(item.source == "outcomes.jsonl" for item in result.items)
+
+
+# ---------------------------------------------------------------------------
+# Resolve active project tests
+# ---------------------------------------------------------------------------
+
+class TestResolveActiveProject:
+    def test_root_json_over_markdown(self, tmp_path: Path):
+        json_path = tmp_path / "session-handoff.json"
+        json_path.write_text(json.dumps({
+            "schema_version": "1.0.0",
+            "project_root": "/home/user/my-project",
+            "updated_at": "2026-01-01T00:00:00Z",
+        }), encoding="utf-8")
+        md_path = tmp_path / "session-handoff.md"
+        md_path.write_text("Primary objective: something else\n", encoding="utf-8")
+
+        result = resolve_active_project(tmp_path)
+        assert result.latest_project is not None
+        assert result.selected_source == SOURCE_HANDOFF_JSON
+        assert _normalize_project_identity(result.latest_project) == _normalize_project_identity("/home/user/my-project")
+
+    def test_keeps_state_handoff_compatibility(self, tmp_path: Path):
+        state_dir = tmp_path / "state"
+        state_dir.mkdir(parents=True)
+        md_path = state_dir / "session-handoff.md"
+        md_path.write_text("Project: state-project\n", encoding="utf-8")
+
+        result = resolve_active_project(tmp_path)
+        assert result.latest_project is not None
+        assert result.selected_source == SOURCE_STATE_HANDOFF_MD
+
+    def test_primary_objective_not_used_as_project_identity(self, tmp_path: Path):
+        md_path = tmp_path / "session-handoff.md"
+        md_path.write_text("Primary objective: fix onboarding copy\n", encoding="utf-8")
+
+        result = resolve_active_project(tmp_path)
+        assert result.selected_source != SOURCE_HANDOFF_MD or result.latest_project is None
+
+    def test_explicit_project_marker_used_over_primary_objective(self, tmp_path: Path):
+        md_path = tmp_path / "session-handoff.md"
+        md_path.write_text(
+            "Project: the-real-project\n"
+            "Primary objective: fix onboarding copy\n",
+            encoding="utf-8",
+        )
+
+        result = resolve_active_project(tmp_path)
+        assert result.latest_project == "the-real-project"
+        assert result.selected_source == SOURCE_HANDOFF_MD
+
+    def test_normalizes_trailing_slash_paths(self, tmp_path: Path):
+        json_path = tmp_path / "session-handoff.json"
+        json_path.write_text(json.dumps({
+            "project_root": "/home/user/my-project/",
+        }), encoding="utf-8")
+        md_path = tmp_path / "session-handoff.md"
+        md_path.write_text("Project: /home/user/my-project\n", encoding="utf-8")
+
+        result = resolve_active_project(tmp_path)
+        assert len(result.conflicts) == 0
+
+    def test_does_not_false_positive_same_project_path(self, tmp_path: Path):
+        json_path = tmp_path / "session-handoff.json"
+        json_path.write_text(json.dumps({
+            "project_root": "/home/user/project-alpha",
+        }), encoding="utf-8")
+        md_path = tmp_path / "session-handoff.md"
+        md_path.write_text("Project: /home/user/project-beta\n", encoding="utf-8")
+
+        result = resolve_active_project(tmp_path)
+        assert len(result.conflicts) >= 1
+
+    def test_malformed_json_falls_back_to_markdown_with_warning(self, tmp_path: Path):
+        json_path = tmp_path / "session-handoff.json"
+        json_path.write_text("not valid json {{", encoding="utf-8")
+        md_path = tmp_path / "session-handoff.md"
+        md_path.write_text("Project: markdown-project\n", encoding="utf-8")
+
+        result = resolve_active_project(tmp_path)
+        assert len(result.warnings) >= 1
+        assert "Malformed" in result.warnings[0]
+        assert result.latest_project == "markdown-project"
+
+    def test_2way_high_confidence_conflict(self, tmp_path: Path):
+        json_path = tmp_path / "session-handoff.json"
+        json_path.write_text(json.dumps({"project_root": "/project/alpha"}), encoding="utf-8")
+        md_path = tmp_path / "session-handoff.md"
+        md_path.write_text("Project: /project/beta\n", encoding="utf-8")
+        ctx_dir = tmp_path / ".runtime"
+        ctx_dir.mkdir(parents=True)
+        (ctx_dir / "context.md").write_text("Project: /project/alpha\n", encoding="utf-8")
+
+        result = resolve_active_project(tmp_path)
+        has_2way = any(c.severity == "warning" for c in result.conflicts)
+        assert has_2way
+
+    def test_3way_high_confidence_conflict(self, tmp_path: Path):
+        json_path = tmp_path / "session-handoff.json"
+        json_path.write_text(json.dumps({"project_root": "/project/alpha"}), encoding="utf-8")
+        md_path = tmp_path / "session-handoff.md"
+        md_path.write_text("Project: /project/beta\n", encoding="utf-8")
+        ctx_dir = tmp_path / ".runtime"
+        ctx_dir.mkdir(parents=True)
+        (ctx_dir / "context.md").write_text("Project: /project/gamma\n", encoding="utf-8")
+
+        result = resolve_active_project(tmp_path)
+        has_3way = any(c.severity == "error" for c in result.conflicts)
+        assert has_3way
+
+
+class TestParseProjectFromHandoffMd:
+    def test_project_marker(self):
+        project, conf = _parse_project_from_handoff_md("Project: my-app\n")
+        assert project == "my-app"
+        assert conf == "high"
+
+    def test_active_project_marker(self):
+        project, conf = _parse_project_from_handoff_md("- Active project: my-app\n")
+        assert project == "my-app"
+        assert conf == "high"
+
+    def test_project_root_marker(self):
+        project, conf = _parse_project_from_handoff_md("- Project root: /home/user/my-app\n")
+        assert project == "/home/user/my-app"
+        assert conf == "high"
+
+    def test_primary_objective_low_confidence(self):
+        project, conf = _parse_project_from_handoff_md("Primary objective: fix bug\n")
+        assert project is None
+        assert conf == "low"
+
+
+class TestParseProjectFromContextMd:
+    def test_open_project_pattern(self):
+        project, conf = _parse_project_from_context_md(
+            "- 2_Essay/expertise-debt/Essay_ID.md is the open project.\n"
+        )
+        assert project is not None
+        assert "expertise-debt" in project
+        assert conf == "high"
+
+
+class TestNormalizeProjectIdentity:
+    def test_strips_trailing_slash(self):
+        n1 = _normalize_project_identity("/home/user/project/")
+        n2 = _normalize_project_identity("/home/user/project")
+        assert n1 == n2
+
+    def test_handles_none(self):
+        assert _normalize_project_identity(None) == ""
+
+    def test_handles_empty(self):
+        assert _normalize_project_identity("") == ""
+
+
+class TestParseProjectFromHandoffJson:
+    def test_project_root(self):
+        data = {"project_root": "/home/user/app"}
+        proj, conf, label = _parse_project_from_handoff_json(data)
+        assert proj == "/home/user/app"
+        assert conf == "high"
+
+    def test_project_label(self):
+        data = {"project_root": "/home/user/app", "project_label": "My App"}
+        proj, conf, label = _parse_project_from_handoff_json(data)
+        assert label == "My App"
+
+    def test_non_dict(self):
+        proj, conf, label = _parse_project_from_handoff_json("string")
+        assert proj is None
+        assert conf == "low"
+
+
+class TestParseProjectFromOutcome:
+    def test_project_field(self):
+        proj, conf = _parse_project_from_outcome({"project": "my-app", "outcome": "success"})
+        assert proj == "my-app"
+        assert conf == "high"
+
+    def test_no_project_field(self):
+        proj, conf = _parse_project_from_outcome({"outcome": "success"})
+        assert proj is None
+        assert conf == "low"
 
 
 def test_resolve_active_work_score_capped(tmp_path: Path):
