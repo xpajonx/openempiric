@@ -404,6 +404,22 @@ def build_runtime_health(project: str | None = None) -> dict:
         runtime_checks.append({"name": f"Outcome Tracking not ready: {e}", "status": "error"})
         runtime_status = "error"
 
+    # Active-work surface consistency
+    try:
+        from oem_knowledge.runtime.active_work import resolve_active_work
+        aw_memory_root = eng._resolve_harness(project)
+        aw = resolve_active_work(Path(aw_memory_root))
+        if aw.contradictions:
+            for c in aw.contradictions:
+                runtime_checks.append({"name": f"Surface contradiction: {c}", "status": "error"})
+            runtime_status = "error"
+        else:
+            runtime_checks.append({"name": "Active-work surfaces consistent", "status": "success"})
+    except Exception as e:
+        runtime_checks.append({"name": f"Active-work consistency check failed: {e}", "status": "warn"})
+        if runtime_status == "success":
+            runtime_status = "warn"
+
     # Reflection Diagnostics
     reflection_diagnostic = {
         "structured_enabled": structured_enabled,

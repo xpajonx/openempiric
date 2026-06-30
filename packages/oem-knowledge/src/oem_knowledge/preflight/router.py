@@ -18,6 +18,7 @@ from .scoring import REQUIRED_THRESHOLD, SUGGEST_THRESHOLD, SOURCE_HINT_WEIGHT, 
 from .triggers import contains_phrase, normalize_text, tokenize, unique_tokens
 from ..project_layout import ProjectLayout
 from ..project import ProjectMismatchError, ProjectUnresolvedError, resolve_active_project
+from ..runtime.active_work import is_continuation_prompt, resolve_active_work, ActiveWorkResult
 
 logger = logging.getLogger(__name__)
 
@@ -130,7 +131,7 @@ def _first_paragraph(body: str) -> str | None:
 
 def _parse_skill_file(path: Path, default_status: str, warnings: list[str]) -> SkillMetadata | None:
     try:
-        text = _read_text_prefix(path)
+        text = path.read_text(encoding="utf-8")
     except Exception as exc:
         warnings.append(f"Could not read skill metadata from {path}: {exc}")
         return None
@@ -194,7 +195,7 @@ def _load_skills(layout: ProjectLayout, include_candidates: bool, warnings: list
 
 def _load_concept_frontmatter(path: Path, warnings: list[str]) -> tuple[dict[str, Any], str]:
     try:
-        text = _read_text_prefix(path)
+        text = path.read_text(encoding="utf-8")
     except Exception as exc:
         warnings.append(f"Could not read concept metadata from {path}: {exc}")
         return {}, ""
@@ -530,7 +531,7 @@ def run_preflight(
         decision = "noop"
         reason = "no strong OEM preflight signals"
         top_match = None
-        for candidate in matched_skills + matched_concepts:
+        for candidate in matched_skills + matched_concepts + matched_memory:
             if top_match is None or candidate.score > top_match.score:
                 top_match = candidate
 
@@ -544,18 +545,36 @@ def run_preflight(
                 top_directive_title = md["title"]
                 is_critical_directive = (md.get("priority") == "critical")
 
+        # Active-work resolver for continuation prompts
+        active_work: ActiveWorkResult | None = None
+        if is_continuation_prompt(task):
+            active_work = resolve_active_work(layout.root)
+            if active_work.contradictions:
+                warnings.extend(
+                    f"Active-work contradiction: {c}" for c in active_work.contradictions
+                )
+
         if top_match is not None and top_match.score >= REQUIRED_THRESHOLD:
             decision = "required"
             reason = f"{top_match.kind} matched strongly: {top_match.title}"
         elif is_critical_directive or top_directive_score >= REQUIRED_THRESHOLD:
             decision = "required"
             reason = f"critical directive matched: {top_directive_title}"
+        elif active_work is not None and active_work.has_active_work:
+            decision = "required"
+            n_items = len(active_work.items)
+            reason = f"active work detected ({n_items} item{'s' if n_items != 1 else ''})"
+            if active_work.contradictions:
+                reason += "; state surfaces conflict"
         elif top_match is not None and top_match.score >= SUGGEST_THRESHOLD:
             decision = "suggest"
             reason = f"{top_match.kind} matched: {top_match.title}"
         elif top_directive_score >= SUGGEST_THRESHOLD:
             decision = "suggest"
             reason = f"directive matched: {top_directive_title}"
+        elif active_work is not None and active_work.score >= 2.0:
+            decision = "suggest"
+            reason = f"active work signals detected (score {active_work.score:.1f})"
 
         result = PreflightResult(
             status=decision,

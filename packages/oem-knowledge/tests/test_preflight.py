@@ -411,3 +411,76 @@ def test_preflight_no_mutation_snapshot_allows_only_audit_log(preflight_project:
     assert before_files == after_files
     assert before_dirs == after_dirs
     assert (preflight_project / ".oem" / "preflight" / "preflight_events.jsonl").exists()
+
+
+def test_preflight_continuation_prompt_returns_required_with_active_work(preflight_project: Path):
+    state_dir = preflight_project / ".oem" / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    _write_json(
+        state_dir / "todos.json",
+        [{"content": "Implement active-work resolver", "status": "in_progress"}],
+    )
+
+    result = run_preflight("continue working on the project", project=str(preflight_project), write_audit=False)
+
+    assert result.decision == "required"
+    assert "active work detected" in result.reason
+
+
+def test_preflight_continuation_noop_without_any_active_work_signal(preflight_project: Path):
+    result = run_preflight("continue", project=str(preflight_project), write_audit=False)
+
+    # No active work files exist in the fixture, so it should be noop
+    assert result.decision == "noop"
+
+
+def test_preflight_continuation_contradiction_adds_warning(preflight_project: Path):
+    state_dir = preflight_project / ".oem" / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    _write_json(
+        state_dir / "todos.json",
+        [{"content": "Build feature X", "status": "in_progress"}],
+    )
+    runtime_dir = preflight_project / ".oem" / ".runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / "context.md").write_text("Working on user authentication\n", encoding="utf-8")
+    (state_dir / "session-handoff.md").write_text("Finishing the payment flow\n", encoding="utf-8")
+
+    result = run_preflight("continue where I left off", project=str(preflight_project), write_audit=False)
+
+    assert any("Active-work contradiction" in w for w in result.warnings)
+
+
+def test_preflight_memory_match_affects_decision(preflight_project: Path):
+    result = run_preflight("materialization collision behavior", project=str(preflight_project), write_audit=False)
+
+    assert result.decision == "suggest"
+    assert any(m.title == "Materialization Collision" for m in result.matched_memory)
+
+
+def test_preflight_noop_for_trivial_continuation_without_active_work(preflight_project: Path):
+    result = run_preflight("continue", project=str(preflight_project), write_audit=False)
+
+    assert result.decision in ("noop", "suggest")
+
+
+def test_preflight_frontmatter_beyond_16000_chars_does_not_warn(preflight_project: Path):
+    wiki_concept = preflight_project / ".oem" / "wiki" / "concept_large.md"
+    long_ids = "source_event_ids:\n  - " + "\n  - ".join([f"ev_{i}" for i in range(2000)])
+    content = f"""---
+concept_id: concept_large
+title: Large Concept
+status: validated
+{long_ids}
+---
+
+# Large Concept
+
+Body content.
+"""
+    wiki_concept.write_text(content, encoding="utf-8")
+
+    result = run_preflight("large concept", project=str(preflight_project), write_audit=False)
+
+    frontmatter_warnings = [w for w in result.warnings if "frontmatter" in w.lower()]
+    assert len(frontmatter_warnings) == 0
