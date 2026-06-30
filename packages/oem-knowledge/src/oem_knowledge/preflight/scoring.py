@@ -15,6 +15,15 @@ MEMORY_HIT_WEIGHT = 2.0
 SOURCE_HINT_WEIGHT = 1.0
 STALE_STATUS_PENALTY = 4.0
 
+# Memory type weight multipliers (applied to MEMORY_HIT_WEIGHT)
+# Decision → 6.0 (≥4 SUGGEST), Failure → 5.0, Outcome → 4.0, Observation → 2.0
+MEMORY_TYPE_WEIGHTS: dict[str, float] = {
+    "decision": 3.0,
+    "failure": 2.5,
+    "outcome": 2.0,
+    "observation": 1.0,
+}
+
 REQUIRED_THRESHOLD = 8.0
 SUGGEST_THRESHOLD = 4.0
 
@@ -106,12 +115,25 @@ def score_concept(task: str, concept: ConceptMetadata) -> ScoreBreakdown:
     return ScoreBreakdown(score=max(score, 0.0), reason=", ".join(reasons) or "no significant concept signals")
 
 
+def _detect_memory_type(title: str | None, snippet: str | None) -> str:
+    text = (title or "") + " " + (snippet or "")
+    first_line = text.lstrip().split("\n", 1)[0].strip().lower()
+    for t in ("decision:", "failure:", "outcome:"):
+        if first_line.startswith(t):
+            return t.rstrip(":")
+    return "observation"
+
+
 def score_memory(task: str, memory: MemoryMetadata) -> ScoreBreakdown:
     task_tokens = unique_tokens(task)
-    memory_tokens = unique_tokens(" ".join(filter(None, [memory.title, memory.snippet or ""])))
+    memory_text = " ".join(filter(None, [memory.title, memory.snippet or ""]))
+    memory_tokens = unique_tokens(memory_text)
     overlap_ratio = lexical_overlap(task_tokens, memory_tokens)
     if overlap_ratio >= 0.15 or len(shared_tokens(task_tokens, memory_tokens)) >= 2:
-        return ScoreBreakdown(score=MEMORY_HIT_WEIGHT, reason="memory lexical hit")
+        memory_type = _detect_memory_type(memory.title, memory.snippet)
+        multiplier = MEMORY_TYPE_WEIGHTS.get(memory_type, 1.0)
+        score = MEMORY_HIT_WEIGHT * multiplier
+        return ScoreBreakdown(score=score, reason=f"memory {memory_type} hit")
     return ScoreBreakdown(score=0.0, reason="no significant memory signals")
 
 

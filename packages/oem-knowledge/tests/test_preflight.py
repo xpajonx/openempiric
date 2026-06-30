@@ -484,3 +484,109 @@ Body content.
 
     frontmatter_warnings = [w for w in result.warnings if "frontmatter" in w.lower()]
     assert len(frontmatter_warnings) == 0
+
+
+def _add_memory_rows(db_path: Path, rows: list[tuple[str, str, dict]]) -> None:
+    conn = sqlite3.connect(str(db_path))
+    for row_id, document, metadata in rows:
+        conn.execute(
+            "INSERT OR IGNORE INTO chunks (id, document, metadata, embedding) VALUES (?, ?, ?, ?)",
+            (row_id, document, json.dumps(metadata), None),
+        )
+    conn.commit()
+    conn.close()
+
+
+def test_preflight_decision_memory_triggers_required(preflight_project: Path):
+    db_path = preflight_project / ".oem" / ".local_vector_db" / "vectors.db"
+    _add_memory_rows(db_path, [
+        (
+            "mem_decision_1",
+            "Decision: Essay_ID.md is the open project.\n1,667 words, Indonesian master draft.",
+            {"source": ".oem/memory/decision.md", "title": "Decision: Essay_ID.md"},
+        ),
+    ])
+    result = run_preflight(
+        "Essay_ID.md is the open project",
+        project=str(preflight_project),
+        write_audit=False,
+    )
+    assert result.decision in ("suggest", "required")
+    assert any(m.score >= 4.0 for m in result.matched_memory)
+
+
+def test_preflight_failure_memory_triggers_suggest(preflight_project: Path):
+    db_path = preflight_project / ".oem" / ".local_vector_db" / "vectors.db"
+    _add_memory_rows(db_path, [
+        (
+            "mem_failure_1",
+            "Failure: I treated Essay_ID.md as raw material to overwrite instead of inspecting tone first.",
+            {"source": ".oem/memory/failure.md", "title": "Failure: overwrite"},
+        ),
+    ])
+    result = run_preflight(
+        "Essay_ID.md overwrite tone",
+        project=str(preflight_project),
+        write_audit=False,
+    )
+    assert result.decision in ("suggest", "required")
+    assert any(m.score >= 4.0 for m in result.matched_memory)
+
+
+def test_preflight_aggregate_memory_triggers_suggest(preflight_project: Path):
+    db_path = preflight_project / ".oem" / ".local_vector_db" / "vectors.db"
+    _add_memory_rows(db_path, [
+        (
+            f"mem_obs_{i}",
+            f"Observation: Essay_ID.md reference chunk {i} about Indonesian expertise debt essay and personal tone.",
+            {"source": ".oem/memory/obs.md", "title": f"Observation {i}"},
+        )
+        for i in range(5)
+    ])
+    result = run_preflight(
+        "Indonesian expertise debt essay",
+        project=str(preflight_project),
+        write_audit=False,
+    )
+    assert result.decision == "suggest"
+    assert len(result.matched_memory) >= 3
+
+
+def test_preflight_observation_memory_alone_stays_noop(preflight_project: Path):
+    db_path = preflight_project / ".oem" / ".local_vector_db" / "vectors.db"
+    _add_memory_rows(db_path, [
+        (
+            "mem_obs_single",
+            "Observation: Some random observation about something unrelated to the query.",
+            {"source": ".oem/memory/obs.md", "title": "Observation unrelated"},
+        ),
+    ])
+    result = run_preflight(
+        "hello there",
+        project=str(preflight_project),
+        write_audit=False,
+    )
+    assert result.decision == "noop"
+
+
+def test_preflight_memory_decision_consistent_across_audit_modes(preflight_project: Path):
+    db_path = preflight_project / ".oem" / ".local_vector_db" / "vectors.db"
+    _add_memory_rows(db_path, [
+        (
+            "mem_decision_audit",
+            "Decision: Essay_ID.md is the open project.\nIndonesian master draft, personal conversational tone.",
+            {"source": ".oem/memory/decision.md", "title": "Decision: Essay_ID.md"},
+        ),
+    ])
+    with_audit = run_preflight(
+        "Essay_ID.md open project",
+        project=str(preflight_project),
+        write_audit=True,
+    )
+    without_audit = run_preflight(
+        "Essay_ID.md open project",
+        project=str(preflight_project),
+        write_audit=False,
+    )
+    assert with_audit.decision == without_audit.decision
+    assert with_audit.reason == without_audit.reason

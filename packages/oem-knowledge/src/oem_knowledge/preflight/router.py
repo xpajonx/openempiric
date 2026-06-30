@@ -575,6 +575,11 @@ def run_preflight(
         elif active_work is not None and active_work.score >= 2.0:
             decision = "suggest"
             reason = f"active work signals detected (score {active_work.score:.1f})"
+        elif len(matched_memory) >= 3:
+            top_scores = sorted((m.score for m in matched_memory), reverse=True)[:5]
+            if sum(top_scores) >= 8.0:
+                decision = "suggest"
+                reason = f"multiple memory signals detected ({len(matched_memory)} hits, aggregate {sum(top_scores):.1f})"
 
         result = PreflightResult(
             status=decision,
