@@ -6,10 +6,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-try:
-    import yaml
-except ImportError:  # pragma: no cover
-    yaml = None
+from ..markdown.frontmatter import parse_frontmatter
 
 from .audit import write_audit_event
 from .budget import ContextBudget, render_context
@@ -28,7 +25,6 @@ from ..runtime.active_work import (
 logger = logging.getLogger(__name__)
 
 OPERATION = "run_preflight"
-FRONTMATTER_CHAR_LIMIT = 16000
 MEMORY_ROW_LIMIT = 200
 PARAGRAPH_CHAR_LIMIT = 220
 
@@ -45,47 +41,15 @@ def _ensure_tuple(value: Any) -> tuple[str, ...]:
     return ()
 
 
-def _read_text_prefix(path: Path, limit: int = FRONTMATTER_CHAR_LIMIT) -> str:
-    with path.open("r", encoding="utf-8") as handle:
-        return handle.read(limit)
-
-
 def _split_frontmatter(text: str) -> tuple[dict[str, Any], str, str | None]:
-    if not text.startswith("---"):
-        return {}, text, None
-
-    lines = text.splitlines()
-    if not lines or lines[0].strip() != "---":
-        return {}, text, None
-
-    closing_index = None
-    for index in range(1, len(lines)):
-        if lines[index].strip() == "---":
-            closing_index = index
-            break
-
-    if closing_index is None:
-        return {}, text, "frontmatter block was not closed"
-
-    raw_frontmatter = "\n".join(lines[1:closing_index])
-    body = "\n".join(lines[closing_index + 1 :])
-
-    if yaml is not None:
-        try:
-            loaded = yaml.safe_load(raw_frontmatter) or {}
-            if isinstance(loaded, dict):
-                return loaded, body, None
-            return {}, body, "frontmatter did not parse to a mapping"
-        except Exception as exc:
-            return {}, body, f"frontmatter parse failed: {exc}"
-
-    metadata: dict[str, Any] = {}
-    for line in raw_frontmatter.splitlines():
-        if ":" not in line:
-            continue
-        key, value = line.split(":", 1)
-        metadata[key.strip()] = value.strip()
-    return metadata, body, None
+    """Legacy adapter that delegates to the canonical frontmatter parser."""
+    parsed = parse_frontmatter(text)
+    warning_str = None
+    if parsed.warnings:
+        w = parsed.warnings[0]
+        parts = [p for p in (w.get("path"), w.get("reason")) if p]
+        warning_str = ": ".join(parts) if parts else None
+    return parsed.metadata, parsed.body, warning_str
 
 
 def _parse_markdown_sections(body: str) -> dict[str, str]:

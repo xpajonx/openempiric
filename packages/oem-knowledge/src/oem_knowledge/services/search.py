@@ -10,6 +10,7 @@ from collections import Counter
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from oem_knowledge.markdown.frontmatter import parse_frontmatter
 from oem_knowledge.source_classifier import classify_source
 from oem_knowledge.vector_store import VectorStore
 
@@ -157,8 +158,22 @@ class SearchService:
         if not content.strip():
             return []
 
+        # Strip frontmatter once at document-load boundary
+        parsed = parse_frontmatter(content, source_path=str(filepath))
+        body = parsed.body if parsed.metadata or not parsed.warnings else content
+        doc_metadata = parsed.metadata if parsed.metadata else {}
+
+        # Log frontmatter warnings once per file (not per chunk)
+        if parsed.warnings:
+            reasons = [w.get("reason", "unknown") for w in parsed.warnings]
+            logger.warning(
+                "Frontmatter warning in %s: %s. Chunking from full content.",
+                rel_path,
+                ", ".join(reasons),
+            )
+
         header_pattern = re.compile(r"^(#{1,4}\s+.*)$", re.MULTILINE)
-        parts = header_pattern.split(content)
+        parts = header_pattern.split(body)
         chunks = []
         current_title = "Introduction"
 
@@ -177,7 +192,7 @@ class SearchService:
                 )
 
         if not chunks:
-            chunks.append({"title": "Full Document", "text": content.strip()})
+            chunks.append({"title": "Full Document", "text": body.strip()})
 
         formatted = []
         for idx, chunk in enumerate(chunks):
@@ -185,15 +200,17 @@ class SearchService:
                 f"Document: {rel_path}\nSection: {chunk['title']}\n\n{chunk['text']}"
             )
             links = list(set(re.findall(r"\[\[([^\]]+)\]\]", chunk["text"])))
-            formatted.append(
-                {
-                    "chunk_id": f"{rel_path}#chunk_{idx}",
-                    "text": section_text,
-                    "title": chunk["title"],
-                    "raw_body": chunk["text"],
-                    "linked_concepts": links,
-                }
-            )
+            chunk_meta = {
+                "chunk_id": f"{rel_path}#chunk_{idx}",
+                "text": section_text,
+                "title": chunk["title"],
+                "raw_body": chunk["text"],
+                "linked_concepts": links,
+            }
+            if doc_metadata:
+                chunk_meta["concept_id"] = doc_metadata.get("concept_id", "")
+                chunk_meta["concept_status"] = doc_metadata.get("status", "")
+            formatted.append(chunk_meta)
 
         return formatted
 
@@ -363,22 +380,27 @@ class SearchService:
                     imp = self.derive_importance(rel_path)
 
                     for c in chunks:
+                        meta = {
+                            "source": path_str,
+                            "source_path": rel_path,
+                            "rel_path": rel_path,
+                            "source_type": classification.source_type,
+                            "ingestion_eligible": classification.ingestion_eligible,
+                            "title": c["title"],
+                            "content_hash": cur_hash,
+                            "linked_concepts": ",".join(c["linked_concepts"]),
+                            "created_at": str(mtime),
+                            "updated_at": str(mtime),
+                            "importance": imp,
+                        }
+                        # Propagate document-level metadata from frontmatter
+                        for fm_key in ("concept_id", "concept_status"):
+                            if c.get(fm_key):
+                                meta[fm_key] = c[fm_key]
                         chunks_to_upsert.append({
                             "chunk_id": c["chunk_id"],
                             "text": c["text"],
-                            "meta": {
-                                "source": path_str,
-                                "source_path": rel_path,
-                                "rel_path": rel_path,
-                                "source_type": classification.source_type,
-                                "ingestion_eligible": classification.ingestion_eligible,
-                                "title": c["title"],
-                                "content_hash": cur_hash,
-                                "linked_concepts": ",".join(c["linked_concepts"]),
-                                "created_at": str(mtime),
-                                "updated_at": str(mtime),
-                                "importance": imp,
-                            },
+                            "meta": meta,
                             "old_hash": old_hash
                         })
                 except Exception as e:

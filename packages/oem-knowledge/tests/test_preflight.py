@@ -610,3 +610,52 @@ def test_preflight_low_confidence_handoff_conflict_does_not_become_required(pref
     result = run_preflight("hello there", project=str(preflight_project), write_audit=False)
     assert result.decision != "required"
     assert result.decision in ("noop", "suggest")
+
+
+def test_preflight_no_warning_for_valid_concept_with_body_separators(preflight_project: Path):
+    concept_path = preflight_project / ".oem" / "wiki" / "concept_test.md"
+    concept_path.write_text(
+        """---
+concept_id: concept_test
+status: validated
+---
+
+# Learnings
+
+- Command output:
+  echo "---"
+
+---
+
+Another markdown separator in body.
+
+```text
+---
+Full extracted text here...
+---
+```""",
+        encoding="utf-8",
+    )
+
+    result = run_preflight("concept test", project=str(preflight_project), write_audit=False)
+
+    frontmatter_warnings = [w for w in result.warnings if "frontmatter" in w.lower()]
+    assert len(frontmatter_warnings) == 0
+
+
+def test_preflight_warns_for_frontmatter_block_not_closed(preflight_project: Path):
+    concept_path = preflight_project / ".oem" / "wiki" / "concept_bad.md"
+    concept_path.write_text(
+        """---
+concept_id: concept_bad
+status: validated
+
+# Body without closing frontmatter.
+""",
+        encoding="utf-8",
+    )
+
+    result = run_preflight("concept bad", project=str(preflight_project), write_audit=False)
+
+    frontmatter_warnings = [w for w in result.warnings if "frontmatter" in w.lower()]
+    assert len(frontmatter_warnings) >= 1

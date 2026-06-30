@@ -141,3 +141,190 @@ def test_failed_files_and_chunks_counted_in_index_stats(temp_project, caplog):
             assert stats["failed"] == 1
             assert any("concept1.md" in f for f in stats["failed_files"])
             assert any("Failed to chunk file" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Chunking + frontmatter integration
+# ---------------------------------------------------------------------------
+
+
+def test_chunker_does_not_reparse_body_chunks_as_frontmatter(temp_project, caplog):
+    engine = KnowledgeEngine(temp_project)
+    wiki_dir = engine._concepts_dir(str(temp_project))
+    wiki_dir.mkdir(parents=True, exist_ok=True)
+
+    concept_path = wiki_dir / "concept_010.md"
+    concept_path.write_text(
+        """---
+concept_id: concept_010
+status: validated
+---
+
+# Learnings
+
+- Decision: use SQLite for local vector store
+
+---
+
+Another section with a horizontal rule in body.
+
+```text
+---
+code block with dashes
+---
+```""",
+        encoding="utf-8",
+    )
+
+    with caplog.at_level(logging.WARNING):
+        stats = engine.search.index_all(force=True)
+        assert stats["status"] == "success"
+
+    chunks = engine.search.vector_store.all_chunks()
+    wiki_chunks = [
+        c for c in chunks
+        if c["metadata"].get("rel_path", "").endswith("concept_010.md")
+    ]
+    assert len(wiki_chunks) > 0
+
+    # No chunk should contain the frontmatter YAML
+    for c in wiki_chunks:
+        doc_text = c.get("document", "")
+        assert "concept_id: concept_010" not in doc_text
+        assert "status: validated" not in doc_text
+
+    # Body horizontal rules and code blocks must be preserved
+    body_texts = [c.get("document", "") for c in wiki_chunks]
+    combined = "\n".join(body_texts)
+    assert "Another section with a horizontal rule" in combined
+    assert "code block with dashes" in combined
+
+    # No false frontmatter warnings from chunking
+    chunk_warnings = [
+        r.message for r in caplog.records
+        if "Frontmatter warning" in r.message and "concept_010" in r.message
+    ]
+    assert len(chunk_warnings) == 0
+
+
+def test_concept_metadata_inherited_by_chunks(temp_project):
+    engine = KnowledgeEngine(temp_project)
+    wiki_dir = engine._concepts_dir(str(temp_project))
+    wiki_dir.mkdir(parents=True, exist_ok=True)
+
+    concept_path = wiki_dir / "concept_050.md"
+    concept_path.write_text(
+        """---
+concept_id: concept_050
+status: validated
+confidence: 3
+---
+
+# Testing Metadata Inheritance
+
+This concept tests metadata propagation to chunks.
+""",
+        encoding="utf-8",
+    )
+
+    engine.search.index_all(force=True)
+    chunks = engine.search.vector_store.all_chunks()
+    wiki_chunks = [
+        c for c in chunks
+        if c["metadata"].get("rel_path", "").endswith("concept_050.md")
+    ]
+    assert len(wiki_chunks) > 0
+
+    for c in wiki_chunks:
+        meta = c["metadata"]
+        assert meta.get("concept_id") == "concept_050"
+        assert meta.get("concept_status") == "validated"
+
+
+def test_malformed_frontmatter_warning_emitted_once_per_file(temp_project, caplog):
+    engine = KnowledgeEngine(temp_project)
+    wiki_dir = engine._concepts_dir(str(temp_project))
+    wiki_dir.mkdir(parents=True, exist_ok=True)
+
+    concept_path = wiki_dir / "concept_bad_fm.md"
+    concept_path.write_text(
+        """---
+concept_id: concept_bad_fm
+status: validated
+
+# Missing closing delimiter
+
+## Section A
+Content.
+""",
+        encoding="utf-8",
+    )
+
+    with caplog.at_level(logging.WARNING):
+        stats = engine.search.index_all(force=True)
+
+    # Chunking still proceeds
+    chunks = engine.search.vector_store.all_chunks()
+    wiki_chunks = [
+        c for c in chunks
+        if c["metadata"].get("rel_path", "").endswith("concept_bad_fm.md")
+    ]
+    assert len(wiki_chunks) > 0
+
+    # Warning emitted exactly once for this file
+    chunk_warnings = [
+        r.message for r in caplog.records
+        if "Frontmatter warning" in r.message and "concept_bad_fm" in r.message
+    ]
+    assert len(chunk_warnings) == 1
+
+
+def test_retrieval_preserves_decision_failure_observation_chunks_from_large_concept(temp_project):
+    engine = KnowledgeEngine(temp_project)
+    wiki_dir = engine._concepts_dir(str(temp_project))
+    wiki_dir.mkdir(parents=True, exist_ok=True)
+
+    entries = "\n".join(
+        f"- **{kind}**: Entry {i} about {kind.lower()} patterns in the system.\n"
+        for kind in ("Decision", "Failure", "Observation")
+        for i in range(20)
+    )
+
+    concept_path = wiki_dir / "concept_099.md"
+    concept_path.write_text(
+        f"""---
+concept_id: concept_099
+status: validated
+---
+
+# Large Concept
+
+{entries}
+
+## Summary
+
+This concept stores many learnings.
+""",
+        encoding="utf-8",
+    )
+
+    stats = engine.search.index_all(force=True)
+    assert stats["status"] == "success"
+
+    # All chunks retrievable
+    chunks = engine.search.vector_store.all_chunks()
+    wiki_chunks = [
+        c for c in chunks
+        if c["metadata"].get("rel_path", "").endswith("concept_099.md")
+    ]
+    # Should have at least 2 chunks (Introduction + Summary)
+    assert len(wiki_chunks) >= 2
+
+    # Verify Decision, Failure, Observation entries exist in chunks
+    combined = "\n".join(c.get("document", "") for c in wiki_chunks)
+    assert "**Decision**: Entry 0" in combined
+    assert "**Failure**: Entry 5" in combined
+    assert "**Observation**: Entry 10" in combined
+
+    # Frontmatter must not appear in any chunk
+    assert "concept_id: concept_099" not in combined

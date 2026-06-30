@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+
+from oem_knowledge.markdown.frontmatter import parse_frontmatter
+
+
 class ConceptEvolutionEngine:
     def __init__(self, engine):
         self.engine = engine
@@ -16,13 +20,16 @@ class ConceptEvolutionEngine:
 
         content = concept_file.read_text(encoding="utf-8")
 
-        # Extract frontmatter and body
-        fm_match = re.match(r"^(---\s*\n.*?\n---\s*\n)(.*)$", content, re.DOTALL)
-        if not fm_match:
+        parsed = parse_frontmatter(content, source_path=str(concept_file))
+        if not parsed.metadata:
             return {"status": "error", "message": "Invalid frontmatter structure."}
 
-        header = fm_match.group(1)
-        body = fm_match.group(2)
+        body = parsed.body
+        # Find the closing delimiter to extract the original header bytes.
+        closing = re.search(r"\n(---|\.\.\.)\s*\n", content)
+        header = content[: closing.end()] if closing else ""
+        if not header:
+            return {"status": "error", "message": "Invalid frontmatter structure."}
 
         # Parse learnings list
         learnings_section = re.search(r"## Learnings.*$", body, re.DOTALL)
@@ -30,7 +37,6 @@ class ConceptEvolutionEngine:
         if learnings_section:
             for line in learnings_section.group(0).splitlines():
                 if line.strip().startswith("-"):
-                    # Extract the core text
                     item = re.sub(r"^-\s*(\*\*[^*]+\*\*:\s*)?", "", line.strip())
                     if item:
                         learnings.append(item.strip())

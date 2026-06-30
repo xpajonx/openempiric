@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from oem_knowledge.markdown.frontmatter import parse_frontmatter
 from oem_knowledge.source_classifier import classify_source
 
 logger = logging.getLogger(__name__)
@@ -462,14 +463,14 @@ class ReflectionService:
                     try:
                         concept_id = fp.stem
                         current_text = fp.read_text(encoding="utf-8")
-                        fm_match = re.match(r"^---\s*\n.*?\n---\s*\n(.*)$", current_text, re.DOTALL)
-                        current_body = fm_match.group(1).strip() if fm_match else current_text.strip()
+                        current_parsed = parse_frontmatter(current_text, source_path=str(fp))
+                        current_body = current_parsed.body.strip() if current_parsed.metadata else current_text.strip()
                         history = self.engine.materialization.get_concept_history(concept_id, project)
                         if history:
                             last_entry = history[-1]
                             last_content = last_entry.get("content", "")
-                            last_fm_match = re.match(r"^---\s*\n.*?\n---\s*\n(.*)$", last_content, re.DOTALL)
-                            last_body = last_fm_match.group(1).strip() if last_fm_match else last_content.strip()
+                            last_parsed = parse_frontmatter(last_content, source_path=str(fp))
+                            last_body = last_parsed.body.strip() if last_parsed.metadata else last_content.strip()
                             if current_body.strip() == last_body.strip():
                                 continue
                     except Exception as e:

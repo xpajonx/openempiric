@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from oem_knowledge.markdown.frontmatter import parse_frontmatter
 from oem_knowledge.source_classifier import SourceType, classify_source
 
 logger = logging.getLogger(__name__)
@@ -420,8 +421,8 @@ class MaterializationService:
                             if not is_new_file:
                                 try:
                                     text = concept_file.read_text(encoding="utf-8")
-                                    fm = re.match(r"^---\s*\n.*?\n---\s*\n(.*)$", text, re.DOTALL)
-                                    existing_body = fm.group(1).strip() if fm else text.strip()
+                                    parsed = parse_frontmatter(text, source_path=str(concept_file))
+                                    existing_body = parsed.body.strip() if parsed.metadata else text.strip()
                                 except Exception as e:
                                     logger.warning("Failed to read existing concept file %s: %s", concept_file, e)
 
@@ -602,12 +603,12 @@ source_event_ids: {json.dumps(cdata.get("source_event_ids", []))}
             if not targets:
                 continue
 
-            fm = re.match(r"^(---\s*\n.*?\n---\s*\n)(.*)$", text, re.DOTALL)
-            if not fm:
+            parsed = parse_frontmatter(text, source_path=str(fp))
+            if not parsed.metadata:
                 continue
 
-            header = fm.group(1)
-            body = re.split(r"\n##\s+Related", fm.group(2), flags=re.IGNORECASE)[
+            header = text[: text.index(parsed.body)] if parsed.body in text else ""
+            body = re.split(r"\n##\s+Related", parsed.body, flags=re.IGNORECASE)[
                 0
             ].strip()
 

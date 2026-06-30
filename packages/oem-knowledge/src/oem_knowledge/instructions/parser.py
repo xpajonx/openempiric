@@ -1,3 +1,7 @@
+# TODO: migrate to canonical frontmatter parser
+# (oem_knowledge.markdown.frontmatter) after wiki/concept/search/recovery
+# paths are stabilized.
+
 from __future__ import annotations
 import re
 import json

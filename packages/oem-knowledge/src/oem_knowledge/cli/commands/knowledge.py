@@ -475,6 +475,17 @@ def _run_knowledge_command_impl(args):
             lines.append(f"  {symbol} {check['name']}")
         lines.append("")
         
+        # Concept Integrity section
+        concept_integrity = health_res.get("concept_integrity", {})
+        lines.append("Concept Integrity:")
+        if concept_integrity.get("checks"):
+            for check in concept_integrity["checks"]:
+                symbol = "✓" if check["status"] == "success" else ("⚠" if check["status"] == "warn" else "✗")
+                lines.append(f"  {symbol} {check['name']}")
+        else:
+            lines.append("  None")
+        lines.append("")
+
         # Stale concepts section
         lines.append("Stale Concepts:")
         if stale:

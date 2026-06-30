@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from oem_knowledge.ui import render_panel
+from oem_knowledge.markdown.frontmatter import parse_frontmatter
 from .config import _OEM_RUNTIME_CONTEXT_PATH, _OEM_TEMP_INSTRUCTIONS
 from .session import SessionState
 from oem_knowledge.tools.metrics import update_metrics_file
@@ -20,13 +21,8 @@ if TYPE_CHECKING:
     from oem_knowledge.engine import KnowledgeEngine
 
 def parse_markdown_report(content: str) -> dict[str, Any]:
-    fm = {}
-    fm_match = re.match(r"^---\s*\n(.*?)\n---\s*\n", content, re.DOTALL)
-    if fm_match:
-        for line in fm_match.group(1).splitlines():
-            if ":" in line:
-                k, v = line.split(":", 1)
-                fm[k.strip()] = v.strip()
+    parsed = parse_frontmatter(content)
+    fm = parsed.metadata
     
     events = []
     events_match = re.search(r"```json\s*\n(.*?)\n```", content, re.DOTALL)
@@ -71,11 +67,11 @@ def is_empty_orphan_session(content: str, file_date: str, dates_with_events: set
     if "knowledge_events" in content and file_date in dates_with_events:
         return False
 
-    text = content
-    text = re.sub(r"^---\s*\n.*?\n---\s*\n", "", text, flags=re.DOTALL)
-    text = re.sub(r"```.*?```", "", text, flags=re.DOTALL)
-    text = re.sub(r"^\s*#.*$", "", text, flags=re.MULTILINE)
-    return len(text.strip()) == 0
+    parsed = parse_frontmatter(content)
+    body = parsed.body or content
+    body = re.sub(r"```.*?```", "", body, flags=re.DOTALL)
+    body = re.sub(r"^\s*#.*$", "", body, flags=re.MULTILINE)
+    return len(body.strip()) == 0
 
 def recover_reflection(
     eng: KnowledgeEngine,
@@ -535,13 +531,8 @@ def parse_wiki_file_for_recovery(fp: Path) -> dict[str, Any]:
     except Exception:
         pass
     
-    frontmatter = {}
-    fm_match = re.match(r"^---\s*\n(.*?)\n---\s*\n", text, re.DOTALL)
-    if fm_match:
-        for line in fm_match.group(1).splitlines():
-            if ":" in line:
-                k, v = line.split(":", 1)
-                frontmatter[k.strip()] = v.strip()
+    parsed = parse_frontmatter(text, source_path=str(fp))
+    frontmatter = parsed.metadata
                 
     c_id = frontmatter.get("concept_id") or frontmatter.get("id")
     c_name = frontmatter.get("canonical_name") or frontmatter.get("title")

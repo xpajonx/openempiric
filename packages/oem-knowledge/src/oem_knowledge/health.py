@@ -9,6 +9,9 @@ import json
 import re
 from pathlib import Path
 
+from oem_knowledge.markdown.frontmatter import parse_frontmatter
+
+
 def calculate_concept_health(cdata: dict) -> float:
     """Calculate a concept health score (0-100) based on confidence, evidence, failures, and recency."""
     # Start with base score
@@ -45,6 +48,126 @@ def calculate_concept_health(cdata: dict) -> float:
     # Clamp score to [0.0, 100.0]
     score = max(0.0, min(100.0, score))
     return round(score, 2)
+
+
+def validate_concept_frontmatter(project: str | None = None) -> dict:
+    """Validate frontmatter integrity for all concept_*.md wiki files.
+
+    Checks:
+      - File is readable
+      - Frontmatter is well-formed (no parse warnings)
+      - concept_id field exists in frontmatter
+      - concept_id matches filename (when registry is available)
+      - status field exists
+      - Body is non-empty
+
+    Returns:
+        {"status": "success"|"warn"|"error", "checks": [...]}
+    """
+    from oem_knowledge.engine import KnowledgeEngine
+
+    eng = KnowledgeEngine(project)
+    concepts_dir = eng._concepts_dir(project)
+    checks: list[dict] = []
+
+    # Load registry for cross-reference (best-effort)
+    registry: dict = {}
+    registry_available = True
+    try:
+        registry = eng.state._load_registry(project)
+    except Exception:
+        registry_available = False
+        checks.append({
+            "name": "Concept registry unavailable for integrity cross-check",
+            "status": "warn",
+            "reason": "registry_unavailable_for_integrity_check",
+        })
+
+    if not concepts_dir.exists():
+        checks.append({
+            "name": "No concept wiki directory",
+            "status": "success",
+        })
+        return _aggregate_health_status(checks, "success")
+
+    for path in sorted(concepts_dir.glob("concept_*.md")):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except Exception as exc:
+            checks.append({
+                "name": f"{path.name}: could not read ({exc})",
+                "status": "error",
+                "path": str(path),
+            })
+            continue
+
+        parsed = parse_frontmatter(text, source_path=str(path))
+
+        # Parser warnings
+        error_reasons = {
+            "frontmatter_block_not_closed",
+            "frontmatter_yaml_parse_error",
+            "frontmatter_not_mapping",
+        }
+        for w in parsed.warnings:
+            severity = "error" if w["reason"] in error_reasons else "warn"
+            checks.append({
+                "name": f"{path.name}: {w['reason']}",
+                "status": severity,
+                "path": str(path),
+                "reason": w["reason"],
+            })
+
+        meta = parsed.metadata
+
+        # concept_id check
+        fm_concept_id = str(meta.get("concept_id") or "")
+        file_concept_id = path.stem
+        if not fm_concept_id:
+            checks.append({
+                "name": f"{path.name}: missing concept_id in frontmatter",
+                "status": "error",
+                "path": str(path),
+                "reason": "missing_concept_id",
+            })
+        elif registry_available and fm_concept_id != file_concept_id and fm_concept_id not in registry:
+            checks.append({
+                "name": f"{path.name}: concept_id mismatch (frontmatter={fm_concept_id}, file={file_concept_id})",
+                "status": "error",
+                "path": str(path),
+                "reason": "concept_id_mismatch",
+            })
+
+        # status check
+        if "status" not in meta:
+            checks.append({
+                "name": f"{path.name}: missing status in frontmatter",
+                "status": "warn",
+                "path": str(path),
+                "reason": "missing_status",
+            })
+
+        # body check
+        if not parsed.body.strip():
+            checks.append({
+                "name": f"{path.name}: empty body",
+                "status": "warn",
+                "path": str(path),
+                "reason": "empty_body",
+            })
+
+    return _aggregate_health_status(checks, "success")
+
+
+def _aggregate_health_status(checks: list[dict], default: str) -> dict:
+    """Derive overall status from individual check severities."""
+    if any(c["status"] == "error" for c in checks):
+        status = "error"
+    elif any(c["status"] == "warn" for c in checks):
+        status = "warn"
+    else:
+        status = default
+    return {"status": status, "checks": checks}
 
 
 def build_runtime_health(project: str | None = None) -> dict:
@@ -512,6 +635,13 @@ def build_runtime_health(project: str | None = None) -> dict:
     if reflection_diagnostic["status"] == "warning" and overall_status == "success":
         overall_status = "warn"
 
+    # Concept Integrity
+    concept_integrity = validate_concept_frontmatter(project)
+    if concept_integrity["status"] == "error":
+        overall_status = "error"
+    elif concept_integrity["status"] == "warn" and overall_status == "success":
+        overall_status = "warn"
+
     # Knowledge checks (Separate, but computed here for convenience)
     knowledge_stats = {}
     try:
@@ -524,6 +654,7 @@ def build_runtime_health(project: str | None = None) -> dict:
         "status": overall_status,
         "operation": "runtime_health",
         "project": str(project or "."),
+        "concept_integrity": concept_integrity,
         "environment": {
             "is_dev_workspace": is_dev_workspace,
             "status": env_status,
