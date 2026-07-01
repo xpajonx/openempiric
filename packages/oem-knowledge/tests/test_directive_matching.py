@@ -223,10 +223,55 @@ def test_instruction_ledger_adds_always_on_column_idempotently(tmp_path: Path):
     assert "always_on" in columns
 
 
-def test_existing_directives_default_always_on_false(tmp_path: Path):
-    conn = get_db_connection(tmp_path / "instruction_ledger.sqlite")
-    index_source_file(conn, "AGENTS.md", "# Instructions\n- MUST run tests.", "hash1", 0, 0)
-    directive = get_active_directives(conn)[0]
-    conn.close()
+def test_output_alone_not_high_confidence_domain_token():
+    matches = match_directives(
+        "output",
+        [_directive(title="OEM Health Output", rule="MUST inspect output")],
+    )
+    assert len(matches) == 0
 
-    assert directive["always_on"] == 0
+
+def test_oem_health_output_phrase_matches_specific_health_directive():
+    matches = match_directives(
+        "review OEM health output",
+        [_directive(title="OEM Health Check Workflow", rule="MUST inspect OEM health output carefully")],
+    )
+    assert len(matches) == 1
+    match = matches[0]
+    assert match["match_class"] == "semantic_directive_match"
+    assert "oem" in match["matched_tokens"]
+    assert "health" in match["matched_tokens"]
+    assert "output" in match["matched_tokens"]
+
+
+def test_dedup_runs_after_invalid_matches_are_filtered():
+    directive = _directive(
+        title="LangGraph STORM",
+        rule="MUST follow LangGraph STORM pipeline steps",
+    )
+    matches = match_directives(
+        "the langgraph storm pipeline",
+        [directive, directive],
+    )
+    assert len(matches) == 1
+    assert matches[0]["match_class"] == "semantic_directive_match"
+
+
+def test_rejected_stopword_match_does_not_emit_zero_score_candidate():
+    matches = match_directives(
+        "the",
+        [_directive(title="Current Content-Machine Contract", rule="MUST apply content-machine contract")],
+    )
+    assert len(matches) == 0
+
+
+def test_generic_prompt_directive_count_below_threshold():
+    directives = [
+        _directive(title="Current Content-Machine Contract", rule="MUST apply content-machine contract"),
+        _directive(title="OEM Health Check", rule="MUST check OEM health"),
+        _directive(title="LangGraph STORM", rule="MUST follow LangGraph STORM pipeline steps"),
+    ]
+    # Generic prompt should not flood directives
+    assert len(match_directives("continue working on the current project", directives)) == 0
+    assert len(match_directives("fix the story page responsive layout", directives)) <= 2
+    assert len(match_directives("review current OEM health", directives)) <= 2

@@ -1182,6 +1182,57 @@ def test_preflight_current_content_machine_contract_not_triggered_by_current_onl
     assert result["decision"] != "required"
 
 
+def test_preflight_continue_current_project_directive_count_below_threshold(tmp_path: Path):
+    project, engine = _project_with_agents(
+        tmp_path,
+        """
+        # Current Content-Machine Contract
+        - MUST apply current content-machine contract.
+
+        # LangGraph STORM Research Pipeline
+        - MUST follow LangGraph STORM research pipeline steps.
+        """,
+    )
+
+    result = engine.preflight("continue working on the current project", project=str(project))
+
+    assert len(result["matched_directives"]) <= 2
+
+
+def test_preflight_fix_story_page_directive_count_below_threshold(tmp_path: Path):
+    project, engine = _project_with_agents(
+        tmp_path,
+        """
+        # Current Content-Machine Contract
+        - MUST apply current content-machine contract.
+
+        # LangGraph STORM Research Pipeline
+        - MUST follow LangGraph STORM research pipeline steps.
+        """,
+    )
+
+    result = engine.preflight("fix the story page responsive layout", project=str(project))
+
+    assert len(result["matched_directives"]) <= 2
+
+
+def test_preflight_review_current_oem_health_directive_count_below_threshold(tmp_path: Path):
+    project, engine = _project_with_agents(
+        tmp_path,
+        """
+        # Current Content-Machine Contract
+        - MUST apply current content-machine contract.
+
+        # LangGraph STORM Research Pipeline
+        - MUST follow LangGraph STORM research pipeline steps.
+        """,
+    )
+
+    result = engine.preflight("review current OEM health", project=str(project))
+
+    assert len(result["matched_directives"]) <= 2
+
+
 # ---------------------------------------------------------------------------
 # P1 Bug #5: preflight active_work sources include markdown fields
 # ---------------------------------------------------------------------------

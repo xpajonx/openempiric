@@ -248,6 +248,10 @@ def match_directives(
             matched_rel_concepts, matched_rel_skills,
             glob_matched, is_wf_match, always_on,
         )
+        
+        # Reject stopword-only or generic-only
+        if not has_signal and not always_on:
+            continue
              
         if (score > 0.0 or always_on) and has_signal:
             matched.append({
@@ -275,7 +279,15 @@ def match_directives(
             
     # Sort matched descending by score
     matched.sort(key=lambda x: x["score"], reverse=True)
-    return matched
+    # Deduplicate by (id, title, source_path), keeping highest score first
+    seen = set()
+    deduplicated = []
+    for m in matched:
+        key = (m["id"], m["title"], m["source_path"])
+        if key not in seen:
+            seen.add(key)
+            deduplicated.append(m)
+    return deduplicated
 
 def resolve_selected_workflow(task: str, matched_directives: list[dict]) -> dict | None:
     # If a workflow is deterministically matched
