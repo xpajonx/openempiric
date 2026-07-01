@@ -626,6 +626,24 @@ def _parse_semantic_fields_from_text(text: str, workspace_root: Path | None = No
             result["active_task"] = ActiveWorkFieldValue(value=raw, confidence="medium", evidence=evidence)
             continue
 
+        # Explicit semantic markers are authoritative. Shape heuristics are only
+        # for legacy labels like "Project:" where the field is ambiguous.
+        if ev_lower.startswith(("workspace root", "project root")):
+            result["workspace_root"] = ActiveWorkFieldValue(value=raw, confidence="high", evidence=evidence)
+            continue
+        if ev_lower.startswith("memory root"):
+            result["memory_root"] = ActiveWorkFieldValue(value=raw, confidence="high", evidence=evidence)
+            continue
+        if ev_lower.startswith(("active work item", "active file", "open file", "current file", "primary file")):
+            result["active_work_item"] = ActiveWorkFieldValue(value=raw, confidence="high", evidence=evidence)
+            continue
+        if ev_lower.startswith(("active topic", "current topic")):
+            result["active_topic"] = ActiveWorkFieldValue(value=raw, confidence="high", evidence=evidence)
+            continue
+        if ev_lower.startswith("active task"):
+            result["active_task"] = ActiveWorkFieldValue(value=raw, confidence="high", evidence=evidence)
+            continue
+
         # Classify by shape (existence not required)
         fld = classify_active_work_value(raw, workspace_root=workspace_root)
         if fld == "unknown":

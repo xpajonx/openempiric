@@ -690,7 +690,6 @@ class StateService:
         from oem_knowledge.runtime.active_work import (
             _normalize_project_identity,
             classify_active_work_value,
-            ActiveWorkFieldValue,
         )
         import datetime
 
@@ -712,7 +711,8 @@ class StateService:
             return  # Same workspace, no update needed
 
         # Classify the supplied value
-        ws_candidate = classify_active_work_value(project_val)
+        workspace_context = Path(project_val) if Path(project_val).is_absolute() else None
+        ws_candidate = classify_active_work_value(project_val, workspace_root=workspace_context)
         workspace_root_val = project_val if ws_candidate == "workspace_root" else current.get("workspace_root")
         memory_root_val = current.get("memory_root")
 

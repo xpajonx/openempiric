@@ -578,8 +578,9 @@ def test_resolve_active_project_wrapper_uses_active_work_model(tmp_path: Path):
 
 
 def test_field_confidence_can_differ_within_same_source(tmp_path: Path):
+    workspace_root = "/tmp/oem-ci-nonexistent/X_autoresearch"
     (tmp_path / "session-handoff.md").write_text(
-        "Workspace root: /home/xpajonx/projects/X_autoresearch\n"
+        f"Workspace root: {workspace_root}\n"
         "Next action: polish 2_Essay/expertise-debt/Essay_ID.md\n",
         encoding="utf-8"
     )
@@ -594,6 +595,7 @@ def test_field_confidence_can_differ_within_same_source(tmp_path: Path):
     assert ws is not None and ws.confidence == "high"
     # Next action path -> medium per parser
     assert awi is not None and awi.confidence in ("medium", "high")
+    assert ident.workspace_root == workspace_root
 
 
 def test_nonexistent_relative_md_path_classified_as_active_work_item(tmp_path: Path):
