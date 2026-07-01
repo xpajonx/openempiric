@@ -182,10 +182,10 @@ class StateService:
         resolved_session_id = session_id or self._active_session_id(project)
         now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
+        updated: list[str] = []
         try:
             with FileLock(p.with_suffix(".lock")):
                 registry = self._load_registry(project, lock=False)
-                updated = []
                 for cid in unique_ids:
                     cdata = registry.get(cid)
                     if not isinstance(cdata, dict):
@@ -198,7 +198,13 @@ class StateService:
                     self._atomic_save_registry_unlocked(registry, project)
         except LockTimeoutError:
             logger.error("Timed out acquiring state lock for %s", p)
-            raise
+            return {"status": "error", "updated": 0, "concept_ids": [], "error": f"Lock timeout for {p}"}
+        except OSError as e:
+            logger.error("Failed to read/write registry for reference recording at %s: %s", p, e)
+            return {"status": "error", "updated": 0, "concept_ids": [], "error": str(e)}
+        except Exception as e:
+            logger.warning("Failed to record concept references: %s", e)
+            return {"status": "error", "updated": 0, "concept_ids": [], "error": str(e)}
 
         return {"status": "success", "updated": len(updated), "concept_ids": updated}
 
@@ -873,15 +879,22 @@ class StateService:
         handoff_json.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
     def detect_stale_concepts(self, n_sessions: int = 5, project: str | None = None) -> list[dict]:
-        """Identify concepts that have not been referenced in the last N sessions."""
+        """Identify concepts that have not been referenced in the last N sessions.
+
+        When the completed session count is below n_sessions, numeric stale
+        determinations are skipped, but concepts with reference metadata that
+        cannot be tied to a reliable session are still surfaced with
+        stale_status='unknown_reference_session'.
+        """
         registry = self._load_registry(project)
         completed_sessions = self._completed_session_ids(project)
         active_session_id = self._active_session_id(project)
 
-        if len(completed_sessions) < n_sessions:
-            return []
+        sessions_below_threshold = len(completed_sessions) < n_sessions
+        last_n_sessions: set[str] = set()
 
-        last_n_sessions = set(completed_sessions[-n_sessions:])
+        if not sessions_below_threshold:
+            last_n_sessions = set(completed_sessions[-n_sessions:])
 
         stale_concepts = []
         for cid, cdata in registry.items():
@@ -892,10 +905,14 @@ class StateService:
             last_ref_at = cdata.get("last_referenced_at")
             last_ref_source = cdata.get("last_reference_source")
 
+            # Current active session — not stale; sessions_since_reference = 0
             if last_ref_session and active_session_id and last_ref_session == active_session_id:
                 continue
 
+            # Has a known completed-session reference
             if last_ref_session and last_ref_session in completed_sessions:
+                if sessions_below_threshold:
+                    continue
                 if last_ref_session in last_n_sessions:
                     continue
                 sessions_since = len(completed_sessions) - completed_sessions.index(last_ref_session) - 1
@@ -911,6 +928,7 @@ class StateService:
                 })
                 continue
 
+            # Has reference timestamp but no reliable session ID — surface even below threshold
             if last_ref_at:
                 stale_concepts.append({
                     "concept_id": cid,
@@ -924,9 +942,12 @@ class StateService:
                 })
                 continue
 
+            # Legacy sessions field
             legacy_sessions = [str(s) for s in cdata.get("sessions", []) if str(s)]
             reliable_legacy_sessions = [s for s in legacy_sessions if s in completed_sessions]
             if reliable_legacy_sessions:
+                if sessions_below_threshold:
+                    continue
                 last_legacy = reliable_legacy_sessions[-1]
                 if last_legacy in last_n_sessions:
                     continue
@@ -943,6 +964,7 @@ class StateService:
                 })
                 continue
 
+            # No reference metadata at all — surface even below threshold
             stale_concepts.append({
                 "concept_id": cid,
                 "canonical_name": cdata.get("canonical_name", cid),

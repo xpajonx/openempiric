@@ -398,3 +398,28 @@ def test_debug_ranking_does_not_update_reference_metadata(temp_project):
 
     assert report["candidate_pool_size"] == 1
     record_refs.assert_not_called()
+
+
+def test_record_concept_references_never_raises_to_search(temp_project):
+    engine = KnowledgeEngine(temp_project)
+    candidates = [
+        {
+            "id": "concept_001#chunk_0",
+            "document": "Document: .oem/wiki/concept_001.md\n\nAI safety notes",
+            "metadata": {"concept_id": "concept_001", "rel_path": ".oem/wiki/concept_001.md"},
+            "score": 1.0,
+        }
+    ]
+
+    # record_concept_references now handles errors internally,
+    # so even a lock failure should never propagate to search
+    with patch.object(engine.search, "_collect_raw_candidates", return_value=candidates):
+        with patch("oem_knowledge.services.search.rank_search_results", return_value=candidates):
+            with patch.object(
+                engine.state, "record_concept_references",
+                return_value={"status": "error", "updated": 0, "concept_ids": [], "error": "simulated failure"},
+            ):
+                results = engine.search.search("AI safety", k=1, hybrid=False)
+
+    assert len(results) == 1
+    assert results[0]["metadata"]["concept_id"] == "concept_001"

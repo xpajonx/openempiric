@@ -341,3 +341,168 @@ def test_last_referenced_session_counts_completed_sessions_after_it(engine, tmp_
     assert stale[0]["concept_id"] == "concept_008"
     assert stale[0]["sessions_since_reference"] == 3
     assert stale[0]["reference_confidence"] == "high"
+
+
+def test_record_concept_references_returns_error_result_on_lock_failure(engine, tmp_path):
+    harness = engine._resolve_harness(str(tmp_path))
+    engine.state._save_registry(
+        {"concept_001": {"canonical_name": "Concept One"}},
+        str(tmp_path),
+    )
+    lock_file = harness / "concept_registry.lock"
+
+    # Hold the lock so record_concept_references cannot acquire it
+    import fcntl
+    with open(lock_file, "w") as held_lock:
+        fcntl.flock(held_lock, fcntl.LOCK_EX)
+        result = engine.state.record_concept_references(
+            ["concept_001"],
+            source="search",
+            project=str(tmp_path),
+            session_id="session_test",
+        )
+        fcntl.flock(held_lock, fcntl.LOCK_UN)
+
+    assert result["status"] == "error"
+    assert result["updated"] == 0
+    assert "Lock timeout" in result["error"]
+
+
+def test_detect_stale_concepts_does_not_hide_unknown_reference_session_when_session_count_below_threshold(engine, tmp_path):
+    harness = engine._resolve_harness(str(tmp_path))
+    engine.state._save_registry(
+        {
+            "concept_008": {
+                "canonical_name": "general-learning",
+                "last_referenced_at": "2026-07-01T00:00:00Z",
+                "last_referenced_session": "",
+                "last_reference_source": "search",
+            }
+        },
+        str(tmp_path),
+    )
+    # Only 2 sessions recorded — below default threshold of 5
+    for i in range(2):
+        engine.state.record_outcome("success", session_id=f"session_{i}", project=str(tmp_path))
+
+    stale = engine.state.detect_stale_concepts(n_sessions=5, project=str(tmp_path))
+
+    # unknown_reference_session should still be surfaced even with few sessions
+    assert len(stale) == 1
+    assert stale[0]["concept_id"] == "concept_008"
+    assert stale[0]["stale_status"] == "unknown_reference_session"
+    assert stale[0]["sessions_since_reference"] is None
+
+
+def test_health_displays_sessions_since_reference_unknown(engine, tmp_path):
+    harness = engine._resolve_harness(str(tmp_path))
+    engine.state._save_registry(
+        {
+            "concept_008": {
+                "canonical_name": "general-learning",
+                "last_referenced_at": "2026-07-01T00:00:00Z",
+                "last_referenced_session": "",
+                "last_reference_source": "search",
+            }
+        },
+        str(tmp_path),
+    )
+    for i in range(5):
+        engine.state.record_outcome("success", session_id=f"session_{i}", project=str(tmp_path))
+
+    stale = engine.state.detect_stale_concepts(n_sessions=5, project=str(tmp_path))
+
+    assert stale[0]["stale_status"] == "unknown_reference_session"
+    assert stale[0]["sessions_since_reference"] is None
+
+    # Verify CLI/MCP diagnostic string logic
+    display_str = (
+        f"  \u25cb {stale[0]['canonical_name']} ({stale[0]['concept_id']}) - reference session unknown"
+        if stale[0].get("sessions_since_reference") is None
+        else f"  \u25cb {stale[0]['canonical_name']} ({stale[0]['concept_id']}) - untouched for {stale[0]['sessions_since_reference']} sessions"
+    )
+    assert "reference session unknown" in display_str
+
+
+def test_concept_referenced_in_current_active_session_sessions_since_reference_zero(engine, tmp_path):
+    harness = engine._resolve_harness(str(tmp_path))
+    active_session = harness / "state" / "active_session.json"
+    active_session.parent.mkdir(parents=True, exist_ok=True)
+    active_session.write_text(
+        json.dumps({
+            "session_id": "session_current",
+            "agent": "test",
+            "status": "started",
+            "started_at": time.time(),
+            "project": str(tmp_path),
+            "transcript_path": str(tmp_path / "transcript.md"),
+            "context_path": str(tmp_path / "context.json"),
+            "temp_instructions": str(tmp_path / "temp.md"),
+        }),
+        encoding="utf-8",
+    )
+    engine.state._save_registry(
+        {
+            "concept_008": {
+                "canonical_name": "general-learning",
+                "last_referenced_at": "2026-07-01T00:00:00Z",
+                "last_referenced_session": "session_current",
+                "last_reference_source": "search",
+            }
+        },
+        str(tmp_path),
+    )
+    for i in range(5):
+        engine.state.record_outcome("success", session_id=f"session_{i}", project=str(tmp_path))
+
+    stale = engine.state.detect_stale_concepts(n_sessions=5, project=str(tmp_path))
+
+    # Concept referenced in the current active session is not stale
+    assert not any(item["concept_id"] == "concept_008" for item in stale)
+
+    # This state means sessions_since_reference is effectively 0
+    # (the last reference matches the active session)
+    registry_after = json.loads(
+        (harness / "concept_registry.json").read_text(encoding="utf-8")
+    )
+    assert registry_after["concept_008"]["last_referenced_session"] == "session_current"
+
+
+def test_health_does_not_call_record_concept_references(engine, tmp_path):
+    harness = engine._resolve_harness(str(tmp_path))
+    engine.state._save_registry(
+        {"concept_001": {"canonical_name": "Concept One"}},
+        str(tmp_path),
+    )
+    for i in range(5):
+        engine.state.record_outcome("success", session_id=f"session_{i}", project=str(tmp_path))
+
+    with patch.object(engine.state, "record_concept_references") as mock_record:
+        result = engine.knowledge_read(str(tmp_path), scope="health")
+
+    assert result["status"] == "success"
+    mock_record.assert_not_called()
+
+
+def test_recently_referenced_without_session_not_reported_as_numeric_stale(engine, tmp_path):
+    harness = engine._resolve_harness(str(tmp_path))
+    engine.state._save_registry(
+        {
+            "concept_008": {
+                "canonical_name": "general-learning",
+                "last_referenced_at": "2026-07-01T00:00:00Z",
+                "last_referenced_session": "",
+                "last_reference_source": "search",
+            }
+        },
+        str(tmp_path),
+    )
+    for i in range(58):
+        engine.state.record_outcome("success", session_id=f"session_{i}", project=str(tmp_path))
+
+    stale = engine.state.detect_stale_concepts(n_sessions=5, project=str(tmp_path))
+
+    assert stale[0]["concept_id"] == "concept_008"
+    assert stale[0]["stale_status"] == "unknown_reference_session"
+    assert stale[0]["sessions_since_reference"] is None
+    assert stale[0]["sessions_since_reference"] != 58
