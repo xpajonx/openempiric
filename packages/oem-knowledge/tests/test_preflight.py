@@ -788,9 +788,7 @@ def test_preflight_review_current_health_not_required_from_current_directive(tmp
     result = engine.preflight("review current OEM health", project=str(project))
 
     assert result["decision"] != "required"
-    assert result["matched_directives"][0]["title"] == "Current Content-Machine Contract"
-    assert result["matched_directives"][0]["match_class"] == "generic_lexical_match"
-    assert result["matched_directives"][0]["can_force_required"] is False
+    assert len(result["matched_directives"]) == 0
 
 
 def test_preflight_langgraph_storm_prompt_can_match_langgraph_directive(tmp_path: Path):
@@ -825,7 +823,7 @@ def test_preflight_generic_current_project_reason_not_overridden_by_directive(tm
 
     assert result["decision"] == "suggest"
     assert result["reason"] == "active_work_resolved"
-    assert any(d["match_class"] == "generic_lexical_match" for d in result["matched_directives"])
+    assert not any(d["match_class"] == "generic_lexical_match" for d in result["matched_directives"])
     assert not any(d["can_force_required"] for d in result["matched_directives"])
 
 
@@ -839,11 +837,8 @@ def test_preflight_output_includes_directive_match_class(tmp_path: Path):
     )
 
     result = engine.preflight("review current OEM health", project=str(project))
-    directive = result["matched_directives"][0]
 
-    assert directive["match_class"] == "generic_lexical_match"
-    assert directive["matched_tokens"] == ["current"]
-    assert directive["can_force_required"] is False
+    assert len(result["matched_directives"]) == 0
 
 
 def test_preflight_review_current_oem_health_does_not_trigger_unrelated_required_directives(tmp_path: Path):
@@ -863,7 +858,7 @@ def test_preflight_review_current_oem_health_does_not_trigger_unrelated_required
     assert result["decision"] != "required"
     assert result["reason_detail"] != "critical directive matched: Current Content-Machine Contract"
     titles = [d["title"] for d in result["matched_directives"]]
-    assert "Current Content-Machine Contract" in titles
+    assert "Current Content-Machine Contract" not in titles
     assert "LangGraph STORM Research Pipeline" not in titles
 
 
@@ -1039,3 +1034,90 @@ def test_preflight_memory_ranking_not_double_applied(preflight_project: Path):
     result2 = run_preflight("Essay_ID.md open project", project=str(preflight_project), write_audit=False)
     meta2 = result2.matched_memory[0].metadata or {}
     assert meta.get("final_score") == meta2.get("final_score")
+
+
+# ---------------------------------------------------------------------------
+# P1: Directive stopword guardrail — Bug #4 preflight regressions
+# ---------------------------------------------------------------------------
+
+
+def test_preflight_continue_current_project_no_the_directives(tmp_path: Path):
+    project, engine = _project_with_agents(
+        tmp_path,
+        """
+        # Current Content-Machine Contract
+        - MUST apply current content-machine contract.
+        """,
+    )
+
+    result = engine.preflight("continue working on the current project", project=str(project))
+
+    assert len(result["matched_directives"]) == 0
+    for md in result["matched_directives"]:
+        assert "the" not in md.get("reason", "")
+        assert "the" not in md.get("matched_tokens", [])
+
+
+def test_preflight_fix_story_page_no_the_directives(tmp_path: Path):
+    project, engine = _project_with_agents(
+        tmp_path,
+        """
+        # Current Content-Machine Contract
+        - MUST apply current content-machine contract.
+        """,
+    )
+
+    result = engine.preflight("fix the story page responsive layout", project=str(project))
+
+    for md in result["matched_directives"]:
+        assert "the" not in md.get("reason", "")
+        assert "the" not in md.get("matched_tokens", [])
+
+
+def test_preflight_review_current_oem_health_no_stopword_directives(tmp_path: Path):
+    project, engine = _project_with_agents(
+        tmp_path,
+        """
+        # Current Content-Machine Contract
+        - MUST apply current content-machine contract.
+        """,
+    )
+
+    result = engine.preflight("review current OEM health", project=str(project))
+
+    assert len(result["matched_directives"]) == 0
+
+
+def test_preflight_review_current_oem_health_no_unrelated_required_directive(tmp_path: Path):
+    project, engine = _project_with_agents(
+        tmp_path,
+        """
+        # Current Content-Machine Contract
+        - MUST apply current content-machine contract.
+
+        # LangGraph STORM Research Pipeline
+        - MUST follow LangGraph STORM research pipeline steps.
+        """,
+    )
+
+    result = engine.preflight("review current OEM health", project=str(project))
+
+    assert result["decision"] != "required"
+    titles = [d["title"] for d in result["matched_directives"]]
+    assert "Current Content-Machine Contract" not in titles
+    assert "LangGraph STORM Research Pipeline" not in titles
+
+
+def test_preflight_current_content_machine_contract_not_triggered_by_current_only(tmp_path: Path):
+    project, engine = _project_with_agents(
+        tmp_path,
+        """
+        # Current Content-Machine Contract
+        - MUST apply current content-machine contract.
+        """,
+    )
+
+    result = engine.preflight("current", project=str(project))
+
+    assert len(result["matched_directives"]) == 0
+    assert result["decision"] != "required"

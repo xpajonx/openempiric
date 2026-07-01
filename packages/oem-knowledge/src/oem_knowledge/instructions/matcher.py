@@ -4,12 +4,22 @@ import json
 import fnmatch
 from typing import Any
 
+HARD_STOPWORDS: frozenset[str] = frozenset({
+    "the", "and", "are", "was", "were", "for", "with",
+    "from", "been", "being", "than", "that", "this", "its",
+})
+
 GENERIC_WORDS: frozenset[str] = frozenset({
     "current", "project", "content", "work", "continue",
     "session", "context", "file", "task", "next", "now",
     "state", "review", "health", "memory", "agent", "oem",
     "start", "working", "pick", "left", "resume",
-    "machine", "contract",
+    "machine", "contract", "fix",
+})
+
+HIGH_CONFIDENCE_DOMAIN_TOKENS: frozenset[str] = frozenset({
+    "langgraph", "storm", "notebooklm", "source_ids",
+    "get_notebook", "essay_id",
 })
 
 GENERIC_PHRASES: frozenset[tuple[str, ...]] = frozenset({
@@ -29,6 +39,36 @@ def _ordered_tokens(text: str) -> list[str]:
     return re.findall(r"\b[a-zA-Z0-9_\-]{3,}\b", text.lower())
 
 
+def _filter_stopwords(tokens: set[str]) -> set[str]:
+    return tokens - HARD_STOPWORDS
+
+
+def _is_high_confidence_domain_token(token: str) -> bool:
+    return token in HIGH_CONFIDENCE_DOMAIN_TOKENS
+
+
+def _has_positive_semantic_signal(
+    semantic_tokens: set[str],
+    phrase_overlap: bool,
+    matched_rel_concepts: set[str],
+    matched_rel_skills: set[str],
+    glob_matched: bool,
+    is_wf_match: bool,
+    always_on: bool,
+) -> bool:
+    if always_on:
+        return True
+    if phrase_overlap and semantic_tokens:
+        return True
+    if len(semantic_tokens) >= 2:
+        return True
+    if len(semantic_tokens) == 1 and _is_high_confidence_domain_token(next(iter(semantic_tokens))):
+        return True
+    if matched_rel_concepts or matched_rel_skills or glob_matched or is_wf_match:
+        return True
+    return False
+
+
 def _ngrams(tokens: list[str], n: int) -> set[tuple[str, ...]]:
     return {tuple(tokens[i:i + n]) for i in range(max(0, len(tokens) - n + 1))}
 
@@ -36,17 +76,17 @@ def _ngrams(tokens: list[str], n: int) -> set[tuple[str, ...]]:
 def _has_phrase_overlap(task: str, directive_text: str, matched_tokens: set[str]) -> bool:
     """Return True when two or more overlapping tokens form the same phrase.
 
-    This lets domain phrases such as "oem health" remain semantic even though
-    each token is individually generic, while still blocking single-token
-    matches like "current".
+    Stopwords are filtered out before phrase matching so that "the current
+    project" reduces to ("current", "project") which is in GENERIC_PHRASES
+    and correctly skipped, while "oem health" remains meaningful.
     """
     if len(matched_tokens) < 2:
         return False
-    task_tokens = _ordered_tokens(task)
-    directive_tokens = _ordered_tokens(directive_text)
+    task_tokens = [t for t in _ordered_tokens(task) if t not in HARD_STOPWORDS]
+    directive_tokens = [t for t in _ordered_tokens(directive_text) if t not in HARD_STOPWORDS]
     for n in (3, 2):
         for phrase in _ngrams(task_tokens, n) & _ngrams(directive_tokens, n):
-            if phrase in GENERIC_PHRASES:
+            if phrase in GENERIC_PHRASES or all(t in GENERIC_WORDS for t in phrase):
                 continue
             if set(phrase).issubset(matched_tokens):
                 return True
@@ -84,7 +124,9 @@ def match_directives(
     
     task_lower = task.lower()
     # Simple tokenization
-    task_tokens = set(re.findall(r"\b[a-zA-Z0-9_\-]{3,}\b", task_lower))
+    task_raw_tokens = set(re.findall(r"\b[a-zA-Z0-9_\-]{3,}\b", task_lower))
+    stopword_tokens_ignored = task_raw_tokens.intersection(HARD_STOPWORDS)
+    task_tokens = _filter_stopwords(task_raw_tokens)
     
     skill_ids = {getattr(s, "id", None) or s.get("id") for s in matched_skills if s}
     concept_ids = {getattr(c, "id", None) or c.get("id") for c in matched_concepts if c}
@@ -104,9 +146,9 @@ def match_directives(
         scope_lower = (d.get("scope") or "").lower()
         priority = d.get("priority") or "normal"
         directive_text = " ".join(part for part in (title_lower, rule_lower, scope_lower) if part)
-        directive_tokens = _tokenize_lower(directive_text)
+        directive_tokens = _filter_stopwords(_tokenize_lower(directive_text))
         
-        triggers = set(json.loads(d.get("triggers_json") or "[]"))
+        triggers = _filter_stopwords(set(json.loads(d.get("triggers_json") or "[]")))
         forbidden_actions = set(json.loads(d.get("forbidden_actions_json") or "[]"))
         related_concepts = set(json.loads(d.get("related_concepts_json") or "[]"))
         related_skills = set(json.loads(d.get("related_skills_json") or "[]"))
@@ -135,7 +177,8 @@ def match_directives(
         # Matches if rule/title is workflow-related and task also matches workflow terms
         is_wf_directive = "workflow" in title_lower or "workflow" in rule_lower or "workflow" in scope_lower
         is_wf_task = "workflow" in task_lower or "wf" in task_lower
-        if is_wf_directive and is_wf_task:
+        is_wf_match = is_wf_directive and is_wf_task
+        if is_wf_match:
             score += 6.0
             reasons.append("workflow directive match")
             
@@ -191,7 +234,7 @@ def match_directives(
 
         if always_on:
             match_class = "global_always_on_directive"
-        elif semantic_tokens or phrase_overlap or matched_rel_concepts or matched_rel_skills or glob_matched or (is_wf_directive and is_wf_task):
+        elif semantic_tokens or phrase_overlap or matched_rel_concepts or matched_rel_skills or glob_matched or is_wf_match:
             match_class = "semantic_directive_match"
         elif all_match_tokens and not semantic_tokens:
             match_class = "generic_lexical_match"
@@ -199,8 +242,14 @@ def match_directives(
             match_class = "weak_directive_match"
 
         can_force_required = always_on or (priority == "critical" and match_class == "semantic_directive_match" and score >= 4.0)
+
+        has_signal = _has_positive_semantic_signal(
+            semantic_tokens, phrase_overlap,
+            matched_rel_concepts, matched_rel_skills,
+            glob_matched, is_wf_match, always_on,
+        )
              
-        if score > 0.0 or always_on:
+        if (score > 0.0 or always_on) and has_signal:
             matched.append({
                 "id": d["id"],
                 "title": d["title"],
@@ -220,6 +269,7 @@ def match_directives(
                 "matched_tokens": sorted(all_match_tokens),
                 "semantic_tokens": sorted(semantic_tokens),
                 "generic_tokens": sorted(generic_tokens),
+                "stopword_tokens_ignored": sorted(stopword_tokens_ignored),
                 "can_force_required": can_force_required,
             })
             
