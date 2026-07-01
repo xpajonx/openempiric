@@ -37,7 +37,7 @@ skills-lock.json
 .codebuddy/skills/
 .codemaker/skills/
 .codestudio/skills/
-.commandcode/skills/
+.commandcode/
 .continue/skills/
 .cortex/skills/
 .crush/skills/
@@ -79,6 +79,9 @@ data/skills/
 
 # CI artifacts
 tmp_ci_test/
+
+# Scratch/prototype/test artifacts
+scratch/
 
 # Agent scaffolding
 AGENTS.md
