@@ -1423,5 +1423,69 @@ def test_t1_t2_t3_remain_rank_one_after_materialized_type_detection():
     assert ranked_t3[0]["id"] == "t3"
 
 
+def test_fix_story_page_layout_no_false_suggest_from_failure_memory(preflight_project: Path):
+    db_path = preflight_project / ".oem" / ".local_vector_db" / "vectors.db"
+    content = "## Learnings\n\n- **Failure**: Do not modify Indonesian essays unless explicitly asked. page layout."
+    _add_memory_rows(db_path, [
+        ("mem_fail_id", content, {"source": ".oem/wiki/concept_008.md", "title": "Learnings"}),
+    ])
+    result = run_preflight(
+        "fix the story page responsive layout",
+        project=str(preflight_project),
+        write_audit=False,
+    )
+    matched = [m for m in result.matched_memory if m.id == "mem_fail_id"]
+    assert len(matched) == 0
+    if result.decision == "suggest":
+        assert "relevant_memory_matched" not in result.reason
+        assert "mem_fail_id" not in [m.id for m in result.matched_memory]
+
+
+def test_the_current_thing_no_false_memory_suggest(preflight_project: Path):
+    db_path = preflight_project / ".oem" / ".local_vector_db" / "vectors.db"
+    content = "## Learnings\n\n- **Decision**: 2_Essay/expertise-debt/Essay_ID.md is the open project. current thing."
+    _add_memory_rows(db_path, [
+        ("mem_dec_id", content, {"source": ".oem/wiki/concept_008.md", "title": "Learnings"}),
+    ])
+    result = run_preflight(
+        "the current thing",
+        project=str(preflight_project),
+        write_audit=False,
+    )
+    matched = [m for m in result.matched_memory if m.id == "mem_dec_id"]
+    assert len(matched) == 0
+
+
+def test_adjust_navbar_spacing_mobile_no_irrelevant_memory_match(preflight_project: Path):
+    db_path = preflight_project / ".oem" / ".local_vector_db" / "vectors.db"
+    content = "## Learnings\n\n- **Failure**: Do not modify Indonesian essays unless explicitly asked. mobile."
+    _add_memory_rows(db_path, [
+        ("mem_fail_id", content, {"source": ".oem/wiki/concept_008.md", "title": "Learnings"}),
+    ])
+    result = run_preflight(
+        "adjust navbar spacing on mobile",
+        project=str(preflight_project),
+        write_audit=False,
+    )
+    matched = [m for m in result.matched_memory if m.id == "mem_fail_id"]
+    assert len(matched) == 0
+
+
+def test_preflight_context_excludes_below_floor_memory(preflight_project: Path):
+    db_path = preflight_project / ".oem" / ".local_vector_db" / "vectors.db"
+    content = "## Learnings\n\n- **Failure**: Do not modify Indonesian essays unless explicitly asked. page layout."
+    _add_memory_rows(db_path, [
+        ("mem_fail_id", content, {"source": ".oem/wiki/concept_008.md", "title": "Learnings"}),
+    ])
+    result = run_preflight(
+        "fix the story page responsive layout",
+        project=str(preflight_project),
+        write_audit=False,
+    )
+    assert "below_relevance_floor" in result.rejection_reasons
+    assert result.rejection_reasons["below_relevance_floor"] >= 1
+
+
+
 
 

@@ -5,6 +5,34 @@ from dataclasses import dataclass, field
 from typing import Any
 
 # ============================================================================
+# Stopwords, generic words, and helper (module-level)
+# ============================================================================
+
+HARD_STOPWORDS = {
+    "the", "a", "an", "of", "to", "in", "on", "for", "with", "from",
+    "by", "at", "as", "is", "are", "was", "were", "be", "been", "being",
+    "and", "or", "but", "if", "then", "than", "that", "this", "it", "its"
+}
+
+GENERIC_WORDS = {
+    "current", "project", "content", "work", "continue", "session",
+    "context", "file", "task", "next", "now", "state", "review",
+    "health", "memory", "agent", "oem", "fix", "story", "page", "layout"
+}
+
+def clean_stem(w: str) -> str:
+    w_low = w.lower()
+    if w_low.endswith("ing"):
+        w_low = w_low[:-3]
+    elif w_low.endswith("ed"):
+        w_low = w_low[:-2]
+    elif w_low.endswith("es"):
+        w_low = w_low[:-2]
+    elif w_low.endswith("s") and not w_low.endswith("ss"):
+        w_low = w_low[:-1]
+    return w_low
+
+# ============================================================================
 # Boost/penalty weights (v3)
 # ============================================================================
 
@@ -122,33 +150,9 @@ def extract_query_targets(query: str) -> dict[str, Any]:
     technical_intent, debug_intent, technical_identifiers, project_terms = _detect_technical_intent(q, raw_identifiers)
 
     # Stopwords and generic terms classification
-    HARD_STOPWORDS = {
-        "the", "a", "an", "of", "to", "in", "on", "for", "with", "from",
-        "by", "at", "as", "is", "are", "was", "were", "be", "been", "being",
-        "and", "or", "but", "if", "then", "than", "that", "this", "it", "its"
-    }
-
-    GENERIC_WORDS = {
-        "current", "project", "content", "work", "continue", "session",
-        "context", "file", "task", "next", "now", "state", "review",
-        "health", "memory", "agent", "oem", "fix", "story", "page", "layout"
-    }
-
     CONDITIONAL_GENERIC = {"story", "page", "layout"}
 
     words_lower = [w.lower() for w in re.findall(r'\b\w+\b', q)]
-
-    def clean_stem(w: str) -> str:
-        w_low = w.lower()
-        if w_low.endswith("ing"):
-            w_low = w_low[:-3]
-        elif w_low.endswith("ed"):
-            w_low = w_low[:-2]
-        elif w_low.endswith("es"):
-            w_low = w_low[:-2]
-        elif w_low.endswith("s") and not w_low.endswith("ss"):
-            w_low = w_low[:-1]
-        return w_low
 
     path_words = set()
     for p in full_paths + filenames + dir_parts:
@@ -539,29 +543,19 @@ def _apply_boosts(
     query_targets: dict[str, Any],
     document: str,
     memory_type: str,
-) -> tuple[float, list[str], dict[str, float], dict[str, float]]:
+) -> tuple[float, float, float, bool, list[str], dict[str, float], dict[str, float]]:
     boosts: dict[str, float] = {}
     penalties: dict[str, float] = {}
     reasons: list[str] = []
 
     text_lower = document.lower()
     doc_len = len(document)
+    query_text = query_targets.get("query_text", "")
 
     # Exact path / filename / identifier / phrase signals
     exact_boosts, exact_reasons, has_exact_match, id_cooccurrence = _compute_exact_and_phrase_signals(query_targets, document)
     boosts.update(exact_boosts)
     reasons.extend(exact_reasons)
-
-    # Memory type boosts
-    if memory_type == "decision":
-        boosts["decision"] = BOOST_DECISION
-        reasons.append("decision memory")
-    elif memory_type == "failure":
-        boosts["failure"] = BOOST_FAILURE
-        reasons.append("failure memory")
-    elif memory_type == "outcome":
-        boosts["outcome"] = BOOST_OUTCOME
-        reasons.append("outcome memory")
 
     # Active / open work signal (independent)
     if (ACTIVE_WORK_PATTERNS.search(document) or query_targets.get("rule_intent")) and query_targets.get("has_strong_signals", True):
@@ -574,6 +568,60 @@ def _apply_boosts(
         boosts["workflow_rule"] = BOOST_WORKFLOW_RULE
         reasons.append("workflow rule signal")
 
+    # Relevance Floor check
+    has_exact_file = "exact_filename_match" in boosts
+    has_exact_path = "exact_path_match" in boosts
+    has_exact_phrase = "exact_phrase" in boosts
+    has_workflow_rule = (("workflow_rule" in boosts) or ("rule_phrase" in boosts)) and bool(query_targets.get("rule_intent"))
+    has_tech_id = id_cooccurrence >= 1
+
+    # Active work alignment (Refinement 1)
+    active_work_aligned = False
+    if ACTIVE_WORK_PATTERNS.search(document):
+        has_query_paths_or_files = bool(query_targets.get("full_paths") or query_targets.get("filenames"))
+        has_continuation_intent = any(p in query_text.lower() for p in ("continue", "working on", "current project", "active task"))
+        strong_semantic_tokens = [
+            t for t in query_targets.get("tokens", [])
+            if t.lower() not in HARD_STOPWORDS and clean_stem(t.lower()) not in HARD_STOPWORDS and
+               t.lower() not in GENERIC_WORDS and clean_stem(t.lower()) not in GENERIC_WORDS
+        ]
+        semantic_overlap_count = sum(1 for t in strong_semantic_tokens if t in text_lower)
+        if has_query_paths_or_files or has_continuation_intent or semantic_overlap_count >= 2:
+            active_work_aligned = True
+
+    # Semantic overlap count (Refinement 3)
+    strong_semantic_tokens = [
+        t for t in query_targets.get("tokens", [])
+        if t.lower() not in HARD_STOPWORDS and clean_stem(t.lower()) not in HARD_STOPWORDS and
+           t.lower() not in GENERIC_WORDS and clean_stem(t.lower()) not in GENERIC_WORDS
+    ]
+    semantic_overlap_count = sum(1 for t in strong_semantic_tokens if t in text_lower)
+
+    eligible_for_type_boost = (
+        has_exact_file or
+        has_exact_path or
+        has_exact_phrase or
+        has_workflow_rule or
+        has_tech_id or
+        active_work_aligned or
+        semantic_overlap_count >= 2
+    )
+
+    # Memory type boosts (suppressed if floor not met)
+    importance_boost = 0.0
+    if memory_type == "decision":
+        importance_boost = BOOST_DECISION
+    elif memory_type == "failure":
+        importance_boost = BOOST_FAILURE
+    elif memory_type == "outcome":
+        importance_boost = BOOST_OUTCOME
+
+    if importance_boost > 0.0:
+        if eligible_for_type_boost:
+            boosts[memory_type] = importance_boost
+            reasons.append(f"{memory_type} memory")
+        else:
+            reasons.append(f"{memory_type} boost suppressed: relevance floor not met")
 
     # Hard-capped topic match
     topic_hits = 0
@@ -659,12 +707,19 @@ def _apply_boosts(
             boosts["identifier_with_term"] = BOOST_IDENTIFIER_WITH_TERM
             reasons.append(f"identifier with workaround/timeout/debug term +{BOOST_IDENTIFIER_WITH_TERM}")
 
-    final_score = base_score + sum(boosts.values()) + sum(penalties.values())
-    return final_score, reasons, boosts, penalties
+    # Split boosts to calculate relevance_score and final_score correctly
+    type_boost_val = boosts.get(memory_type, 0.0) if memory_type in boosts else 0.0
+    other_boosts_sum = sum(v for k, v in boosts.items() if k != memory_type)
+    
+    relevance_score = base_score + other_boosts_sum + sum(penalties.values())
+    final_score = relevance_score + type_boost_val
+
+    return final_score, relevance_score, importance_boost, eligible_for_type_boost, reasons, boosts, penalties
 
 
 def rank_search_result(query: str, candidate: dict[str, Any]) -> dict[str, Any]:
     query_targets = extract_query_targets(query)
+    query_targets["query_text"] = query
     document = candidate.get("document", "")
     title = candidate.get("metadata", {}).get("title", "")
     snippet = candidate.get("snippet") or candidate.get("metadata", {}).get("snippet", "")
@@ -672,7 +727,7 @@ def rank_search_result(query: str, candidate: dict[str, Any]) -> dict[str, Any]:
     base_score = float(candidate.get("score", 0.0))
     memory_type = classify_memory_type(document, title, snippet)
 
-    final_score, reasons, boosts, penalties = _apply_boosts(
+    final_score, relevance_score, importance_boost, eligible_for_type_boost, reasons, boosts, penalties = _apply_boosts(
         base_score, query_targets, document, memory_type
     )
 
@@ -680,6 +735,9 @@ def rank_search_result(query: str, candidate: dict[str, Any]) -> dict[str, Any]:
     result["base_score"] = base_score
     result["score"] = final_score
     result["final_score"] = final_score
+    result["relevance_score"] = relevance_score
+    result["importance_boost"] = importance_boost
+    result["eligible_for_type_boost"] = eligible_for_type_boost
     result["memory_type"] = memory_type
     result["ranking_reason"] = reasons
     result["ranking_boosts"] = boosts
@@ -709,10 +767,14 @@ def _candidate_to_stable_item(c: dict[str, Any], rank: int, *, include_ranking_f
     }
     if include_ranking_fields or "final_score" in c:
         item["final_score"] = c.get("final_score", c.get("score", 0.0))
+        item["relevance_score"] = c.get("relevance_score", 0.0)
+        item["importance_boost"] = c.get("importance_boost", 0.0)
+        item["eligible_for_type_boost"] = c.get("eligible_for_type_boost", False)
         item["ranking_reason"] = c.get("ranking_reason", [])
         item["ranking_boosts"] = c.get("ranking_boosts", {})
         item["ranking_penalties"] = c.get("ranking_penalties", {})
     return item
+
 
 
 def build_ranking_debug_report(

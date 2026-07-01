@@ -391,8 +391,12 @@ def _evaluate_matched_memory_relevance(
 
 
 def is_weak_memory_match(rm: dict, task_targets: dict) -> tuple[bool, str]:
-    boosts = rm.get("ranking_boosts", {})
     mem_type = rm.get("memory_type")
+    eligible = rm.get("eligible_for_type_boost", True)
+    if mem_type in {"decision", "failure", "outcome"} and not eligible:
+        return True, "below_relevance_floor"
+
+    boosts = rm.get("ranking_boosts", {})
     
     # If the candidate has no query-specific overlap at all, it is weak/irrelevant!
     query_specific_boosts = {
@@ -718,7 +722,12 @@ def run_preflight(
         # Rank memory ONCE using the deterministic ranker (strict: no double application)
         matched_memory = []
         rejected_memory_count = 0
-        rejection_reasons = {"stopword_only": 0, "generic_only": 0, "single_weak_topic": 0}
+        rejection_reasons = {
+            "stopword_only": 0,
+            "generic_only": 0,
+            "single_weak_topic": 0,
+            "below_relevance_floor": 0,
+        }
         if memory_items:
             mem_candidates = []
             for m in memory_items:

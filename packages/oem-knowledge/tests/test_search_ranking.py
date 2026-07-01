@@ -765,3 +765,104 @@ class TestMemoryStopwordFloodingAndGenericGuardrails:
         ranked_t3 = rank_search_results("x-becoming-television GET_NOTEBOOK timeout pass source_ids explicitly chat.ask workaround", t3_cand)
         assert ranked_t3[0]["id"] == "t3"
 
+
+class TestRelevanceFloorRefinements:
+    def test_active_work_pattern_in_document_does_not_unlock_type_boost_for_unrelated_query(self):
+        candidates = [
+            {
+                "id": "mem1",
+                "document": "Failure: some unrelated error occurred. is the open project.",
+                "score": 0.0,
+                "metadata": {},
+            }
+        ]
+        ranked = rank_search_results("story", candidates)
+        assert ranked[0]["eligible_for_type_boost"] is False
+        assert ranked[0]["final_score"] == 3.0
+
+    def test_single_weak_identifier_does_not_unlock_type_boost(self):
+        candidates = [
+            {
+                "id": "mem1",
+                "document": "Failure: the story layout had an issue.",
+                "score": 0.0,
+                "metadata": {},
+            }
+        ]
+        ranked = rank_search_results("story", candidates)
+        assert ranked[0]["eligible_for_type_boost"] is False
+
+    def test_single_exact_technical_identifier_can_unlock_type_boost(self):
+        candidates = [
+            {
+                "id": "mem1",
+                "document": "Failure: source_ids had an issue.",
+                "score": 0.0,
+                "metadata": {},
+            }
+        ]
+        ranked = rank_search_results("source_ids", candidates)
+        assert ranked[0]["eligible_for_type_boost"] is True
+        assert ranked[0]["final_score"] > 5.0
+
+    def test_two_generic_tokens_do_not_meet_relevance_floor(self):
+        candidates = [
+            {
+                "id": "mem1",
+                "document": "Failure: fix the layout on the story page.",
+                "score": 0.0,
+                "metadata": {},
+            }
+        ]
+        ranked = rank_search_results("fix story", candidates)
+        assert ranked[0]["eligible_for_type_boost"] is False
+
+    def test_two_semantic_tokens_meet_relevance_floor(self):
+        candidates = [
+            {
+                "id": "mem1",
+                "document": "Failure: GSAP and ScrollTrigger had responsive bugs.",
+                "score": 0.0,
+                "metadata": {},
+            }
+        ]
+        ranked = rank_search_results("GSAP ScrollTrigger", candidates)
+        assert ranked[0]["eligible_for_type_boost"] is True
+
+    def test_suppressed_failure_boost_not_included_in_final_score(self):
+        candidates = [
+            {
+                "id": "mem1",
+                "document": "Failure: layout spacing is incorrect.",
+                "score": 0.0,
+                "metadata": {},
+            }
+        ]
+        ranked = rank_search_results("layout", candidates)
+        assert ranked[0]["eligible_for_type_boost"] is False
+        assert "failure boost suppressed" in " ".join(ranked[0]["ranking_reason"])
+        assert ranked[0]["final_score"] == 0.0
+
+    def test_t1_t2_t3_strict_rank_one_after_relevance_floor(self):
+        t1_cand = [
+            {"id": "other", "document": "Failure: some other document", "score": 1.0, "metadata": {}},
+            {"id": "t1", "document": "Decision: 2_Essay/expertise-debt/Essay_ID.md is the open project", "score": 1.0, "metadata": {}},
+        ]
+        ranked_t1 = rank_search_results("2_Essay/expertise-debt/Essay_ID.md is the open project", t1_cand)
+        assert ranked_t1[0]["id"] == "t1"
+
+        t2_cand = [
+            {"id": "other", "document": "Failure: some other document", "score": 1.0, "metadata": {}},
+            {"id": "t2", "document": "Decision: For Indonesian essays: inspect, understand tone, propose changes.", "score": 1.0, "metadata": {}},
+        ]
+        ranked_t2 = rank_search_results("For Indonesian essays continue working means analyze not write do not modify file unless explicit", t2_cand)
+        assert ranked_t2[0]["id"] == "t2"
+
+        t3_cand = [
+            {"id": "other", "document": "Failure: some other document", "score": 1.0, "metadata": {}},
+            {"id": "t3", "document": "Handoff: x-becoming-television GET_NOTEBOOK timeout pass source_ids explicitly chat.ask workaround", "score": 1.0, "metadata": {}},
+        ]
+        ranked_t3 = rank_search_results("x-becoming-television GET_NOTEBOOK timeout pass source_ids explicitly chat.ask workaround", t3_cand)
+        assert ranked_t3[0]["id"] == "t3"
+
+
