@@ -12,7 +12,7 @@ from ..markdown.frontmatter import parse_frontmatter
 from .audit import write_audit_event
 from .budget import ContextBudget, render_context
 from .models import ConceptMetadata, MemoryMetadata, PreflightResult, SkillMetadata
-from .scoring import REQUIRED_THRESHOLD, SUGGEST_THRESHOLD, SOURCE_HINT_WEIGHT, make_match, score_concept, score_memory, score_skill
+from .scoring import REQUIRED_THRESHOLD, SUGGEST_THRESHOLD, SOURCE_HINT_WEIGHT, make_match, score_concept, score_memory, score_skill, MEMORY_TYPE_WEIGHTS
 from .triggers import contains_phrase, normalize_text, tokenize, unique_tokens
 from ..project_layout import ProjectLayout
 from ..project import ProjectMismatchError, ProjectUnresolvedError, resolve_active_project
@@ -638,6 +638,13 @@ def run_preflight(
             breakdown = score_memory(task, memory)
             if breakdown.score <= 0:
                 continue
+            memory_type = _detect_memory_chunk_type(memory)
+            ranking_meta = {
+                "memory_type": memory_type,
+                "ranking_reason": [f"memory {memory_type} hit"],
+                "ranking_boosts": {memory_type: MEMORY_TYPE_WEIGHTS.get(memory_type, 1.0)} if memory_type in MEMORY_TYPE_WEIGHTS else {},
+                "ranking_penalties": {},
+            }
             matched_memory.append(
                 make_match(
                     kind="memory",
@@ -647,6 +654,7 @@ def run_preflight(
                     reason=breakdown.reason,
                     source_path=memory.source_path,
                     snippet=memory.snippet,
+                    metadata=ranking_meta,
                 )
             )
 

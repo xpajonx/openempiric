@@ -116,12 +116,8 @@ def score_concept(task: str, concept: ConceptMetadata) -> ScoreBreakdown:
 
 
 def _detect_memory_type(title: str | None, snippet: str | None) -> str:
-    text = (title or "") + " " + (snippet or "")
-    first_line = text.lstrip().split("\n", 1)[0].strip().lower()
-    for t in ("decision:", "failure:", "outcome:"):
-        if first_line.startswith(t):
-            return t.rstrip(":")
-    return "observation"
+    from oem_knowledge.memory_ranking import classify_memory_type as classify
+    return classify("", title, snippet or "")
 
 
 def score_memory(task: str, memory: MemoryMetadata) -> ScoreBreakdown:
@@ -146,6 +142,7 @@ def make_match(
     reason: str,
     source_path: str | None,
     snippet: str | None,
+    metadata: dict | None = None,
 ) -> PreflightMatch:
     return PreflightMatch(
         kind=kind,
@@ -155,4 +152,5 @@ def make_match(
         reason=reason,
         source_path=source_path,
         snippet=snippet,
+        metadata=metadata or {},
     )

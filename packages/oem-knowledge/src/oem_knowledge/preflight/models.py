@@ -12,6 +12,7 @@ class PreflightMatch:
     reason: str
     source_path: str | None = None
     snippet: str | None = None
+    metadata: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

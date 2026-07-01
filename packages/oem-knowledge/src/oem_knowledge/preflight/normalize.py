@@ -46,7 +46,7 @@ def make_preflight_budget(limit: int | None) -> tuple[ContextBudget, list[str], 
 
 
 def _serialize_match(match: PreflightMatch) -> dict[str, Any]:
-    return {
+    result: dict[str, Any] = {
         "kind": match.kind,
         "id": match.id,
         "title": match.title,
@@ -55,6 +55,9 @@ def _serialize_match(match: PreflightMatch) -> dict[str, Any]:
         "source_path": match.source_path,
         "snippet": match.snippet,
     }
+    if match.metadata:
+        result["metadata"] = match.metadata
+    return result
 
 
 def _reason_code(result: PreflightResult) -> tuple[str, str | None]:

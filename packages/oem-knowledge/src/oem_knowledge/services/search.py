@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 from oem_knowledge.markdown.frontmatter import parse_frontmatter
 from oem_knowledge.source_classifier import classify_source
 from oem_knowledge.vector_store import VectorStore
+from oem_knowledge.memory_ranking import rank_search_results, classify_memory_type
 
 if TYPE_CHECKING:
     from oem_knowledge.engine import KnowledgeEngine
@@ -594,7 +595,8 @@ class SearchService:
                     })
 
             candidates.sort(key=lambda x: x["score"], reverse=True)
-            return candidates[:k]
+            ranked = rank_search_results(query, candidates)
+            return ranked[:k]
         except Exception as e:
             import logging
             logging.warning("Vector database search failed, falling back to registry-only: %s", e)
@@ -681,7 +683,8 @@ class SearchService:
                 })
 
         candidates.sort(key=lambda x: x["score"], reverse=True)
-        return candidates[:k]
+        ranked = rank_search_results(query, candidates)
+        return ranked[:k]
 
     def _string_similarity(self, s1: str, s2: str) -> float:
         import difflib
