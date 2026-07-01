@@ -212,3 +212,12 @@ def test_health_surfaces_do_not_disagree_on_contradiction_count(engine, tmp_path
     assert len(report["contradictions"]) == 1
     assert len(read_result["sections"]["contradictions"]) == 1
     assert len(mcp_payload["contradictions"]) == 1
+
+
+def test_knowledge_read_health_uses_shared_active_work_report(engine, tmp_path):
+    harness = engine._resolve_harness(str(tmp_path))
+    _write_active_project_conflict(harness)
+    report = build_health_report(str(tmp_path), include_daemon_runtime=False)
+    result = engine.knowledge_read(str(tmp_path), scope="health")
+    assert "active_work" in result["sections"]
+    assert result["sections"]["active_work"] == report["active_work"]

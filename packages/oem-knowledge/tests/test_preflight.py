@@ -1121,3 +1121,43 @@ def test_preflight_current_content_machine_contract_not_triggered_by_current_onl
 
     assert len(result["matched_directives"]) == 0
     assert result["decision"] != "required"
+
+
+# ---------------------------------------------------------------------------
+# P1 Bug #5: preflight active_work sources include markdown fields
+# ---------------------------------------------------------------------------
+
+
+def test_preflight_active_work_sources_include_md_fields(tmp_path: Path):
+    project = tmp_path / "pp"
+    oem = project / ".oem"
+    oem.mkdir(parents=True)
+    (oem / "skills").mkdir()
+    (oem / "skill_candidates").mkdir()
+    (oem / "wiki").mkdir()
+    (oem / "state").mkdir()
+    _write_json(oem / "manifest.json", {"schema_version": 1, "project_id": "pp"})
+    _write_json(oem / "concept_registry.json", {})
+    _write_json(oem / "source_manifest.json", {"version": 1, "files": []})
+    (oem / "session-handoff.md").write_text(
+        "# Session Handoff\n\nPrimary objective: x-becoming-television\n",
+        encoding="utf-8"
+    )
+    rt = oem / ".runtime"
+    rt.mkdir(parents=True)
+    (rt / "context.md").write_text(
+        "Active project: 2_Essay/expertise-debt/Essay_ID.md\n",
+        encoding="utf-8"
+    )
+    result = run_preflight(
+        "continue working on the current project",
+        project=str(project),
+        write_audit=False,
+    )
+    aw = result.active_work
+    assert aw is not None
+    sources = {s["source"]: s for s in aw.get("sources", [])}
+    assert "session_handoff_md" in sources
+    assert "runtime_context_md" in sources
+    assert sources["session_handoff_md"]["fields"] != {}
+    assert sources["runtime_context_md"]["fields"] != {}

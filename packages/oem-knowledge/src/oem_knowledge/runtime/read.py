@@ -205,6 +205,7 @@ def execute_knowledge_read(
             "runtime_status": runtime_status,
             "contradictions": health_report.get("contradictions", []),
             "active_project": health_report.get("active_project", {}),
+            "active_work": health_report.get("active_work", {}),
             "warnings": all_warnings,
         }
         msg = "OEM project memory health status loaded."

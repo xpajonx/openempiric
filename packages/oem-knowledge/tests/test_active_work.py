@@ -16,6 +16,7 @@ from oem_knowledge.runtime.active_work import (
     _parse_project_from_context_md,
     _parse_project_from_handoff_json,
     _parse_project_from_outcome,
+    _is_conservative_project_identifier,
     ActiveWorkResult,
     ActiveProjectResult,
     SOURCE_HANDOFF_JSON,
@@ -23,6 +24,7 @@ from oem_knowledge.runtime.active_work import (
     SOURCE_STATE_HANDOFF_MD,
     SOURCE_RUNTIME_CONTEXT,
     SOURCE_LATEST_OUTCOME,
+    SOURCE_ACTIVE_SESSION,
 )
 from oem_knowledge.preflight.router import run_preflight
 
@@ -641,6 +643,182 @@ def test_health_contradiction_type_is_field_specific(tmp_path: Path):
     # Field-specific type (or legacy_type present)
     assert any((t and "active_work_item" in str(t)) or (c.get("legacy_type") == "active_project_mismatch")
                for c in rep.get("contradictions", []) for t in [c.get("type")])
+
+
+# ---------------------------------------------------------------------------
+# P1 Bug #5: Active work markdown source parsing regression
+# ---------------------------------------------------------------------------
+
+
+def test_active_work_parses_root_session_handoff_md_current_project_state(tmp_path: Path):
+    (tmp_path / "session-handoff.md").write_text(
+        "# Session Handoff\n\n"
+        "## Current Project State\n\n"
+        "Primary objective: x-becoming-television\n",
+        encoding="utf-8"
+    )
+    ident = resolve_active_work_identity(tmp_path)
+    md = next((s for s in ident.sources if s.source == SOURCE_HANDOFF_MD), None)
+    assert md is not None
+    assert md.fields != {}
+    assert ident.active_topic == "x-becoming-television"
+
+
+def test_active_work_parses_runtime_context_md_active_project(tmp_path: Path):
+    rt = tmp_path / ".runtime"
+    rt.mkdir(parents=True)
+    (rt / "context.md").write_text(
+        "# OEM Runtime Context\n\n"
+        "Active project: 2_Essay/expertise-debt/Essay_ID.md\n",
+        encoding="utf-8"
+    )
+    ident = resolve_active_work_identity(tmp_path)
+    md = next((s for s in ident.sources if s.source == SOURCE_RUNTIME_CONTEXT), None)
+    assert md is not None
+    assert md.fields != {}
+    assert ident.active_work_item == "2_Essay/expertise-debt/Essay_ID.md"
+
+
+def test_active_work_json_does_not_short_circuit_markdown_sources(tmp_path: Path):
+    (tmp_path / "session-handoff.json").write_text(json.dumps({
+        "workspace_root": "/home/xpajonx/projects/X_autoresearch",
+        "active_topic": "X_autoresearch"
+    }), encoding="utf-8")
+    (tmp_path / "session-handoff.md").write_text(
+        "# Session Handoff\n\n"
+        "## Current Project State\n\n"
+        "Primary objective: x-becoming-television\n",
+        encoding="utf-8"
+    )
+    rt = tmp_path / ".runtime"
+    rt.mkdir(parents=True)
+    (rt / "context.md").write_text(
+        "# OEM Runtime Context\n\n"
+        "Active project: 2_Essay/expertise-debt/Essay_ID.md\n",
+        encoding="utf-8"
+    )
+    ident = resolve_active_work_identity(tmp_path)
+    sources = {s.source: s for s in ident.sources}
+    assert SOURCE_HANDOFF_JSON in sources
+    assert SOURCE_HANDOFF_MD in sources
+    assert SOURCE_RUNTIME_CONTEXT in sources
+    assert sources[SOURCE_HANDOFF_JSON].fields != {}
+    assert sources[SOURCE_HANDOFF_MD].fields != {}
+    assert sources[SOURCE_RUNTIME_CONTEXT].fields != {}
+
+
+def test_active_work_sources_include_md_fields(tmp_path: Path):
+    (tmp_path / "session-handoff.md").write_text(
+        "# Session Handoff\n\nPrimary objective: x-becoming-television\n",
+        encoding="utf-8"
+    )
+    rt = tmp_path / ".runtime"
+    rt.mkdir(parents=True)
+    (rt / "context.md").write_text(
+        "Active project: 2_Essay/expertise-debt/Essay_ID.md\n",
+        encoding="utf-8"
+    )
+    ident = resolve_active_work_identity(tmp_path)
+    md_sources = [s for s in ident.sources if s.source in (SOURCE_HANDOFF_MD, SOURCE_RUNTIME_CONTEXT)]
+    for s in md_sources:
+        assert len(s.fields) > 0, f"{s.source} has empty fields"
+
+
+def test_health_detects_session_handoff_vs_runtime_context_conflict(tmp_path: Path):
+    oem_dir = tmp_path / ".oem"
+    oem_dir.mkdir(parents=True, exist_ok=True)
+    (oem_dir / "session-handoff.md").write_text(
+        "# Session Handoff\n\nPrimary objective: x-becoming-television\n",
+        encoding="utf-8"
+    )
+    rt = oem_dir / ".runtime"
+    rt.mkdir(parents=True, exist_ok=True)
+    (rt / "context.md").write_text(
+        "Active project: 2_Essay/expertise-debt/Essay_ID.md\n",
+        encoding="utf-8"
+    )
+    from oem_knowledge.health import build_health_report
+    rep = build_health_report(str(tmp_path), include_daemon_runtime=False)
+    types = [c.get("type") for c in rep.get("contradictions", [])]
+    assert "active_work_source_disagreement" in types
+
+
+def test_active_session_project_remains_workspace_root_not_active_work_item(tmp_path: Path):
+    state = tmp_path / "state"
+    state.mkdir(parents=True)
+    (state / "active_session.json").write_text(json.dumps({
+        "project": "/home/xpajonx/projects/X_autoresearch"
+    }), encoding="utf-8")
+    ident = resolve_active_work_identity(tmp_path)
+    assert ident.workspace_root == "/home/xpajonx/projects/X_autoresearch"
+    assert ident.active_work_item is None
+    src = next((s for s in ident.sources if s.source == SOURCE_ACTIVE_SESSION), None)
+    assert src is not None
+    assert "workspace_root" in src.fields
+    assert src.fields["workspace_root"].value == "/home/xpajonx/projects/X_autoresearch"
+
+
+def test_markdown_headers_are_not_used_as_project_identity(tmp_path: Path):
+    (tmp_path / "session-handoff.md").write_text(
+        "# Session Handoff\n\n"
+        "## Current Project State\n\n"
+        "Some description here.\n",
+        encoding="utf-8"
+    )
+    ident = resolve_active_work_identity(tmp_path)
+    assert ident.active_work_item is None
+    assert ident.active_topic is None
+    md = next((s for s in ident.sources if s.source == SOURCE_HANDOFF_MD), None)
+    if md is not None:
+        assert md.fields == {}
+
+
+def test_primary_objective_classified_as_topic_or_task_not_workspace_root(tmp_path: Path):
+    (tmp_path / "session-handoff.md").write_text(
+        "# Session Handoff\n\nPrimary objective: x-becoming-television\n",
+        encoding="utf-8"
+    )
+    ident = resolve_active_work_identity(tmp_path)
+    assert ident.active_topic == "x-becoming-television"
+    assert ident.workspace_root is None
+
+
+def test_primary_objective_path_classified_as_active_work_item(tmp_path: Path):
+    (tmp_path / "session-handoff.md").write_text(
+        "# Session Handoff\n\nPrimary objective: 2_Essay/expertise-debt/Essay_ID.md\n",
+        encoding="utf-8"
+    )
+    ident = resolve_active_work_identity(tmp_path)
+    assert ident.active_work_item == "2_Essay/expertise-debt/Essay_ID.md"
+    assert ident.active_topic is None
+
+
+def test_open_project_sentence_ignores_generic_prose(tmp_path: Path):
+    (tmp_path / "session-handoff.md").write_text(
+        "# Session Handoff\n\nThe open project should feel simple and clear.\n",
+        encoding="utf-8"
+    )
+    ident = resolve_active_work_identity(tmp_path)
+    assert ident.active_work_item is None
+    assert ident.active_topic is None
+
+
+def test_cross_field_markdown_disagreement_is_warning_not_error(tmp_path: Path):
+    (tmp_path / "session-handoff.md").write_text(
+        "# Session Handoff\n\nPrimary objective: x-becoming-television\n",
+        encoding="utf-8"
+    )
+    rt = tmp_path / ".runtime"
+    rt.mkdir(parents=True)
+    (rt / "context.md").write_text(
+        "Active project: 2_Essay/expertise-debt/Essay_ID.md\n",
+        encoding="utf-8"
+    )
+    ident = resolve_active_work_identity(tmp_path)
+    disagreements = [c for c in ident.conflicts if c.type == "active_work_source_disagreement"]
+    assert len(disagreements) >= 1
+    for d in disagreements:
+        assert d.severity == "warning"
 
 
 def test_handoff_writer_does_not_invent_active_work_item_from_workspace(tmp_path: Path):

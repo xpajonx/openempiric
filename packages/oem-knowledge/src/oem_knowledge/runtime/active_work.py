@@ -508,6 +508,21 @@ _EXPLICIT_PROJECT_MARKERS = [
 _OPEN_PROJECT_SENTENCE = re.compile(r"(?im)^\s*(?:[-*]\s+)?(.+?)\s+is\s+the\s+open\s+project\s*\.?.*$")
 _NEXT_ACTION = re.compile(r"(?im)^\s*(?:[-*]\s+)?Next\s+action\s*:\s*(.+?)\s*$")
 _FILE_SIGNAL = re.compile(r"(?:^|\s)([\w./~-]+(?:/|\\)[\w./~-]+|[\w.-]+\.(?:md|txt|py|ts|tsx|js|jsx|json|yaml|yml))")
+_CONSTITUTIVE_OPEN_CURRENT_SENTENCE = re.compile(r"(?im)^\s*(?:[-*]\s+)?(.+?)\s+is\s+the\s+(open|current)\s+project\s*\.?.*$")
+
+
+def _is_conservative_project_identifier(value: str) -> bool:
+    if not value or len(value) > 120:
+        return False
+    if "/" in value or "\\" in value:
+        return True
+    if any(value.lower().endswith(ext) for ext in _KNOWN_EXTENSIONS):
+        return True
+    if "-" in value or "_" in value:
+        return True
+    if re.search(r"[A-Z]", value) and re.search(r"[a-z]", value):
+        return True
+    return False
 
 
 def _parse_project_from_markdown(text: str) -> tuple[str | None, str, str]:
@@ -603,6 +618,8 @@ _EXPLICIT_SEMANTIC_MARKERS = [
     # task / next action
     ("Active task:", re.compile(r"(?im)^\s*(?:[-*]\s+)?Active\s+task\s*:\s*(.+?)\s*$")),
     ("Next action:", re.compile(r"(?im)^\s*(?:[-*]\s+)?Next\s+action\s*:\s*(.+?)\s*$")),
+    # primary objective → classified by shape (topic, item, or task)
+    ("Primary objective:", re.compile(r"(?im)^\s*(?:[-*]\s+)?Primary\s+objective\s*:\s*(.+?)\s*$")),
 ]
 
 def _parse_semantic_fields_from_text(text: str, workspace_root: Path | None = None) -> dict[ActiveWorkField, ActiveWorkFieldValue]:
@@ -644,6 +661,13 @@ def _parse_semantic_fields_from_text(text: str, workspace_root: Path | None = No
             result["active_task"] = ActiveWorkFieldValue(value=raw, confidence="high", evidence=evidence)
             continue
 
+        if ev_lower.startswith("primary objective"):
+            fld = classify_active_work_value(raw, workspace_root=workspace_root)
+            if fld == "unknown":
+                fld = "active_topic"
+            result[fld] = ActiveWorkFieldValue(value=raw, confidence="high", evidence=evidence)
+            continue
+
         # Classify by shape (existence not required)
         fld = classify_active_work_value(raw, workspace_root=workspace_root)
         if fld == "unknown":
@@ -658,6 +682,16 @@ def _parse_semantic_fields_from_text(text: str, workspace_root: Path | None = No
         if "next action" in ev_lower:
             conf = "medium"
         result[fld] = ActiveWorkFieldValue(value=raw, confidence=conf, evidence=evidence)
+    # Fallback: open/current project sentence (conservative, only if no explicit markers matched)
+    _active_fields = {f for f in result if f != "unknown"}
+    if not _active_fields:
+        m = _CONSTITUTIVE_OPEN_CURRENT_SENTENCE.search(text)
+        if m:
+            raw = m.group(1).strip()
+            if raw and _is_conservative_project_identifier(raw):
+                fld = classify_active_work_value(raw, workspace_root=workspace_root)
+                if fld in ("active_work_item", "active_topic", "active_task"):
+                    result[fld] = ActiveWorkFieldValue(value=raw, confidence="medium", evidence="open_project_sentence")
     return result
 
 
@@ -849,6 +883,44 @@ def resolve_active_work_identity(memory_root: Path) -> ActiveWorkIdentity:
                 message=f"High-confidence {f} sources disagree.",
                 source_details={k: all_details.get(k, {}) for k in high_vals.values() if k in all_details},
             ))
+
+    # Cross-field markdown source disagreement (warning-level only)
+    _md_sources = [s for s in sources_list if s.source in (SOURCE_HANDOFF_MD, SOURCE_STATE_HANDOFF_MD, SOURCE_RUNTIME_CONTEXT)]
+    _md_with_fields = [s for s in _md_sources if any(f in s.fields for f in ("active_work_item", "active_topic", "active_task"))]
+    if len(_md_with_fields) >= 2:
+        for i in range(len(_md_with_fields)):
+            for j in range(i + 1, len(_md_with_fields)):
+                s1, s2 = _md_with_fields[i], _md_with_fields[j]
+
+                def _ctx_map(s):
+                    out = {}
+                    for f in ("active_work_item", "active_topic", "active_task"):
+                        fv = s.fields.get(f)
+                        if fv and fv.value:
+                            out[f] = fv.value
+                    return out
+
+                ctx1 = _ctx_map(s1)
+                ctx2 = _ctx_map(s2)
+                if not ctx1 or not ctx2:
+                    continue
+                shared = set(ctx1.keys()) & set(ctx2.keys())
+                if shared and all(ctx1[f] == ctx2[f] for f in shared):
+                    continue
+                if not any(f in ctx1 for f in ("active_work_item", "active_topic")):
+                    continue
+                if not any(f in ctx2 for f in ("active_work_item", "active_topic")):
+                    continue
+                if any(c for c in conflicts if c.type == "active_work_source_disagreement" and set(c.sources) == {s1.source, s2.source}):
+                    continue
+                conflicts.append(ActiveWorkConflict(
+                    semantic_field="unknown",
+                    type="active_work_source_disagreement",
+                    sources=[s1.source, s2.source],
+                    severity="warning",
+                    message="Markdown sources point to different active work context.",
+                    source_details={s1.source: ctx1, s2.source: ctx2},
+                ))
 
     identity = ActiveWorkIdentity(
         workspace_root=final["workspace_root"],
