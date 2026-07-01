@@ -1486,6 +1486,20 @@ def test_preflight_context_excludes_below_floor_memory(preflight_project: Path):
     assert result.rejection_reasons["below_relevance_floor"] >= 1
 
 
+def test_search_excludes_below_floor_memory(preflight_project: Path):
+    engine = KnowledgeEngine(str(preflight_project))
+    db_path = preflight_project / ".oem" / ".local_vector_db" / "vectors.db"
+    content = "## Learnings\n\n- **Failure**: Do not modify Indonesian essays unless explicitly asked. page layout."
+    _add_memory_rows(db_path, [
+        ("mem_fail_id", content, {"source": ".oem/wiki/concept_008.md", "title": "Learnings"}),
+    ])
+    engine.session_start(str(preflight_project))
+    results = engine.search.search("fix the story page responsive layout")
+    matched = [r for r in results if r.get("id") == "mem_fail_id"]
+    assert len(matched) == 0
+
+
+
 
 
 

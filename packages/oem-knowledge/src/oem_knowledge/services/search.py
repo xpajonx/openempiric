@@ -677,7 +677,16 @@ class SearchService:
                 return []
             candidates.sort(key=lambda x: x["score"], reverse=True)
             ranked = rank_search_results(query, candidates)
-            results = ranked[:k]
+            filtered_ranked = []
+            for r in ranked:
+                is_memory = r.get("memory_type") in ("decision", "failure", "outcome")
+                eligible = r.get("eligible_for_type_boost", True)
+                if is_memory and not eligible:
+                    continue
+                if r.get("score", 0.0) <= 0.0:
+                    continue
+                filtered_ranked.append(r)
+            results = filtered_ranked[:k]
             try:
                 concept_ids = self.engine.state.concept_ids_from_retrieval_results(results)
                 self.engine.state.record_concept_references(concept_ids, source="search")
@@ -695,7 +704,16 @@ class SearchService:
             return []
         candidates.sort(key=lambda x: x["score"], reverse=True)
         ranked = rank_search_results(query, candidates)
-        results = ranked[:k]
+        filtered_ranked = []
+        for r in ranked:
+            is_memory = r.get("memory_type") in ("decision", "failure", "outcome")
+            eligible = r.get("eligible_for_type_boost", True)
+            if is_memory and not eligible:
+                continue
+            if r.get("score", 0.0) <= 0.0:
+                continue
+            filtered_ranked.append(r)
+        results = filtered_ranked[:k]
         try:
             concept_ids = self.engine.state.concept_ids_from_retrieval_results(results)
             self.engine.state.record_concept_references(concept_ids, source="search")

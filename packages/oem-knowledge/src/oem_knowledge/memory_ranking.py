@@ -476,6 +476,12 @@ def has_workflow_rule_signal(text: str) -> bool:
     return False
 
 
+def has_tech_id_boundary_match(text: str, tid: str) -> bool:
+    escaped = re.escape(tid.lower())
+    pattern = rf"(?<![a-zA-Z0-9_\.]){escaped}(?![a-zA-Z0-9_\.])"
+    return bool(re.search(pattern, text.lower()))
+
+
 # ============================================================================
 # Core ranking
 # ============================================================================
@@ -524,16 +530,17 @@ def _compute_exact_and_phrase_signals(query_targets: dict[str, Any], document: s
 
     # Near-exact rule / workflow phrases (normalized)
     rule_phrase_boost = 0.0
-    for rp in WORKFLOW_RULE_PHRASES:
-        if has_phrase_match(document, rp):
-            rule_phrase_boost = max(rule_phrase_boost, BOOST_RULE_PHRASE)
-            reasons.append(f"workflow rule phrase: '{rp}' +{BOOST_RULE_PHRASE}")
+    if query_targets.get("rule_intent"):
+        for rp in WORKFLOW_RULE_PHRASES:
+            if has_phrase_match(document, rp):
+                rule_phrase_boost = max(rule_phrase_boost, BOOST_RULE_PHRASE)
+                reasons.append(f"workflow rule phrase: '{rp}' +{BOOST_RULE_PHRASE}")
     if rule_phrase_boost:
         boosts["rule_phrase"] = rule_phrase_boost
 
     # v3: Identifier co-occurrence count (for co-occurrence boost in _apply_boosts)
     tech_ids = query_targets.get("technical_identifiers", [])
-    identifier_cooccurrence_count = sum(1 for tid in tech_ids if tid.lower() in text_lower and len(tid) >= 3)
+    identifier_cooccurrence_count = sum(1 for tid in tech_ids if has_tech_id_boundary_match(text_lower, tid) and len(tid) >= 3)
 
     return boosts, reasons, has_exact, identifier_cooccurrence_count
 

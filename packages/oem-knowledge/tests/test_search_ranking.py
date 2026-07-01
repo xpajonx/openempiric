@@ -778,7 +778,7 @@ class TestRelevanceFloorRefinements:
         ]
         ranked = rank_search_results("story", candidates)
         assert ranked[0]["eligible_for_type_boost"] is False
-        assert ranked[0]["final_score"] == 3.0
+        assert ranked[0]["final_score"] == 0.0
 
     def test_single_weak_identifier_does_not_unlock_type_boost(self):
         candidates = [
@@ -866,3 +866,12 @@ class TestRelevanceFloorRefinements:
         assert ranked_t3[0]["id"] == "t3"
 
 
+def test_tech_id_boundary_matching():
+    from oem_knowledge.memory_ranking import has_tech_id_boundary_match
+    assert has_tech_id_boundary_match("this is api", "api") is True
+    assert has_tech_id_boundary_match("capitalization", "api") is False
+    assert has_tech_id_boundary_match("cli is nice", "cli") is True
+    assert has_tech_id_boundary_match("client", "cli") is False
+    assert has_tech_id_boundary_match("my_func() call", "my_func") is True
+    assert has_tech_id_boundary_match("my_func_2", "my_func") is False
+    assert has_tech_id_boundary_match("chat.ask()", "chat.ask") is True
