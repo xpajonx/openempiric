@@ -290,12 +290,18 @@ def _extract_task_targets(task: str) -> dict:
 # Memory relevance classification
 # ---------------------------------------------------------------------------
 
-_DECISION_TYPES = frozenset({"decision", "failure"})
+_DECISION_TYPES = frozenset({"decision", "failure", "technical_handoff", "workaround", "debug_note"})
 _OPEN_PROJECT_SIGNALS = (
     "is the open project",
     "open project",
     "current project",
     "active project",
+)
+
+_TECHNICAL_INTENT_SIGNALS = (
+    "timeout", "error", "bug", "workaround", "adapter",
+    "source_ids", "chat.ask", "get_notebook",
+    "debug", "fix", "regression",
 )
 
 
@@ -344,16 +350,25 @@ def _classify_memory_relevance(
     has_open_project = any(sig in combined for sig in _OPEN_PROJECT_SIGNALS)
     is_continuation = task_targets.get("has_continuation_phrase", False)
 
-    # Strong: Decision/Failure + target match, or open project + continuation
+    # v3: If memory is technical_handoff/workaround, promote for technical queries
+    is_technical_query = any(s in task_lower for s in _TECHNICAL_INTENT_SIGNALS)
+    is_technical_chunk = chunk_type in ("technical_handoff", "workaround", "debug_note")
+
+    # Strong: Decision/Failure + target match, or open project + continuation,
+    #         or technical chunk for technical query
     if is_decision_type and target_hit:
         signals.append(f"type:{chunk_type}")
+        return "strong", signals
+    if is_technical_chunk and (target_hit or is_technical_query):
+        signals.append(f"type:{chunk_type}")
+        signals.append("technical_handoff_for_technical_query")
         return "strong", signals
     if has_open_project and is_continuation:
         signals.append("open_project")
         return "strong", signals
 
     # Medium: Decision/Failure without file match, or target hit without Decision type
-    if is_decision_type:
+    if is_decision_type or is_technical_chunk:
         signals.append(f"type:{chunk_type}")
         return "medium", signals
     if target_hit:

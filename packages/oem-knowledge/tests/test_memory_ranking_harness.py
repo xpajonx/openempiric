@@ -396,6 +396,204 @@ class TestGoldenQueryHarness:
         finally:
             eng.close()
 
+    # ── v3: Stricter Q3 golden query with technical handoff boost ──
+
+    def test_golden_notebooklm_workaround_ranks_top_v3(self, harness_project: Path):
+        workaround = (
+            "Handoff: x-becoming-television GET_NOTEBOOK timeout workaround: "
+            "pass source_ids explicitly to chat.ask"
+        )
+        db_path = self._seed_db(harness_project, [
+            (
+                "notebooklm_workaround",
+                workaround,
+                {"source": "nb.md", "title": "NotebookLM workaround"},
+            ),
+            (
+                "generic_obs",
+                "Observation: x-becoming-television is the current project.",
+                {"source": "c.md", "title": "current project"},
+            ),
+            (
+                "unrelated_decision",
+                "Decision: 2_Essay/expertise-debt/Essay_ID.md is the open project.",
+                {"source": "d.md", "title": "Essay open project"},
+            ),
+            (
+                "noisy_code",
+                "NotebookLM code chunk about get_notebook and source_ids "
+                "and chat.ask lots of implementation details. " * 20,
+                {"source": "c.md", "title": "implementation code"},
+            ),
+        ])
+        eng = KnowledgeEngine(str(harness_project))
+        try:
+            report = eng.search.debug_ranking(GOLDEN_NOTEBOOKLM_QUERY, k=10)
+
+            raw_ids = [c["id"] for c in report["raw_candidates"]]
+            assert "notebooklm_workaround" in raw_ids, (
+                "expected_memory_missing_from_raw_candidates"
+            )
+
+            reranked_ids = [c["id"] for c in report["reranked_candidates"]]
+            workaround_pos = reranked_ids.index("notebooklm_workaround")
+            # Workaround should be #1 or top 2 with current boost levels
+            assert workaround_pos <= 1, (
+                f"Workaround at pos {workaround_pos}, expected top 2. "
+                f"Reranked order: {reranked_ids}"
+            )
+
+            # Generic observation/decision must not outrank workaround
+            for log_id in ("generic_obs", "unrelated_decision", "noisy_code"):
+                if log_id in reranked_ids:
+                    log_pos = reranked_ids.index(log_id)
+                    assert log_pos > workaround_pos, (
+                        f"{log_id} outranked workaround (positions: "
+                        f"workaround={workaround_pos}, {log_id}={log_pos})"
+                    )
+
+            # Verify v3 boosts are present on workaround
+            workaround_item = report["reranked_candidates"][workaround_pos]
+            boosts = workaround_item.get("ranking_boosts", {})
+            assert "technical_handoff" in boosts or "workaround" in boosts or "identifier_cooccurrence" in boosts, (
+                f"No v3 technical boost applied to workaround: {list(boosts.keys())}"
+            )
+        finally:
+            eng.close()
+
+    def test_q1_essay_id_still_ranks_decision_first(self, harness_project: Path):
+        """Q1 regression: essay open-project Decision must remain #1."""
+        db_path = self._seed_db(harness_project, [
+            (
+                "essay_id_dec",
+                "Decision: 2_Essay/expertise-debt/Essay_ID.md is the open project.\n"
+                "1,667 words, Indonesian master draft.",
+                {"source": "d.md", "title": "Decision: Essay_ID.md"},
+            ),
+            (
+                "noisy_command_log",
+                "Command output: " + ("essay project expertise debt indonesian master " * 100),
+                {"source": "l.md", "title": "essay search log"},
+            ),
+        ])
+        eng = KnowledgeEngine(str(harness_project))
+        try:
+            report = eng.search.debug_ranking(GOLDEN_ESSAY_ID_QUERY, k=5)
+            reranked_ids = [c["id"] for c in report["reranked_candidates"]]
+            assert reranked_ids[0] == "essay_id_dec", (
+                f"Q1 regression: essay_id_dec not #1. Order: {reranked_ids}"
+            )
+            # Verify no v3 technical penalty was applied (this is non-technical query)
+            dec_item = report["reranked_candidates"][0]
+            penalties = dec_item.get("ranking_penalties", {})
+            assert "generic_active_project_for_technical" not in penalties, (
+                "Q1: Non-technical query should not get technical penalty"
+            )
+        finally:
+            eng.close()
+
+    def test_q2_indonesian_workflow_rule_still_ranks_decision_first(self, harness_project: Path):
+        """Q2 regression: Indonesian workflow Decision must remain #1."""
+        rule_doc = (
+            "Decision: For Indonesian essays: inspect, understand tone, propose changes. "
+            "Do not modify the file unless user explicitly says to edit. "
+            "'Continue working' means analyze, not write."
+        )
+        db_path = self._seed_db(harness_project, [
+            (
+                "indonesian_rule",
+                rule_doc,
+                {"source": "ind.md", "title": "Indonesian essay rule"},
+            ),
+            (
+                "noisy_command_log",
+                "Command output: " + (
+                    "indonesian essay continue working analyze write modify explicit " * 100
+                ),
+                {"source": "l.md", "title": "indonesian log"},
+            ),
+        ])
+        eng = KnowledgeEngine(str(harness_project))
+        try:
+            report = eng.search.debug_ranking(GOLDEN_INDONESIAN_QUERY, k=5)
+            reranked_ids = [c["id"] for c in report["reranked_candidates"]]
+            assert reranked_ids[0] == "indonesian_rule", (
+                f"Q2 regression: indonesian_rule not #1. Order: {reranked_ids}"
+            )
+            # Verify no v3 technical penalty was applied (this is non-technical query)
+            rule_item = report["reranked_candidates"][0]
+            penalties = rule_item.get("ranking_penalties", {})
+            assert "generic_active_project_for_technical" not in penalties, (
+                "Q2: Non-technical query should not get technical penalty"
+            )
+        finally:
+            eng.close()
+
+    def test_preflight_technical_query_preserves_handoff_above_active_project_decision(
+        self, preflight_project: Path
+    ):
+        """Preflight matched_memory should preserve technical handoff ordering."""
+        db_path = preflight_project / ".oem" / ".local_vector_db" / "vectors.db"
+        _create_memory_db(db_path, [
+            (
+                "tech_handoff",
+                "Handoff: x-becoming-television GET_NOTEBOOK timeout: "
+                "pass source_ids explicitly to chat.ask",
+                {"source": "nb.md", "title": "Handoff: NotebookLM workaround"},
+            ),
+            (
+                "gen_decision",
+                "Decision: 2_Essay/expertise-debt/Essay_ID.md is the open project.",
+                {"source": "d.md", "title": "Decision: Essay open project"},
+            ),
+        ])
+        eng = KnowledgeEngine(str(preflight_project))
+        try:
+            result = run_preflight(
+                GOLDEN_NOTEBOOKLM_QUERY,
+                project=str(preflight_project),
+                write_audit=False,
+            )
+
+            preflight_titles = [m.title for m in result.matched_memory]
+            preflight_ids = [(m.metadata or {}).get("memory_id") or m.id or "" for m in result.matched_memory]
+
+            # Technical handoff must appear before generic decision in preflight
+            handoff_idx = next(
+                (i for i, t in enumerate(preflight_titles) if "Handoff" in (t or "")),
+                None,
+            )
+            dec_idx = next(
+                (i for i, t in enumerate(preflight_titles) if "Decision" in (t or "")),
+                None,
+            )
+
+            if handoff_idx is None:
+                pytest.fail(
+                    "Technical handoff missing from preflight matched_memory. "
+                    f"Titles: {preflight_titles}"
+                )
+
+            if dec_idx is not None and dec_idx < handoff_idx:
+                pytest.fail(
+                    "preflight integration problem: "
+                    f"Generic decision (idx={dec_idx}) precedes technical handoff (idx={handoff_idx}) "
+                    f"in preflight ordering. "
+                    f"Preflight titles: {preflight_titles}"
+                )
+
+            # Verify the handoff has v3 technical boosts
+            for m in result.matched_memory:
+                if "Handoff" in (m.title or ""):
+                    meta = m.metadata or {}
+                    if "ranking_boosts" in meta:
+                        assert "technical_handoff" in meta["ranking_boosts"] or \
+                               "identifier_cooccurrence" in meta["ranking_boosts"], (
+                            f"Preflight handoff missing v3 boosts: {meta.get('ranking_boosts', {})}"
+                        )
+        finally:
+            eng.close()
+
 
 # ── Candidate counts and pool size ────────────────────────────────────
 

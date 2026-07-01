@@ -15,6 +15,13 @@ from oem_knowledge.memory_ranking import (
     BOOST_TOPIC_MATCH,
     PENALTY_SEARCH_LOG,
     PENALTY_COMMAND_LOG,
+    BOOST_TECHNICAL_HANDOFF,
+    BOOST_WORKAROUND,
+    BOOST_DEBUG_NOTE,
+    BOOST_IDENTIFIER_COOCCURRENCE_ONE,
+    BOOST_IDENTIFIER_COOCCURRENCE_TWO,
+    BOOST_IDENTIFIER_COOCCURRENCE_THREE,
+    PENALTY_GENERIC_ACTIVE_PROJECT_FOR_TECHNICAL,
 )
 
 
@@ -268,6 +275,306 @@ class TestRankingBoosts:
         ]
         ranked = rank_search_results("Essay_ID.md is the open project", candidates)
         assert ranked[0]["id"] == "dec"
+
+
+# ── v3: Technical query intent detection ──────────────────────────────
+
+
+class TestTechnicalQueryIntentDetection:
+    def test_technical_query_detects_identifiers_and_timeout(self):
+        targets = extract_query_targets(
+            "x-becoming-television GET_NOTEBOOK timeout "
+            "pass source_ids explicitly chat.ask workaround"
+        )
+        assert targets.get("technical_intent") is True, (
+            "Should detect technical intent from timeout + identifiers"
+        )
+        assert targets.get("debug_intent") is False
+        tech_ids = targets.get("technical_identifiers", [])
+        assert any("GET_NOTEBOOK" in t for t in tech_ids), (
+            f"Should extract GET_NOTEBOOK as technical identifier, got {tech_ids}"
+        )
+
+    def test_non_technical_query_has_no_technical_intent(self):
+        targets = extract_query_targets(
+            "2_Essay/expertise-debt/Essay_ID.md is the open project"
+        )
+        assert targets.get("technical_intent") is False
+
+    def test_debug_intent_detected(self):
+        targets = extract_query_targets(
+            "fix debug regression in source_ids code"
+        )
+        assert targets.get("debug_intent") is True
+
+    def test_workaround_term_detected(self):
+        targets = extract_query_targets(
+            "workaround for GET_NOTEBOOK timeout"
+        )
+        assert targets.get("technical_intent") is True
+
+    def test_camel_case_identifier_extracted(self):
+        targets = extract_query_targets(
+            "NotebookLM source_ids timeout workaround"
+        )
+        tech_ids = targets.get("technical_identifiers", [])
+        assert any("source_ids" in t for t in tech_ids), (
+            f"Should extract snake_case source_ids, got {tech_ids}"
+        )
+
+    def test_project_terms_extracted(self):
+        targets = extract_query_targets(
+            "x-becoming-television project workaround"
+        )
+        project_terms = targets.get("project_terms", [])
+        assert any("x-becoming-television" in p for p in project_terms), (
+            f"Should detect project terms, got {project_terms}"
+        )
+
+
+# ── v3: Session-handoff / workaround memory type classification ───────
+
+
+class TestSessionHandoffMemoryClassification:
+    def test_handoff_heading_classified_as_technical_handoff(self):
+        assert classify_memory_type(
+            "Handoff: x-becoming-television GET_NOTEBOOK timeout workaround"
+        ) == "technical_handoff", "Handoff: prefix should be classified as technical_handoff"
+
+    def test_technical_heading_classified(self):
+        assert classify_memory_type(
+            "Technical Note: source_ids must be passed explicitly to chat.ask"
+        ) == "technical_handoff"
+
+    def test_workaround_content_classified(self):
+        assert classify_memory_type(
+            "Some memory about a workaround for timeout issues"
+        ) == "workaround"
+
+    def test_debug_note_heading_classified(self):
+        assert classify_memory_type(
+            "Bug: GET_NOTEBOOK returns empty result"
+        ) == "failure"  # Bug: maps to failure via FAILURE_PATTERNS
+
+    def test_debug_note_heading_different(self):
+        assert classify_memory_type(
+            "Debug Note: source_ids handling fails when empty"
+        ) == "debug_note"
+
+    def test_session_handoff_with_technical_terms_classified(self):
+        doc = (
+            "Document: .oem/session-handoff.md\n"
+            "Section: Technical Issues\n\n"
+            "GET_NOTEBOOK times out when source_ids is not passed"
+        )
+        assert classify_memory_type(doc) == "technical_handoff", (
+            "session-handoff.md with technical terms should be technical_handoff"
+        )
+
+    def test_session_handoff_without_technical_terms_stays_observation(self):
+        doc = (
+            "Document: .oem/session-handoff.md\n"
+            "Section: General Notes\n\n"
+            "Just some general working notes about the project."
+        )
+        assert classify_memory_type(doc) == "observation", (
+            "session-handoff.md without technical terms should stay observation"
+        )
+
+
+# ── v3: Identifier co-occurrence boosts ───────────────────────────────
+
+
+class TestIdentifierCooccurrenceBoosts:
+    def test_identifier_cooccurrence_boost_applied_for_technical_query(self):
+        candidates = [
+            {
+                "id": "handoff",
+                "document": (
+                    "Handoff: x-becoming-television GET_NOTEBOOK timeout: "
+                    "pass source_ids explicitly to chat.ask"
+                ),
+                "score": 1.0,
+                "metadata": {"source": "nb.md", "title": "Handoff"},
+            },
+        ]
+        q = "x-becoming-television GET_NOTEBOOK timeout pass source_ids explicitly chat.ask workaround"
+        ranked = rank_search_results(q, candidates)
+        boosts = ranked[0]["ranking_boosts"]
+        assert "identifier_cooccurrence" in boosts, (
+            f"Expected identifier_cooccurrence boost, got {list(boosts.keys())}"
+        )
+
+    def test_single_identifier_gets_one_boost(self):
+        candidates = [
+            {
+                "id": "m1",
+                "document": "Something about GET_NOTEBOOK in the system.",
+                "score": 1.0,
+                "metadata": {},
+            },
+        ]
+        q = "x-becoming-television GET_NOTEBOOK timeout workaround"
+        ranked = rank_search_results(q, candidates)
+        boosts = ranked[0]["ranking_boosts"]
+        # Only GET_NOTEBOOK matches, single ident
+        coeff = boosts.get("identifier_cooccurrence", 0)
+        assert coeff == BOOST_IDENTIFIER_COOCCURRENCE_ONE, (
+            f"Expected single ident boost {BOOST_IDENTIFIER_COOCCURRENCE_ONE}, got {coeff}"
+        )
+
+    def test_multiple_identifiers_cooccurrence_gets_higher_boost(self):
+        candidates = [
+            {
+                "id": "handoff",
+                "document": (
+                    "Handoff: GET_NOTEBOOK timeout workaround "
+                    "pass source_ids explicitly to chat.ask"
+                ),
+                "score": 1.0,
+                "metadata": {"source": "nb.md", "title": "Handoff"},
+            },
+        ]
+        q = "x-becoming-television GET_NOTEBOOK timeout pass source_ids explicitly chat.ask workaround"
+        ranked = rank_search_results(q, candidates)
+        boosts = ranked[0]["ranking_boosts"]
+        coeff = boosts.get("identifier_cooccurrence", 0)
+        assert coeff == BOOST_IDENTIFIER_COOCCURRENCE_THREE, (
+            f"Expected three+ ident boost {BOOST_IDENTIFIER_COOCCURRENCE_THREE}, got {coeff}"
+        )
+
+
+# ── v3: Technical handoff boost ───────────────────────────────────────
+
+
+class TestTechnicalHandoffBoost:
+    def test_notebooklm_source_ids_workaround_ranks_above_generic_concept_chunks(self):
+        workaround = (
+            "Handoff: x-becoming-television GET_NOTEBOOK timeout workaround: "
+            "pass source_ids explicitly to chat.ask"
+        )
+        candidates = [
+            {
+                "id": "generic_obs",
+                "document": "Observation: x-becoming-television is the current project. We are actively working on it.",
+                "score": 5.0,
+                "metadata": {"source": "c.md", "title": "current project"},
+            },
+            {
+                "id": "unrelated_decision",
+                "document": "Decision: 2_Essay/expertise-debt/Essay_ID.md is the open project.",
+                "score": 4.0,
+                "metadata": {"source": "d.md", "title": "Essay open project"},
+            },
+            {
+                "id": "workaround",
+                "document": workaround,
+                "score": 1.0,
+                "metadata": {"source": "nb.md", "title": "workaround"},
+            },
+        ]
+        q = "x-becoming-television GET_NOTEBOOK timeout pass source_ids explicitly chat.ask workaround"
+        ranked = rank_search_results(q, candidates)
+        ids = [r["id"] for r in ranked]
+        workaround_pos = ids.index("workaround")
+        generic_pos = ids.index("generic_obs")
+        unrelated_pos = ids.index("unrelated_decision")
+        assert workaround_pos < generic_pos, (
+            f"Workaround (pos {workaround_pos}) should outrank generic obs (pos {generic_pos})"
+        )
+        assert workaround_pos < unrelated_pos, (
+            f"Workaround (pos {workaround_pos}) should outrank unrelated decision (pos {unrelated_pos})"
+        )
+
+    def test_technical_handoff_boost_applied(self):
+        candidates = [
+            {
+                "id": "handoff",
+                "document": (
+                    "Handoff: x-becoming-television GET_NOTEBOOK timeout workaround: "
+                    "pass source_ids explicitly to chat.ask"
+                ),
+                "score": 1.0,
+                "metadata": {"source": "nb.md", "title": "Handoff"},
+            },
+        ]
+        q = "x-becoming-television GET_NOTEBOOK timeout pass source_ids explicitly chat.ask workaround"
+        ranked = rank_search_results(q, candidates)
+        boosts = ranked[0]["ranking_boosts"]
+        assert "technical_handoff" in boosts, (
+            f"Expected technical_handoff boost, got {list(boosts.keys())}"
+        )
+        assert boosts["technical_handoff"] == BOOST_TECHNICAL_HANDOFF
+
+
+# ── v3: Generic active-project decision downrank ──────────────────────
+
+
+class TestGenericActiveProjectDownrank:
+    def test_generic_active_project_decision_downranked_for_technical_query(self):
+        """Active-project decision with no technical ID match gets penalty."""
+        candidates = [
+            {
+                "id": "generic_dec",
+                "document": "Decision: Essay_ID.md is the open project. We are working on this actively.",
+                "score": 5.0,
+                "metadata": {"source": "d.md", "title": "Decision"},
+            },
+            {
+                "id": "tech_handoff",
+                "document": (
+                    "Handoff: GET_NOTEBOOK timeout workaround: "
+                    "pass source_ids explicitly to chat.ask"
+                ),
+                "score": 1.0,
+                "metadata": {"source": "nb.md", "title": "Handoff"},
+            },
+        ]
+        q = "x-becoming-television GET_NOTEBOOK timeout pass source_ids explicitly chat.ask workaround"
+        ranked = rank_search_results(q, candidates)
+        generic = [r for r in ranked if r["id"] == "generic_dec"][0]
+        penalties = generic.get("ranking_penalties", {})
+        assert "generic_active_project_for_technical" in penalties, (
+            f"Expected penalty for generic active-project decision, got {list(penalties.keys())}"
+        )
+        assert penalties["generic_active_project_for_technical"] == PENALTY_GENERIC_ACTIVE_PROJECT_FOR_TECHNICAL
+
+    def test_active_project_decision_not_downranked_for_open_project_query(self):
+        """Active-project decision should NOT be downranked for non-technical query."""
+        candidates = [
+            {
+                "id": "dec",
+                "document": "Decision: 2_Essay/expertise-debt/Essay_ID.md is the open project. Active work.",
+                "score": 1.0,
+                "metadata": {"source": "d.md", "title": "Decision"},
+            },
+        ]
+        q = "2_Essay/expertise-debt/Essay_ID.md is the open project"
+        ranked = rank_search_results(q, candidates)
+        penalties = ranked[0].get("ranking_penalties", {})
+        assert "generic_active_project_for_technical" not in penalties, (
+            "Non-technical query should not trigger active-project penalty"
+        )
+
+    def test_active_project_decision_not_downranked_when_contains_technical_id(self):
+        """Active-project decision containing technical identifiers should NOT be penalized."""
+        candidates = [
+            {
+                "id": "tech_dec",
+                "document": (
+                    "Decision: GET_NOTEBOOK timeout fix. "
+                    "We are working on this actively."
+                ),
+                "score": 3.0,
+                "metadata": {"source": "d.md", "title": "Decision"},
+            },
+        ]
+        q = "x-becoming-television GET_NOTEBOOK timeout pass source_ids explicitly chat.ask workaround"
+        ranked = rank_search_results(q, candidates)
+        penalties = ranked[0].get("ranking_penalties", {})
+        assert "generic_active_project_for_technical" not in penalties, (
+            "Active-project decision with technical ID should not be penalized"
+        )
 
 
 class TestDiagnosticsFields:

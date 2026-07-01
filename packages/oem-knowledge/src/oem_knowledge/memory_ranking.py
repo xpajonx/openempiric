@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 # ============================================================================
-# Boost/penalty weights (v2)
+# Boost/penalty weights (v3)
 # ============================================================================
 
 BOOST_DECISION = 4.0
@@ -21,10 +21,21 @@ BOOST_EXACT_PHRASE = 8.0
 BOOST_NEAR_EXACT_RULE = 6.0
 BOOST_RULE_PHRASE = 3.0
 
+# v3: Technical handoff / workaround / identifier co-occurrence
+BOOST_TECHNICAL_HANDOFF = 5.0
+BOOST_WORKAROUND = 5.0
+BOOST_DEBUG_NOTE = 4.0
+BOOST_SESSION_HANDOFF_TECHNICAL = 4.0
+BOOST_IDENTIFIER_COOCCURRENCE_ONE = 2.5
+BOOST_IDENTIFIER_COOCCURRENCE_TWO = 5.0
+BOOST_IDENTIFIER_COOCCURRENCE_THREE = 7.0
+BOOST_IDENTIFIER_WITH_TERM = 3.0
+
 PENALTY_COMMAND_LOG = -5.0
 PENALTY_SEARCH_LOG = -5.0
 PENALTY_SOURCE_DUMP = -6.0
 PENALTY_LARGE_LOW_DENSITY = -3.0
+PENALTY_GENERIC_ACTIVE_PROJECT_FOR_TECHNICAL = -4.0
 
 LARGE_CHUNK_CHAR_THRESHOLD = 1500
 
@@ -35,6 +46,13 @@ LARGE_CHUNK_CHAR_THRESHOLD = 1500
 DECISION_PATTERNS = re.compile(r"(?:^|\n)\s*Decision:|^##\s*Decision", re.IGNORECASE)
 FAILURE_PATTERNS = re.compile(r"(?:^|\n)\s*Failure:|Do-not-repeat|Bug:|Regression:|BREAKING", re.IGNORECASE)
 OUTCOME_PATTERNS = re.compile(r"(?:^|\n)\s*Outcome:", re.IGNORECASE)
+
+# v3: Technical handoff / workaround / debug note patterns
+TECHNICAL_HANDOFF_PATTERNS = re.compile(r"(?:^|\n)\s*(Handoff|Technical\s+Note|Technical\s+Handoff):", re.IGNORECASE)
+WORKAROUND_PATTERNS = re.compile(r"\bworkaround\b", re.IGNORECASE)
+DEBUG_NOTE_PATTERNS = re.compile(r"(?:^|\n)\s*(Bug|Regression|Debug\s+Note|Debug):", re.IGNORECASE)
+SESSION_HANDOFF_PATTERNS = re.compile(r"session-handoff\.md", re.IGNORECASE)
+TECHNICAL_DETAIL_TERMS = re.compile(r"\b(timeout|error|bug|workaround|adapter|debug|fix|explicitly|workaround|get_notebook|source_ids|chat\.ask)\b", re.IGNORECASE)
 
 # Expanded command / search / source dump patterns
 COMMAND_LOG_PATTERNS = re.compile(
@@ -107,6 +125,9 @@ def extract_query_targets(query: str) -> dict[str, Any]:
         re.search(r'\b(decision|means|workflow|should|do not|never|avoid|unless|explicit|continue working|analyze|write|modify|open project|current project)\b', q, re.IGNORECASE)
     )
 
+    # v3: Technical / debug intent detection
+    technical_intent, debug_intent, technical_identifiers, project_terms = _detect_technical_intent(q, identifiers)
+
     # Dedup
     def uniq(seq):
         seen = set()
@@ -127,7 +148,60 @@ def extract_query_targets(query: str) -> dict[str, Any]:
         "tokens": uniq(tokens),
         "phrases": uniq(phrases),
         "rule_intent": rule_intent,
+        "technical_intent": technical_intent,
+        "debug_intent": debug_intent,
+        "technical_identifiers": uniq(technical_identifiers),
+        "project_terms": uniq(project_terms),
     }
+
+
+def _detect_technical_intent(query: str, general_identifiers: list[str]) -> tuple[bool, bool, list[str], list[str]]:
+    q_lower = query.lower()
+
+    technical_signals = [
+        "timeout", "error", "bug", "workaround", "adapter",
+        "source_ids", "chat.ask", "get_notebook",
+    ]
+    debug_signals = ["debug", "trace", "fix", "regression", "break"]
+
+    has_technical = any(s in q_lower for s in technical_signals)
+    has_debug = any(s in q_lower for s in debug_signals)
+
+    function_like = re.findall(r'\b[A-Z][A-Z_0-9]{2,}(?:_[A-Z0-9]+)*\b', query)
+    snake_case = re.findall(r'\b[a-z]+_[a-z]+\b', query)
+    snake_case = [s for s in snake_case if len(s) >= 4]
+    camel_case = re.findall(r'\b[A-Z][a-z]+[A-Z][a-zA-Z]*\b', query)
+    dotted = re.findall(r'\b[a-zA-Z_][a-zA-Z0-9_]*\.[a-zA-Z_][a-zA-Z0-9_]+\b', query)
+    # Exclude file extensions from dotted identifiers
+    dotted = [d for d in dotted if not re.search(r'\.(md|py|ts|js|json|yaml|yml|toml|txt|css|html)$', d)]
+    uppercase_constants = re.findall(r'\b[A-Z]{3,}\b', query)
+    noise = {"THE", "AND", "FOR", "ARE", "NOT", "ALL", "GET", "SET", "PUT", "HOW", "WHY", "CAN", "YOU"}
+    uppercase_constants = [u for u in uppercase_constants if u not in noise]
+
+    technical_identifiers = list(set(
+        function_like + snake_case + camel_case + dotted + uppercase_constants
+    ))
+
+    # Filter out identifiers that look like file extensions
+    technical_identifiers = [t for t in technical_identifiers
+                             if not t.lower().endswith((".md", ".py", ".ts", ".js"))]
+
+    has_identifier_pattern = bool(
+        function_like or snake_case or camel_case or dotted or uppercase_constants
+    )
+    # Only claim identifier pattern if we kept at least one technical identifier
+    has_identifier_pattern = bool(technical_identifiers)
+
+    technical_intent = (
+        has_technical or has_debug or has_identifier_pattern
+    )
+    debug_intent = has_debug
+
+    # Extract project terms from raw query (including hyphenated names)
+    project_terms = re.findall(r'[a-zA-Z]+(?:-[a-zA-Z]+)+', query)
+    project_terms = [p for p in project_terms if p.count("-") >= 2 and len(p) >= 6]
+
+    return technical_intent, debug_intent, technical_identifiers, project_terms
 
 
 def normalize_for_phrase(text: str) -> str:
@@ -188,7 +262,17 @@ def classify_memory_type(document: str, title: str | None = None, snippet: str |
     if OUTCOME_PATTERNS.search(head_text):
         return "outcome"
 
-    # Now check logs (but we will not override if it was a Failure/Decision)
+    # v3: Technical handoff / workaround / debug note — check before logs
+    if TECHNICAL_HANDOFF_PATTERNS.search(head_text):
+        return "technical_handoff"
+    if DEBUG_NOTE_PATTERNS.search(head_text):
+        return "debug_note"
+    if WORKAROUND_PATTERNS.search(text):
+        return "workaround"
+    if SESSION_HANDOFF_PATTERNS.search(text) and TECHNICAL_DETAIL_TERMS.search(text):
+        return "technical_handoff"
+
+    # Now check logs
     if SOURCE_DUMP_PATTERNS.search(text):
         return "source_dump"
     if COMMAND_LOG_PATTERNS.search(text):
@@ -213,7 +297,7 @@ def has_workflow_rule_signal(text: str) -> bool:
 # Core ranking
 # ============================================================================
 
-def _compute_exact_and_phrase_signals(query_targets: dict[str, Any], document: str) -> tuple[dict[str, float], list[str], bool]:
+def _compute_exact_and_phrase_signals(query_targets: dict[str, Any], document: str) -> tuple[dict[str, float], list[str], bool, int]:
     boosts: dict[str, float] = {}
     reasons: list[str] = []
     has_exact = False
@@ -264,7 +348,11 @@ def _compute_exact_and_phrase_signals(query_targets: dict[str, Any], document: s
     if rule_phrase_boost:
         boosts["rule_phrase"] = rule_phrase_boost
 
-    return boosts, reasons, has_exact
+    # v3: Identifier co-occurrence count (for co-occurrence boost in _apply_boosts)
+    tech_ids = query_targets.get("technical_identifiers", [])
+    identifier_cooccurrence_count = sum(1 for tid in tech_ids if tid.lower() in text_lower and len(tid) >= 3)
+
+    return boosts, reasons, has_exact, identifier_cooccurrence_count
 
 
 def _apply_boosts(
@@ -281,7 +369,7 @@ def _apply_boosts(
     doc_len = len(document)
 
     # Exact path / filename / identifier / phrase signals
-    exact_boosts, exact_reasons, has_exact_match = _compute_exact_and_phrase_signals(query_targets, document)
+    exact_boosts, exact_reasons, has_exact_match, id_cooccurrence = _compute_exact_and_phrase_signals(query_targets, document)
     boosts.update(exact_boosts)
     reasons.extend(exact_reasons)
 
@@ -340,6 +428,56 @@ def _apply_boosts(
     if is_large and memory_type in ("command_log", "source_dump") and not has_exact_match:
         penalties["large_command_or_source"] = -8.0
         reasons.append("large command/source dump penalty")
+
+    # ========================================================================
+    # v3: Technical handoff / workaround / identifier co-occurrence
+    # ========================================================================
+
+    # Part 3: Identifier co-occurrence boost (technical query only)
+    if query_targets.get("technical_intent") and id_cooccurrence > 0:
+        if id_cooccurrence >= 3:
+            boosts["identifier_cooccurrence"] = BOOST_IDENTIFIER_COOCCURRENCE_THREE
+            reasons.append(f"identifier co-occurrence: {id_cooccurrence}+ ids +{BOOST_IDENTIFIER_COOCCURRENCE_THREE}")
+        elif id_cooccurrence >= 2:
+            boosts["identifier_cooccurrence"] = BOOST_IDENTIFIER_COOCCURRENCE_TWO
+            reasons.append(f"identifier co-occurrence: {id_cooccurrence} ids +{BOOST_IDENTIFIER_COOCCURRENCE_TWO}")
+        else:
+            boosts["identifier_cooccurrence"] = BOOST_IDENTIFIER_COOCCURRENCE_ONE
+            reasons.append(f"identifier co-occurrence: {id_cooccurrence} id +{BOOST_IDENTIFIER_COOCCURRENCE_ONE}")
+
+    # Part 4: Technical handoff / workaround / debug note boost
+    if query_targets.get("technical_intent") or query_targets.get("debug_intent"):
+        if memory_type == "technical_handoff":
+            boosts["technical_handoff"] = BOOST_TECHNICAL_HANDOFF
+            reasons.append(f"technical handoff memory +{BOOST_TECHNICAL_HANDOFF}")
+        elif memory_type == "workaround":
+            boosts["workaround"] = BOOST_WORKAROUND
+            reasons.append(f"workaround memory +{BOOST_WORKAROUND}")
+        elif memory_type == "debug_note":
+            boosts["debug_note"] = BOOST_DEBUG_NOTE
+            reasons.append(f"debug note memory +{BOOST_DEBUG_NOTE}")
+
+        # Extra session-handoff match
+        if SESSION_HANDOFF_PATTERNS.search(text_lower) and id_cooccurrence >= 1:
+            if "session_handoff_technical" not in boosts:
+                boosts["session_handoff_technical"] = BOOST_SESSION_HANDOFF_TECHNICAL
+                reasons.append(f"session handoff technical match +{BOOST_SESSION_HANDOFF_TECHNICAL}")
+
+    # Part 5: Downrank generic active-project decisions for technical queries
+    if query_targets.get("technical_intent") and "active_work_signal" in boosts:
+        has_technical_identifier = any(
+            tid.lower() in text_lower and len(tid) >= 3
+            for tid in query_targets.get("technical_identifiers", [])
+        )
+        if not has_technical_identifier and id_cooccurrence == 0:
+            penalties["generic_active_project_for_technical"] = PENALTY_GENERIC_ACTIVE_PROJECT_FOR_TECHNICAL
+            reasons.append(f"downranked: generic active-project decision for technical query {PENALTY_GENERIC_ACTIVE_PROJECT_FOR_TECHNICAL}")
+
+    # Identifier + workaround/timeout/debug term additional boost
+    if id_cooccurrence >= 1 and TECHNICAL_DETAIL_TERMS.search(document):
+        if "identifier_with_term" not in boosts:
+            boosts["identifier_with_term"] = BOOST_IDENTIFIER_WITH_TERM
+            reasons.append(f"identifier with workaround/timeout/debug term +{BOOST_IDENTIFIER_WITH_TERM}")
 
     final_score = base_score + sum(boosts.values()) + sum(penalties.values())
     return final_score, reasons, boosts, penalties
@@ -437,6 +575,10 @@ def build_ranking_debug_report(
             "identifiers": targets.get("stems", []) + targets.get("identifiers", []),
             "phrases": targets.get("phrases", []),
             "rule_intent": targets.get("rule_intent", False),
+            "technical_intent": targets.get("technical_intent", False),
+            "debug_intent": targets.get("debug_intent", False),
+            "technical_identifiers": targets.get("technical_identifiers", []),
+            "project_terms": targets.get("project_terms", []),
         },
         "raw_candidates": raw_display,
         "reranked_candidates": reranked_display,
