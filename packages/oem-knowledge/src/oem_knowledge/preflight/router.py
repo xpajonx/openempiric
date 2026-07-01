@@ -13,6 +13,7 @@ from .audit import write_audit_event
 from .budget import ContextBudget, render_context
 from .models import ConceptMetadata, MemoryMetadata, PreflightResult, SkillMetadata
 from .scoring import REQUIRED_THRESHOLD, SUGGEST_THRESHOLD, SOURCE_HINT_WEIGHT, make_match, score_concept, score_memory, score_skill, MEMORY_TYPE_WEIGHTS
+from oem_knowledge.memory_ranking import rank_search_results
 from .triggers import contains_phrase, normalize_text, tokenize, unique_tokens
 from ..project_layout import ProjectLayout
 from ..project import ProjectMismatchError, ProjectUnresolvedError, resolve_active_project
@@ -633,30 +634,47 @@ def run_preflight(
                 )
             )
 
+        # Rank memory ONCE using the deterministic ranker (strict: no double application)
         matched_memory = []
-        for memory in memory_items:
-            breakdown = score_memory(task, memory)
-            if breakdown.score <= 0:
-                continue
-            memory_type = _detect_memory_chunk_type(memory)
-            ranking_meta = {
-                "memory_type": memory_type,
-                "ranking_reason": [f"memory {memory_type} hit"],
-                "ranking_boosts": {memory_type: MEMORY_TYPE_WEIGHTS.get(memory_type, 1.0)} if memory_type in MEMORY_TYPE_WEIGHTS else {},
-                "ranking_penalties": {},
-            }
-            matched_memory.append(
-                make_match(
-                    kind="memory",
-                    id=memory.id,
-                    title=memory.title,
-                    score=breakdown.score,
-                    reason=breakdown.reason,
-                    source_path=memory.source_path,
-                    snippet=memory.snippet,
-                    metadata=ranking_meta,
+        if memory_items:
+            mem_candidates = []
+            for m in memory_items:
+                mem_candidates.append({
+                    "id": m.id,
+                    "document": ((m.title or "") + "\n\n" + (m.snippet or "")).strip(),
+                    "metadata": {
+                        "title": m.title or "",
+                        "source_path": m.source_path,
+                    },
+                    "score": 0.0,
+                    "title": m.title,
+                    "snippet": m.snippet,
+                    "source_path": m.source_path,
+                })
+            ranked_mems = rank_search_results(task, mem_candidates)
+            for rm in ranked_mems:
+                fs = rm.get("final_score", rm.get("score", 0.0))
+                if fs <= 0:
+                    continue
+                matched_memory.append(
+                    make_match(
+                        kind="memory",
+                        id=rm.get("id"),
+                        title=rm.get("title") or rm.get("metadata", {}).get("title", ""),
+                        score=round(fs, 3),
+                        reason="; ".join(rm.get("ranking_reason", ["memory ranked"])),
+                        source_path=rm.get("source_path") or rm.get("metadata", {}).get("source_path"),
+                        snippet=rm.get("snippet"),
+                        metadata={
+                            "memory_type": rm.get("memory_type"),
+                            "base_score": rm.get("base_score"),
+                            "final_score": rm.get("final_score"),
+                            "ranking_reason": rm.get("ranking_reason", []),
+                            "ranking_boosts": rm.get("ranking_boosts", {}),
+                            "ranking_penalties": rm.get("ranking_penalties", {}),
+                        },
+                    )
                 )
-            )
 
         matched_skills = _sort_matches(matched_skills)
         matched_concepts = _sort_matches(matched_concepts)
@@ -801,10 +819,11 @@ def run_preflight(
             for d in strong_details:
                 supporting_reasons.append(f"strong_memory:{d['type']}:{d['title'][:60]}")
 
-        # top_match ≥ 8.0 → required
+        # top_match ≥ 8.0 → required (only for high-value memory or non-memory)
         if decision == "noop" and top_match is not None and top_match.score >= REQUIRED_THRESHOLD:
-            decision = "required"
-            reason = f"{top_match.kind} matched strongly: {top_match.title}"
+            if top_match.kind != "memory" or (top_match.metadata or {}).get("memory_type") in ("decision", "failure", "outcome"):
+                decision = "required"
+                reason = f"{top_match.kind} matched strongly: {top_match.title}"
 
         # Semantically-relevant critical/global directive → required.
         # Generic diagnostic matches never force required.

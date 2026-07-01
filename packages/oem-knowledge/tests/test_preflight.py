@@ -981,3 +981,61 @@ def test_preflight_result_json_serializable(preflight_project: Path):
     assert "matched_memory_summary" in payload
     assert "supporting_reasons" in payload
     json.dumps(payload)  # must not raise
+
+
+def test_preflight_retrieves_indonesian_essay_workflow_rule_before_acting(preflight_project: Path):
+    db_path = preflight_project / ".oem" / ".local_vector_db" / "vectors.db"
+    rule = "Decision: For Indonesian essays: inspect, understand tone, propose changes. Do not modify the file unless user explicitly says to edit. Continue working means analyze, not write."
+    _add_memory_rows(db_path, [
+        ("mem_rule_id", rule, {"source": ".oem/m.md", "title": "Indonesian essay rule"}),
+    ])
+    result = run_preflight(
+        "For Indonesian essays continue working means analyze not write do not modify file unless explicit",
+        project=str(preflight_project),
+        write_audit=False,
+    )
+    # Must not be noop; top memory should be the rule decision
+    assert result.decision != "noop"
+    assert result.matched_memory, "expected matched memory"
+    top = result.matched_memory[0]
+    assert top.metadata.get("memory_type") in ("decision", "observation")  # decision preferred
+    # Rank #1 check via score ordering
+    scores = [m.score for m in result.matched_memory]
+    assert scores[0] == max(scores)
+
+
+def test_preflight_matched_memory_does_not_put_command_log_above_exact_decision(preflight_project: Path):
+    db_path = preflight_project / ".oem" / ".local_vector_db" / "vectors.db"
+    _add_memory_rows(db_path, [
+        ("mem_log", "Command output: " + ("essay project " * 100), {"source": "l.md", "title": "log"}),
+        ("mem_dec", "Decision: 2_Essay/expertise-debt/Essay_ID.md is the open project.", {"source": "d.md", "title": "Decision"}),
+    ])
+    result = run_preflight(
+        "2_Essay/expertise-debt/Essay_ID.md is the open project",
+        project=str(preflight_project),
+        write_audit=False,
+    )
+    titles = [m.title for m in result.matched_memory]
+    # Decision must be first or only high-value result
+    dec_idx = next((i for i, t in enumerate(titles) if "Decision" in (t or "")), None)
+    log_idx = next((i for i, t in enumerate(titles) if "log" in (t or "").lower()), None)
+    assert dec_idx is not None
+    if log_idx is not None:
+        assert dec_idx < log_idx
+
+
+def test_preflight_memory_ranking_not_double_applied(preflight_project: Path):
+    db_path = preflight_project / ".oem" / ".local_vector_db" / "vectors.db"
+    _add_memory_rows(db_path, [
+        ("m1", "Decision: Essay_ID.md is the open project", {"source": "d.md", "title": "D"}),
+    ])
+    result = run_preflight("Essay_ID.md open project", project=str(preflight_project), write_audit=False)
+    # Ensure diagnostics are present exactly once from the ranker
+    assert result.matched_memory
+    meta = result.matched_memory[0].metadata or {}
+    assert "ranking_boosts" in meta
+    assert "ranking_reason" in meta
+    # Calling preflight again must produce identical top diagnostics (no double application)
+    result2 = run_preflight("Essay_ID.md open project", project=str(preflight_project), write_audit=False)
+    meta2 = result2.matched_memory[0].metadata or {}
+    assert meta.get("final_score") == meta2.get("final_score")

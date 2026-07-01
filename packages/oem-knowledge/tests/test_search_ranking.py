@@ -4,11 +4,15 @@ from oem_knowledge.memory_ranking import (
     extract_query_targets,
     rank_search_result,
     rank_search_results,
+    normalize_for_phrase,
+    has_phrase_match,
+    has_consecutive_phrase_match,
     BOOST_DECISION,
     BOOST_FAILURE,
     BOOST_EXACT_PATH_MATCH,
     BOOST_EXACT_FILENAME_MATCH,
     BOOST_ACTIVE_WORK_SIGNAL,
+    BOOST_TOPIC_MATCH,
     PENALTY_SEARCH_LOG,
     PENALTY_COMMAND_LOG,
 )
@@ -39,11 +43,45 @@ class TestMemoryTypeClassification:
         doc = "Just some random notes about work."
         assert classify_memory_type(doc) == "observation"
 
+    def test_failure_with_command_text_remains_failure(self):
+        doc = "Failure: NotebookLM get_notebook timeout occurs when source_ids are passed explicitly to chat.ask."
+        assert classify_memory_type(doc) == "failure"
+
+    def test_command_source_dump_patterns_detected(self):
+        assert classify_memory_type("Command output: ls -la\n lots of files") == "command_log"
+        assert classify_memory_type("Shell output: some long trace") == "command_log"
+        assert classify_memory_type("Search results:\n[1] foo\n[2] bar\nknowledge_search(query=...)") == "search_log"
+        assert classify_memory_type("Full source dump\nFile contents:\ncat <<EOF\n...") == "source_dump"
+
 
 class TestQueryTargetExtraction:
     def test_extract_tokens(self):
         targets = extract_query_targets("Essay_ID.md open project")
         assert "Essay_ID" in targets["tokens"] or "md" in targets["tokens"]
+
+    def test_exact_path_extraction_includes_full_path_filename_and_stem(self):
+        q = "2_Essay/expertise-debt/Essay_ID.md is the open project"
+        targets = extract_query_targets(q)
+        assert "2_Essay/expertise-debt/Essay_ID.md" in targets["full_paths"]
+        assert "Essay_ID.md" in targets["filenames"]
+        assert "Essay_ID" in targets["stems"]
+        assert any("2_Essay/expertise-debt" in d for d in targets.get("dirs", []) + targets.get("stems", []))
+
+
+class TestPhraseNormalization:
+    def test_phrase_matching_normalizes_punctuation_and_stopwords(self):
+        a = "do not modify file unless explicit"
+        b = "do not modify the file unless user explicitly says to edit"
+        assert normalize_for_phrase(a) == normalize_for_phrase(b) or has_phrase_match(b, a)
+        # Should not falsely match unrelated
+        unrelated = "write a completely different essay about poetry"
+        assert not has_phrase_match(unrelated, a)
+
+    def test_near_exact_workflow_rule_match(self):
+        rule = "For Indonesian essays: inspect, understand tone, propose changes. Do not modify the file unless user explicitly says to edit. 'Continue working' means analyze."
+        query = "For Indonesian essays continue working means analyze not write do not modify file unless explicit"
+        # The rule text should trigger phrase matches
+        assert has_phrase_match(rule, "do not modify") or has_phrase_match(rule, "continue working") or has_phrase_match(rule, "unless explicit")
 
 
 class TestRankingBoosts:
@@ -159,6 +197,78 @@ class TestRankingBoosts:
         boost_count = ranked[0]["ranking_reason"].count("decision memory")
         assert boost_count == 1
 
+    # --- New v2 regression tests ---
+
+    def test_essay_id_open_project_decision_ranks_top(self):
+        candidates = [
+            {
+                "id": "huge_log",
+                "document": "Command output: " + ("searching for essay project " * 50),
+                "score": 10.0,
+                "metadata": {},
+            },
+            {
+                "id": "exact_dec",
+                "document": "Decision: 2_Essay/expertise-debt/Essay_ID.md is the open project.\nWe are actively editing this.",
+                "score": 1.0,
+                "metadata": {},
+            },
+        ]
+        ranked = rank_search_results("2_Essay/expertise-debt/Essay_ID.md is the open project", candidates)
+        assert ranked[0]["id"] == "exact_dec"
+        assert ranked[0]["memory_type"] == "decision"
+
+    def test_indonesian_essay_continue_working_rule_ranks_top(self):
+        rule_doc = (
+            "Decision: For Indonesian essays: inspect, understand tone, propose changes. "
+            "Do not modify the file unless user explicitly says to edit. "
+            "'Continue working' means analyze, not write."
+        )
+        candidates = [
+            {
+                "id": "unrelated",
+                "document": "NotebookLM code chunk about get_notebook and source_ids and chat.ask lots of implementation details " * 10,
+                "score": 5.0,
+                "metadata": {},
+            },
+            {
+                "id": "rule",
+                "document": rule_doc,
+                "score": 1.0,
+                "metadata": {},
+            },
+        ]
+        q = "For Indonesian essays continue working means analyze not write do not modify file unless explicit"
+        ranked = rank_search_results(q, candidates)
+        assert ranked[0]["id"] == "rule"
+        assert ranked[0]["memory_type"] == "decision"
+
+    def test_notebooklm_source_ids_workaround_memory_ranks_above_unrelated_code_chunks(self):
+        workaround = "Handoff: x-becoming-television GET_NOTEBOOK timeout workaround: pass source_ids explicitly to chat.ask"
+        candidates = [
+            {"id": "unrelated1", "document": "NotebookLM implementation details source_ids chat.ask get_notebook " * 20, "score": 8.0, "metadata": {}},
+            {"id": "unrelated2", "document": "More code about NotebookLM and timeouts and source handling", "score": 7.5, "metadata": {}},
+            {"id": "workaround", "document": workaround, "score": 2.0, "metadata": {}},
+        ]
+        q = "x-becoming-television GET_NOTEBOOK timeout pass source_ids explicitly chat.ask workaround"
+        ranked = rank_search_results(q, candidates)
+        # Workaround should be in top results and above pure unrelated code
+        ids = [r["id"] for r in ranked]
+        assert "workaround" in ids[:3]
+        # Unrelated code chunks must not outrank the workaround memory
+        workaround_pos = ids.index("workaround")
+        for i, rid in enumerate(ids):
+            if rid.startswith("unrelated"):
+                assert i > workaround_pos, f"Unrelated {rid} ranked above workaround"
+
+    def test_exact_phrase_match_boosts_decision_to_top(self):
+        candidates = [
+            {"id": "log", "document": "Search results: " + ("essay project open " * 10), "score": 9.0, "metadata": {}},
+            {"id": "dec", "document": "Decision: Essay_ID.md is the open project", "score": 1.0, "metadata": {}},
+        ]
+        ranked = rank_search_results("Essay_ID.md is the open project", candidates)
+        assert ranked[0]["id"] == "dec"
+
 
 class TestDiagnosticsFields:
     def test_registry_fallback_results_include_ranking_diagnostics(self):
@@ -192,27 +302,61 @@ class TestDiagnosticsFields:
         assert ranked[0]["score"] == ranked[0]["final_score"]
         assert ranked[0]["score"] > 6.2
 
+    def test_ranking_diagnostics_show_capped_topic_match(self):
+        # Build a document with many topic words but no exact path/phrase
+        many_terms = " ".join([f"term{i}" for i in range(20)])
+        candidates = [
+            {"id": "log", "document": "Command output: " + many_terms, "score": 10.0, "metadata": {}},
+        ]
+        ranked = rank_search_results("term0 term1 term2 term3 term4 term5 term6 term7", candidates)
+        assert ranked[0]["ranking_boosts"].get("topic_match", 0) <= BOOST_TOPIC_MATCH
+        assert "capped" in " ".join(ranked[0].get("ranking_reason", [])).lower()
 
-class TestPreflightRankingNotDoubleBoosted:
-    def test_preflight_memory_ranking_not_double_boosted(self):
-        from oem_knowledge.preflight.scoring import score_memory, MemoryMetadata
 
-        mem = MemoryMetadata(
-            id="test1",
-            title="Decision",
-            source_path=None,
-            snippet="Decision: Essay_ID.md is open project.",
-        )
+class TestTopicCapAndLargeChunks:
+    def test_topic_match_hard_cap_even_with_many_terms(self):
+        many = " ".join(["essay", "project", "open", "decision", "indonesian", "workflow", "analyze", "modify", "explicit", "continue"] * 3)
+        candidates = [
+            {"id": "biglog", "document": "Search results: " + many, "score": 20.0, "metadata": {}},
+            {"id": "dec", "document": "Decision: Essay_ID.md is the open project", "score": 1.0, "metadata": {}},
+        ]
+        ranked = rank_search_results("Essay_ID.md is the open project", candidates)
+        # Even if log matches many terms, exact decision should win
+        assert ranked[0]["id"] == "dec"
+        assert ranked[0]["ranking_boosts"].get("topic_match", 0) <= BOOST_TOPIC_MATCH
 
-        breakdown = score_memory("Essay_ID.md open project", mem)
-        assert breakdown.score > 0
+    def test_large_low_density_chunk_loses_to_exact_decision(self):
+        huge = "random text " * 300  # >1500 chars, no exact match
+        candidates = [
+            {"id": "huge", "document": huge, "score": 15.0, "metadata": {}},
+            {"id": "dec", "document": "Decision: 2_Essay/expertise-debt/Essay_ID.md is the open project", "score": 1.0, "metadata": {}},
+        ]
+        ranked = rank_search_results("2_Essay/expertise-debt/Essay_ID.md is the open project", candidates)
+        assert ranked[0]["id"] == "dec"
 
-        memo = {
-            "id": "test1",
-            "document": "Decision: Essay_ID.md is open project.",
-            "score": breakdown.score,
-            "metadata": {"title": "Decision"},
-        }
-        ranked = rank_search_result("Essay_ID.md open project", memo)
+    def test_large_chunk_penalty_skipped_for_exact_decision(self):
+        huge_dec = ("Decision: Essay_ID.md is the open project. " + "context " * 400)
+        candidates = [
+            {"id": "huge_dec", "document": huge_dec, "score": 1.0, "metadata": {}},
+        ]
+        ranked = rank_search_results("Essay_ID.md is the open project", candidates)
+        assert "large" not in " ".join(ranked[0].get("ranking_reason", [])).lower()
 
-        assert ranked["ranking_boosts"].get("decision") == BOOST_DECISION
+
+class TestPreflightRankingNotDoubleApplied:
+    def test_preflight_memory_ranking_not_double_applied(self):
+        # Simulate what preflight now does: convert MemoryMetadata-like items and call rank_search_results once
+        mem_like = [
+            {
+                "id": "m1",
+                "document": "Decision: Essay_ID.md is the open project",
+                "metadata": {"title": "Decision"},
+                "score": 0.0,
+            }
+        ]
+        ranked = rank_search_results("Essay_ID.md open project", mem_like)
+        assert len(ranked) == 1
+        assert "ranking_boosts" in ranked[0]
+        # Calling rank again should not multiply boosts in a way that changes structure
+        ranked2 = rank_search_results("Essay_ID.md open project", ranked)
+        assert ranked2[0]["memory_type"] == "decision"
