@@ -73,6 +73,8 @@ def _reason_code(result: PreflightResult) -> tuple[str, str | None]:
         return "preflight_error", "Inspect warnings and retry. If the issue persists, treat it as an OEM bug."
 
     if result.decision == "required":
+        if reason in {"active_work_resolved", "active_work_conflict", "workspace_resolved_active_work_unknown"}:
+            return reason, None
         if result.matched_skills:
             return "approved_skill_match", None
         if result.matched_concepts:
@@ -82,6 +84,8 @@ def _reason_code(result: PreflightResult) -> tuple[str, str | None]:
         return "preflight_required", None
 
     if result.decision == "suggest":
+        if reason in {"active_work_resolved", "active_work_conflict", "workspace_resolved_active_work_unknown"}:
+            return reason, None
         if result.matched_skills:
             return "skill_match", None
         if result.matched_concepts:

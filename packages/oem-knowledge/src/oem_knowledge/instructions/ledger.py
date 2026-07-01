@@ -50,10 +50,14 @@ def ensure_schema(conn: sqlite3.Connection):
                 related_concepts_json TEXT,
                 related_skills_json TEXT,
                 related_workflows_json TEXT,
+                always_on INTEGER NOT NULL DEFAULT 0,
                 status TEXT NOT NULL,
                 indexed_at TEXT NOT NULL
             )
         """)
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(directives)").fetchall()}
+        if "always_on" not in columns:
+            conn.execute("ALTER TABLE directives ADD COLUMN always_on INTEGER NOT NULL DEFAULT 0")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS session_directive_matches (
                 session_id TEXT NOT NULL,
@@ -106,14 +110,14 @@ def index_source_file(conn: sqlite3.Connection, path: str, content: str, file_ha
                     id, source_id, source_path, source_hash, line_start, line_end,
                     title, scope, triggers_json, priority, rule, forbidden_actions_json,
                     related_concepts_json, related_skills_json, related_workflows_json,
-                    status, indexed_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    always_on, status, indexed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 d["id"], path, d["source_path"], d["source_hash"], d["line_start"], d["line_end"],
                 d["title"], d["scope"], json.dumps(d["triggers"]), d["priority"], d["rule"],
                 json.dumps(d["forbidden_actions"]), json.dumps(d["related_concepts"]),
                 json.dumps(d["related_skills"]), json.dumps(d["related_workflows"]),
-                d["status"], now_str
+                1 if d.get("always_on") else 0, d["status"], now_str
             ))
             
         # Update instruction_sources

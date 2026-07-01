@@ -704,27 +704,12 @@ def run_preflight(
             if top_match is None or candidate.score > top_match.score:
                 top_match = candidate
 
-        top_directive_score = 0.0
-        top_directive_title = ""
-        is_critical_directive = False
-        is_directive_generic_title_match = False
-        top_directive_scope = ""
-        top_directive_always_on = False
-        for md in matched_directives:
-            score_val = md["score"]
-            if score_val > top_directive_score:
-                top_directive_score = score_val
-                top_directive_title = md["title"]
-                is_critical_directive = md.get("priority") == "critical"
-                is_directive_generic_title_match = md.get("title_match_is_generic", False)
-                top_directive_scope = md.get("scope", "")
-                top_directive_always_on = md.get("always_on", False)
-        # A critical directive only counts as semantically relevant if its
-        # title match is not purely from generic tokens, or if it is global/always-on.
-        semantic_critical = is_critical_directive and (
-            top_directive_scope == "global"
-            or top_directive_always_on
-            or not is_directive_generic_title_match
+        forcing_directives = [md for md in matched_directives if md.get("can_force_required")]
+        top_forcing_directive = max(forcing_directives, key=lambda md: md.get("score", 0.0), default=None)
+        top_semantic_directive = max(
+            (md for md in matched_directives if md.get("match_class") == "semantic_directive_match"),
+            key=lambda md: md.get("score", 0.0),
+            default=None,
         )
 
         # Generic continuation: resolve active work (field-aware)
@@ -780,7 +765,7 @@ def run_preflight(
 
                 # Append relevant directives as supporting context
                 for md in matched_directives:
-                    if md.get("title_match_is_generic"):
+                    if md.get("match_class") in {"generic_lexical_match", "weak_directive_match"}:
                         continue
                     supporting_reasons.append(f"directive:{md['title']}")
             except Exception as e:
@@ -813,10 +798,11 @@ def run_preflight(
             decision = "required"
             reason = f"{top_match.kind} matched strongly: {top_match.title}"
 
-        # semantically-relevant critical directive → required
-        if decision == "noop" and semantic_critical:
+        # Semantically-relevant critical/global directive → required.
+        # Generic diagnostic matches never force required.
+        if decision == "noop" and top_forcing_directive is not None:
             decision = "required"
-            reason = f"critical directive matched: {top_directive_title}"
+            reason = f"critical directive matched: {top_forcing_directive['title']}"
 
         # active_work.has_active_work → required
         active_work: ActiveWorkResult | None = None
@@ -852,14 +838,14 @@ def run_preflight(
                 f"chunk(s) related to task domain."
             )
 
-        # directive score ≥ 4.0, non-generic → suggest
+        # directive score ≥ 4.0, semantic → suggest
         if (
             decision == "noop"
-            and top_directive_score >= SUGGEST_THRESHOLD
-            and not is_directive_generic_title_match
+            and top_semantic_directive is not None
+            and top_semantic_directive.get("score", 0.0) >= SUGGEST_THRESHOLD
         ):
             decision = "suggest"
-            reason = f"directive matched: {top_directive_title}"
+            reason = f"directive matched: {top_semantic_directive['title']}"
 
         # active_work.score ≥ 2.0 → suggest
         if decision == "noop" and active_work is not None and active_work.score >= 2.0:

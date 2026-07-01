@@ -11,6 +11,16 @@ from pathlib import Path
 # Directive keywords
 DIRECTIVE_KEYWORDS = ["must", "never", "always", "do not", "before", "after", "required", "forbidden"]
 
+
+def _as_bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return False
+
 def parse_frontmatter(content: str) -> tuple[dict, str]:
     if not content.startswith("---"):
         return {}, content
@@ -68,6 +78,7 @@ def parse_directives(source_path: str, content: str, source_hash: str) -> list[d
     fm_triggers = fm_data.get("triggers", [])
     fm_scope = fm_data.get("scope", None)
     fm_priority = fm_data.get("priority", None)
+    fm_always_on = _as_bool(fm_data.get("always_on", False))
     
     line_number = content.count("\n") - len(lines)  # Offset line numbers due to frontmatter
     if line_number < 0:
@@ -157,6 +168,7 @@ def parse_directives(source_path: str, content: str, source_hash: str) -> list[d
                 "related_concepts": fm_data.get("related_concepts", []),
                 "related_skills": fm_data.get("related_skills", []),
                 "related_workflows": fm_data.get("related_workflows", []),
+                "always_on": fm_always_on,
                 "status": "active"
             })
             
