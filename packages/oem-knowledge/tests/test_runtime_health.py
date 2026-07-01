@@ -341,3 +341,48 @@ def test_regression_session_commit_structured_events(engine, tmp_path):
     # The session report contains the 2 events
     parsed = parse_markdown_report(session_files[0].read_text(encoding="utf-8"))
     assert len(parsed["events"]) == 2
+
+
+def test_health_warning_reachable_for_editable_runtime(engine, tmp_path):
+    from oem_knowledge.runtime.provenance import RUNTIME_KIND_EDITABLE
+    
+    mock_prov = {
+        "runtime_kind": RUNTIME_KIND_EDITABLE,
+        "executable_path": "/fake/path/python",
+        "package_path": "/fake/path/pkg",
+        "version": "1.0.0",
+        "evidence": []
+    }
+    
+    with patch("oem_knowledge.runtime.provenance.detect_runtime", return_value=mock_prov):
+        report = build_runtime_health(str(tmp_path))
+        
+        warning_names = [c["name"] for c in report.get("checks", [])]
+        assert any("Dev checkout runtime serving non-dev project" in name for name in warning_names)
+        warning_check = next(c for c in report["checks"] if "Dev checkout runtime serving non-dev project" in c["name"])
+        assert warning_check["status"] == "warn"
+
+
+def test_health_warning_for_editable_runtime_mentions_editable_and_project(engine, tmp_path):
+    from oem_knowledge.runtime.provenance import RUNTIME_KIND_EDITABLE
+    
+    mock_prov = {
+        "runtime_kind": RUNTIME_KIND_EDITABLE,
+        "executable_path": "/fake/path/python",
+        "package_path": "/fake/path/pkg",
+        "version": "1.0.0",
+        "evidence": []
+    }
+    
+    with patch("oem_knowledge.runtime.provenance.detect_runtime", return_value=mock_prov):
+        report = build_runtime_health(str(tmp_path))
+        
+        # 1. runtime_kind == editable_checkout is present
+        runtime_check_str = next(c["name"] for c in report["checks"] if "Runtime:" in c["name"])
+        assert "editable_checkout" in runtime_check_str
+        
+        # 2. warning mentions editable/dev runtime and appears when serving non-dev project
+        warning_check = next(c for c in report["checks"] if "Dev checkout runtime serving non-dev project" in c["name"])
+        assert warning_check["status"] == "warn"
+
+

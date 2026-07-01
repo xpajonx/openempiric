@@ -123,3 +123,154 @@ class TestGetPackageVersion:
     def test_returns_string_on_found(self):
         v = _get_package_version("oem-knowledge")
         assert v is None or isinstance(v, str)
+
+
+class TestProvenanceRefinements:
+    def test_detect_runtime_sets_kind_editable_from_direct_url_json(self, monkeypatch, tmp_path):
+        venv_dir = tmp_path / "venv"
+        fake_python = venv_dir / "bin" / "python"
+        fake_python.parent.mkdir(parents=True)
+        fake_python.write_text("")
+        
+        sp_dir = venv_dir / "lib" / "python3.12" / "site-packages"
+        dist_info = sp_dir / "oem_knowledge-1.0.4+local.dist-info"
+        dist_info.mkdir(parents=True)
+        
+        direct_url_file = dist_info / "direct_url.json"
+        direct_url_file.write_text(json.dumps({
+            "url": "file:///home/xpajonx/.config/openempiric-dev/openempiric",
+            "dir_info": {
+                "editable": True
+            }
+        }))
+        
+        monkeypatch.setattr(sys, "executable", str(fake_python))
+        monkeypatch.setattr(sys, "path", [])
+        
+        info = detect_runtime()
+        assert info["runtime_kind"] == RUNTIME_KIND_EDITABLE
+
+    def test_is_dev_runtime_true_for_editable_runtime(self):
+        assert is_dev_runtime(RUNTIME_KIND_EDITABLE)
+        assert is_dev_runtime({"runtime_kind": RUNTIME_KIND_EDITABLE})
+        assert is_dev_runtime({"kind": RUNTIME_KIND_EDITABLE})
+
+    def test_find_site_packages_detects_normal_venv_lib_python_site_packages(self, tmp_path):
+        venv_dir = tmp_path / "venv"
+        fake_python = venv_dir / "bin" / "python"
+        fake_python.parent.mkdir(parents=True)
+        sp_dir = venv_dir / "lib" / "python3.12" / "site-packages"
+        sp_dir.mkdir(parents=True)
+        assert _find_site_packages(fake_python) == sp_dir.resolve()
+
+    def test_find_site_packages_detects_windows_venv_lib_site_packages(self, tmp_path):
+        venv_dir = tmp_path / "venv"
+        fake_python = venv_dir / "Scripts" / "python.exe"
+        fake_python.parent.mkdir(parents=True)
+        sp_dir = venv_dir / "Lib" / "site-packages"
+        sp_dir.mkdir(parents=True)
+        assert _find_site_packages(fake_python) == sp_dir.resolve()
+
+    def test_find_site_packages_prefers_sys_path_site_packages(self, monkeypatch, tmp_path):
+        venv_dir = tmp_path / "venv"
+        fake_python = venv_dir / "bin" / "python"
+        fake_python.parent.mkdir(parents=True)
+        
+        sp_venv = venv_dir / "lib" / "python3.12" / "site-packages"
+        sp_venv.mkdir(parents=True)
+        
+        sp_other = tmp_path / "other" / "site-packages"
+        sp_other.mkdir(parents=True)
+        
+        monkeypatch.setattr(sys, "path", [str(sp_other)])
+        assert _find_site_packages(fake_python) == sp_other.resolve()
+
+    def test_find_site_packages_existing_artificial_layout_no_longer_required(self, tmp_path):
+        sp = tmp_path / "site-packages"
+        sp.mkdir()
+        parent = tmp_path / "bin" / "python"
+        parent.parent.mkdir(parents=True)
+        parent.write_text("")
+        assert _find_site_packages(parent.resolve()) == sp.resolve()
+
+    def test_direct_url_json_evidence_preserved_for_editable_runtime(self, monkeypatch, tmp_path):
+        venv_dir = tmp_path / "venv"
+        fake_python = venv_dir / "bin" / "python"
+        fake_python.parent.mkdir(parents=True)
+        
+        sp_dir = venv_dir / "lib" / "python3.12" / "site-packages"
+        dist_info = sp_dir / "oem_knowledge-0.0.0.dist-info"
+        dist_info.mkdir(parents=True)
+        
+        direct_url_file = dist_info / "direct_url.json"
+        direct_url_file.write_text(json.dumps({
+            "url": "file:///home/xpajonx/.config/openempiric-dev/openempiric",
+            "dir_info": {
+                "editable": True
+            }
+        }))
+        
+        monkeypatch.setattr(sys, "executable", str(fake_python))
+        monkeypatch.setattr(sys, "path", [])
+        
+        info = detect_runtime()
+        assert info["runtime_kind"] == RUNTIME_KIND_EDITABLE
+        any_url_evidence = any("file:///home/xpajonx/.config/openempiric-dev/openempiric" in ev for ev in info["evidence"])
+        assert any_url_evidence
+
+    def test_detect_runtime_malformed_direct_url_does_not_crash(self, monkeypatch, tmp_path):
+        venv_dir = tmp_path / "venv"
+        fake_python = venv_dir / "bin" / "python"
+        fake_python.parent.mkdir(parents=True)
+        
+        sp_dir = venv_dir / "lib" / "python3.12" / "site-packages"
+        dist_info = sp_dir / "oem_knowledge-1.0.4.dist-info"
+        dist_info.mkdir(parents=True)
+        
+        direct_url_file = dist_info / "direct_url.json"
+        direct_url_file.write_text("malformed json content }")
+        
+        monkeypatch.setattr(sys, "executable", str(fake_python))
+        monkeypatch.setattr(sys, "path", [])
+        
+        info = detect_runtime()
+        assert info["runtime_kind"] == RUNTIME_KIND_UNKNOWN
+        any_warning = any("failed to parse" in ev for ev in info["evidence"])
+        assert any_warning
+
+    def test_detect_runtime_direct_url_non_editable_not_marked_editable(self, monkeypatch, tmp_path):
+        venv_dir = tmp_path / "venv"
+        fake_python = venv_dir / "bin" / "python"
+        fake_python.parent.mkdir(parents=True)
+        
+        sp_dir = venv_dir / "lib" / "python3.12" / "site-packages"
+        dist_info = sp_dir / "oem_knowledge-1.0.4.dist-info"
+        dist_info.mkdir(parents=True)
+        
+        direct_url_file = dist_info / "direct_url.json"
+        direct_url_file.write_text(json.dumps({
+            "url": "https://github.com/some/repo",
+            "vcs_info": {
+                "vcs": "git",
+                "commit_id": "1234567890abcdef"
+            }
+        }))
+        
+        monkeypatch.setattr(sys, "executable", str(fake_python))
+        monkeypatch.setattr(sys, "path", [])
+        
+        info = detect_runtime()
+        assert info["runtime_kind"] == RUNTIME_KIND_UNKNOWN
+
+    def test_find_site_packages_dedupes_preserving_order(self, monkeypatch, tmp_path):
+        sp_dir = tmp_path / "unique-site-packages"
+        sp_dir.mkdir()
+        
+        monkeypatch.setattr(sys, "path", [str(sp_dir)])
+        
+        import site
+        if hasattr(site, "getsitepackages"):
+            monkeypatch.setattr(site, "getsitepackages", lambda: [str(sp_dir)])
+            
+        assert _find_site_packages(tmp_path / "bin" / "python") == sp_dir.resolve()
+
