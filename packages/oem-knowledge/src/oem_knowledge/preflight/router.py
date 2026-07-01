@@ -244,46 +244,19 @@ _GENERIC_CONTINUATION_TRIGGERS = frozenset({
 
 
 def _extract_task_targets(task: str) -> dict:
+    from oem_knowledge.memory_ranking import extract_query_targets
+    targets = extract_query_targets(task)
     task_lower = task.lower().strip()
-
-    raw_files: list[str] = _TASK_PATH_RE.findall(task)
-    files: list[str] = [f for f in raw_files if f]
-
-    raw_identifiers: list[str] = _TASK_IDENTIFIER_RE.findall(task)
-    identifiers: list[str] = [i for i in raw_identifiers if len(i) >= 3]
-
-    stems: list[str] = []
-    for f in files:
-        clean = f.lstrip("./~")
-        parts = clean.rsplit(".", 1)
-        stems.append(clean)
-        if parts[0]:
-            stems.append(parts[0])
-        stem_parts = parts[0].split("/")
-        if stem_parts:
-            stems.append(stem_parts[-1])
-
-    # Normalize: strip common prefixes for cross-matching
-    stems_norm: set[str] = set()
-    for s in stems:
-        # /path/to/Essay_ID.md → Essay_ID
-        # Essay_ID.md → Essay_ID
-        # 2_Essay/expertise-debt/Essay_ID.md → expertise-debt, Essay_ID
-        for part in s.replace("/", " ").replace("_", " ").replace("-", " ").split():
-            cleaned = part.strip("._-").lower()
-            if len(cleaned) >= 3:
-                stems_norm.add(cleaned)
-    # Also keep the original stems
-    stems_norm.update(s.lower() for s in stems)
-
     return {
-        "files": files,
-        "identifiers": [i.lower() for i in identifiers],
-        "stems": sorted(stems_norm),
+        **targets,
+        "files": targets.get("files", []),
+        "identifiers": targets.get("identifiers", []),
+        "stems": targets.get("stems", []),
         "has_continuation_phrase": any(
             phrase in task_lower for phrase in _GENERIC_CONTINUATION_TRIGGERS
         ),
     }
+
 
 
 # ---------------------------------------------------------------------------
@@ -415,6 +388,96 @@ def _evaluate_matched_memory_relevance(
         "details": strong + medium + weak,
         "has_open_project_signal": has_open_project_signal,
     }
+
+
+def is_weak_memory_match(rm: dict, task_targets: dict) -> tuple[bool, str]:
+    boosts = rm.get("ranking_boosts", {})
+    mem_type = rm.get("memory_type")
+    
+    # If the candidate has no query-specific overlap at all, it is weak/irrelevant!
+    query_specific_boosts = {
+        "exact_path_match",
+        "exact_filename_match",
+        "exact_phrase",
+        "identifier_cooccurrence",
+        "topic_match"
+    }
+    if not any(b in boosts for b in query_specific_boosts):
+        return True, "no_overlap"
+        
+    strong_types = {"decision", "failure", "outcome", "technical_handoff", "workaround", "debug_note"}
+    if mem_type in strong_types:
+        return False, ""
+
+        
+    preserve_boosts = {
+        "exact_path_match",
+        "exact_filename_match",
+        "exact_phrase",
+        "workflow_rule",
+        "identifier_cooccurrence",
+        "active_work_signal"
+    }
+    if any(b in boosts for b in preserve_boosts):
+        return False, ""
+        
+    has_semantic = bool(task_targets.get("semantic_terms"))
+    has_files = bool(task_targets.get("files"))
+    has_paths = bool(task_targets.get("paths"))
+    has_identifiers = bool(task_targets.get("identifiers"))
+    has_generic = bool(task_targets.get("generic_terms"))
+    
+    if not has_semantic and not has_files and not has_paths and not has_identifiers and not has_generic:
+        return True, "stopword_only"
+        
+    if not has_semantic and not has_files and not has_paths and not has_identifiers:
+        return True, "generic_only"
+        
+    non_topic_boosts = [b for b in boosts if b != "topic_match"]
+    if not non_topic_boosts:
+        topic_boost = boosts.get("topic_match", 0.0)
+        # If topic match has more than 1 term matched (> 0.5 boost), it is not weak!
+        if topic_boost <= 0.5:
+            return True, "single_weak_topic"
+            
+    return False, ""
+
+
+def is_only_weak_memory_matches(matched_memory: list, task_targets: dict) -> bool:
+    if not matched_memory:
+        return True
+        
+    has_semantic = bool(task_targets.get("semantic_terms"))
+    has_files = bool(task_targets.get("files"))
+    has_paths = bool(task_targets.get("paths"))
+    has_identifiers = bool(task_targets.get("identifiers"))
+    
+    if not has_semantic and not has_files and not has_paths and not has_identifiers:
+        return True
+        
+    strong_types = {"decision", "failure", "outcome", "technical_handoff", "workaround", "debug_note"}
+    preserve_boosts = {
+        "exact_path_match",
+        "exact_filename_match",
+        "exact_phrase",
+        "workflow_rule",
+        "identifier_cooccurrence",
+        "active_work_signal"
+    }
+    
+    for mem in matched_memory:
+        meta = mem.metadata or {}
+        mem_type = meta.get("memory_type")
+        boosts = meta.get("ranking_boosts", {})
+        if mem_type in strong_types or any(b in boosts for b in preserve_boosts):
+            return False
+            
+        topic_boost = boosts.get("topic_match", 0.0)
+        if topic_boost > 0.5:
+            return False
+            
+    return True
+
 
 
 def is_generic_continuation(task: str) -> bool:
@@ -649,8 +712,13 @@ def run_preflight(
                 )
             )
 
+        # Extract task targets for relevance classification and filtering
+        task_targets = _extract_task_targets(task)
+
         # Rank memory ONCE using the deterministic ranker (strict: no double application)
         matched_memory = []
+        rejected_memory_count = 0
+        rejection_reasons = {"stopword_only": 0, "generic_only": 0, "single_weak_topic": 0}
         if memory_items:
             mem_candidates = []
             for m in memory_items:
@@ -671,6 +739,12 @@ def run_preflight(
                 fs = rm.get("final_score", rm.get("score", 0.0))
                 if fs <= 0:
                     continue
+                is_weak, rej_reason = is_weak_memory_match(rm, task_targets)
+                if is_weak:
+                    rejected_memory_count += 1
+                    if rej_reason in rejection_reasons:
+                        rejection_reasons[rej_reason] += 1
+                    continue
                 matched_memory.append(
                     make_match(
                         kind="memory",
@@ -690,6 +764,7 @@ def run_preflight(
                         },
                     )
                 )
+
 
         matched_skills = _sort_matches(matched_skills)
         matched_concepts = _sort_matches(matched_concepts)
@@ -727,14 +802,12 @@ def run_preflight(
         except Exception as e:
             warnings.append(f"Failed to match directives: {e}")
 
-        # Extract task targets for relevance classification
-        task_targets = _extract_task_targets(task)
         memory_relevance = _evaluate_matched_memory_relevance(
             matched_memory, task_targets, task
         )
 
         decision = "noop"
-        reason = "no strong OEM preflight signals"
+        reason = "no_relevant_oem_context"
         reason_detail = ""
         supporting_reasons: list[str] = []
         active_project_data: dict | None = None
@@ -864,14 +937,16 @@ def run_preflight(
 
         # top_match ≥ 4.0 → suggest
         if decision == "noop" and top_match is not None and top_match.score >= SUGGEST_THRESHOLD:
-            decision = "suggest"
-            reason = f"{top_match.kind} matched: {top_match.title}"
+            if top_match.kind != "memory" or not is_only_weak_memory_matches(matched_memory, task_targets):
+                decision = "suggest"
+                reason = f"{top_match.kind} matched: {top_match.title}"
 
         # medium memory relevance → suggest
         if (
             decision == "noop"
             and memory_relevance.get("max_relevance") == "medium"
             and not is_generic
+            and not is_only_weak_memory_matches(matched_memory, task_targets)
         ):
             decision = "suggest"
             reason = "relevant_memory_matched"
@@ -895,7 +970,7 @@ def run_preflight(
             reason = f"active work signals detected (score {active_work.score:.1f})"
 
         # aggregate memory → suggest
-        if decision == "noop" and len(matched_memory) >= 3:
+        if decision == "noop" and len(matched_memory) >= 3 and not is_only_weak_memory_matches(matched_memory, task_targets):
             top_scores = sorted((m.score for m in matched_memory), reverse=True)[:5]
             if sum(top_scores) >= 8.0:
                 decision = "suggest"
@@ -974,6 +1049,8 @@ def run_preflight(
             matched_memory_summary=matched_memory_summary,
             reason_detail=reason_detail,
             supporting_reasons=supporting_reasons,
+            rejected_memory_count=rejected_memory_count,
+            rejection_reasons=rejection_reasons,
         )
 
         context, context_warnings = render_context(result, budget)

@@ -37,6 +37,8 @@ class PreflightResult:
     matched_memory_summary: list[dict] = field(default_factory=list)
     reason_detail: str = ""
     supporting_reasons: list[str] = field(default_factory=list)
+    rejected_memory_count: int = 0
+    rejection_reasons: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

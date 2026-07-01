@@ -1271,3 +1271,98 @@ def test_preflight_active_work_sources_include_md_fields(tmp_path: Path):
     assert "runtime_context_md" in sources
     assert sources["session_handoff_md"]["fields"] != {}
     assert sources["runtime_context_md"]["fields"] != {}
+
+
+def test_preflight_fix_story_page_layout_no_false_suggest_from_essay_memory(preflight_project: Path):
+    db_path = preflight_project / ".oem" / ".local_vector_db" / "vectors.db"
+    rule = "Decision: For Indonesian essays: inspect, understand tone, propose changes. Do not modify the file unless user explicitly says to edit. Continue working means analyze, not write."
+    _add_memory_rows(db_path, [
+        ("mem_rule_id", rule, {"source": ".oem/m.md", "title": "Indonesian essay rule"}),
+    ])
+    result = run_preflight(
+        "fix the story page responsive layout",
+        project=str(preflight_project),
+        write_audit=False,
+    )
+    assert result.decision == "noop"
+    assert result.reason == "no_relevant_oem_context"
+    assert len(result.matched_memory) == 0
+
+
+def test_preflight_context_excludes_stopword_only_memory_matches(preflight_project: Path):
+    db_path = preflight_project / ".oem" / ".local_vector_db" / "vectors.db"
+    rule = "Observation: Some rule about the essay context"
+    _add_memory_rows(db_path, [
+        ("mem_id", rule, {"source": "m.md", "title": "Random title with stopword the"}),
+    ])
+    result = run_preflight(
+        "the",
+        project=str(preflight_project),
+        write_audit=False,
+    )
+    assert len(result.matched_memory) == 0
+    assert "Random title" not in result.context
+
+
+def test_low_base_score_exact_decision_not_filtered_as_weak(preflight_project: Path):
+    db_path = preflight_project / ".oem" / ".local_vector_db" / "vectors.db"
+    rule = "Decision: Exact workflow match info"
+    _add_memory_rows(db_path, [
+        ("mem_id", rule, {"source": "m.md", "title": "Workflow match"}),
+    ])
+    result = run_preflight(
+        "Workflow match",
+        project=str(preflight_project),
+        write_audit=False,
+    )
+    assert any(m.title == "Workflow match" for m in result.matched_memory)
+
+
+def test_preflight_weak_memory_filtered_results_do_not_drive_suggest(preflight_project: Path):
+    db_path = preflight_project / ".oem" / ".local_vector_db" / "vectors.db"
+    _add_memory_rows(db_path, [
+        (
+            "mem_id",
+            "Observation: the current task review page layout",
+            {"source": "m.md", "title": "Observation title"},
+        )
+    ])
+    result = run_preflight(
+        "continue current task",
+        project=str(preflight_project),
+        write_audit=False,
+    )
+    assert result.decision == "noop"
+    assert result.reason == "no_relevant_oem_context"
+
+
+def test_preflight_active_work_conflict_can_still_suggest_after_weak_memory_filtered(preflight_project: Path):
+    db_path = preflight_project / ".oem" / ".local_vector_db" / "vectors.db"
+    _add_memory_rows(db_path, [
+        (
+            "mem_id",
+            "Observation: continue working on review layout",
+            {"source": "m.md", "title": "Observation title"},
+        )
+    ])
+    state_dir = preflight_project / ".oem" / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    _write_json(
+        state_dir / "todos.json",
+        [{"content": "Build feature X", "status": "in_progress"}],
+    )
+    runtime_dir = preflight_project / ".oem" / ".runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / "context.md").write_text("Active project: /project/alpha\n", encoding="utf-8")
+    (state_dir / "session-handoff.md").write_text("Project: /project/beta\n", encoding="utf-8")
+
+    result = run_preflight(
+        "continue",
+        project=str(preflight_project),
+        write_audit=False,
+    )
+    assert result.decision in ("suggest", "required")
+    assert "active work" in result.reason or "conflict" in result.reason or "signals differ" in result.reason
+
+
+

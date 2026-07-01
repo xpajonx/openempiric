@@ -107,18 +107,11 @@ def extract_query_targets(query: str) -> dict[str, Any]:
                 stems.append(seg)
 
     # Identifiers (camel, snake, or uppercase-ish)
-    identifiers = re.findall(r'\b[A-Za-z_][A-Za-z0-9_]{2,}\b', q)
-    identifiers = [i for i in identifiers if not i.lower().endswith('.md')]
+    raw_identifiers = re.findall(r'\b[A-Za-z_][A-Za-z0-9_]{2,}\b', q)
+    raw_identifiers = [i for i in raw_identifiers if not i.lower().endswith('.md')]
 
     # Tokens for topic
-    tokens = [t.lower() for t in re.findall(r'\w+', q) if len(t) > 1]
-
-    # 4+ consecutive token phrases (normalized later)
-    words = [w for w in re.findall(r'\w+', q) if len(w) > 1]
-    phrases = []
-    for length in range(4, min(8, len(words) + 1)):
-        for i in range(len(words) - length + 1):
-            phrases.append(' '.join(words[i:i+length]))
+    raw_tokens = [t.lower() for t in re.findall(r'\w+', q) if len(t) > 1]
 
     # Rule intent detection
     rule_intent = bool(
@@ -126,7 +119,136 @@ def extract_query_targets(query: str) -> dict[str, Any]:
     )
 
     # v3: Technical / debug intent detection
-    technical_intent, debug_intent, technical_identifiers, project_terms = _detect_technical_intent(q, identifiers)
+    technical_intent, debug_intent, technical_identifiers, project_terms = _detect_technical_intent(q, raw_identifiers)
+
+    # Stopwords and generic terms classification
+    HARD_STOPWORDS = {
+        "the", "a", "an", "of", "to", "in", "on", "for", "with", "from",
+        "by", "at", "as", "is", "are", "was", "were", "be", "been", "being",
+        "and", "or", "but", "if", "then", "than", "that", "this", "it", "its"
+    }
+
+    GENERIC_WORDS = {
+        "current", "project", "content", "work", "continue", "session",
+        "context", "file", "task", "next", "now", "state", "review",
+        "health", "memory", "agent", "oem", "fix", "story", "page", "layout"
+    }
+
+    CONDITIONAL_GENERIC = {"story", "page", "layout"}
+
+    words_lower = [w.lower() for w in re.findall(r'\b\w+\b', q)]
+
+    def clean_stem(w: str) -> str:
+        w_low = w.lower()
+        if w_low.endswith("ing"):
+            w_low = w_low[:-3]
+        elif w_low.endswith("ed"):
+            w_low = w_low[:-2]
+        elif w_low.endswith("es"):
+            w_low = w_low[:-2]
+        elif w_low.endswith("s") and not w_low.endswith("ss"):
+            w_low = w_low[:-1]
+        return w_low
+
+    path_words = set()
+    for p in full_paths + filenames + dir_parts:
+        for seg in re.split(r'[/\._-]', p):
+            if seg:
+                path_words.add(seg.lower())
+
+    # Pre-calculate strong signals using non-conditional semantics
+    non_conditional_semantics = [
+        w for w in words_lower
+        if clean_stem(w) not in HARD_STOPWORDS and clean_stem(w) not in GENERIC_WORDS
+    ]
+
+    filtered_tech_ids = [ti for ti in technical_identifiers if clean_stem(ti) not in HARD_STOPWORDS]
+
+    has_paths = len(full_paths) > 0
+    has_files = len(filenames) > 0
+    has_tech_ids = len(filtered_tech_ids) > 0
+    has_project_terms = len(project_terms) > 0
+    has_strong_signals = has_paths or has_files or has_tech_ids or has_project_terms or (len(non_conditional_semantics) > 0)
+
+    if has_strong_signals:
+        layout_pairing_words = {"responsive", "frontend", "mobile", "css", "grid", "page"}
+        is_layout_paired = (
+            "layout" in path_words or
+            any(w in words_lower for w in layout_pairing_words) or
+            bool(full_paths or filenames or dir_parts)
+        )
+        is_story_paired = (
+            "story" in path_words or
+            bool(full_paths or filenames or dir_parts)
+        )
+        is_page_paired = (
+            "page" in path_words or
+            bool(full_paths or filenames or dir_parts)
+        )
+    else:
+        is_layout_paired = False
+        is_story_paired = False
+        is_page_paired = False
+
+    extracted_stopwords = []
+    extracted_generic = []
+    extracted_semantic = []
+
+    for w in words_lower:
+        w_stem = clean_stem(w)
+        if w in HARD_STOPWORDS or w_stem in HARD_STOPWORDS:
+            if w not in extracted_stopwords:
+                extracted_stopwords.append(w)
+        elif w in GENERIC_WORDS or w_stem in GENERIC_WORDS:
+            is_semantic = False
+            if (w == "layout" or w_stem == "layout") and is_layout_paired:
+                is_semantic = True
+            elif (w == "story" or w_stem == "story") and is_story_paired:
+                is_semantic = True
+            elif (w == "page" or w_stem == "page") and is_page_paired:
+                is_semantic = True
+            
+            if is_semantic:
+                if w not in extracted_semantic:
+                    extracted_semantic.append(w)
+            else:
+                if w not in extracted_generic:
+                    extracted_generic.append(w)
+        else:
+            if w not in extracted_semantic:
+                extracted_semantic.append(w)
+
+    # Disable phrase extraction only for stopword/generic-only queries
+    is_stopword_or_generic_only = all(
+        (w in HARD_STOPWORDS or clean_stem(w) in HARD_STOPWORDS) or
+        ((w in GENERIC_WORDS or clean_stem(w) in GENERIC_WORDS) and w not in extracted_semantic)
+        for w in words_lower
+    )
+
+    words = [w for w in re.findall(r'\w+', q) if len(w) > 1]
+    phrases = []
+    if not is_stopword_or_generic_only:
+        for length in range(4, min(8, len(words) + 1)):
+            for i in range(len(words) - length + 1):
+                phrases.append(' '.join(words[i:i+length]))
+
+    # Filter stopwords and generic words from identifiers, stems, and tokens.
+    def should_keep_token(tok: str) -> bool:
+        tok_low = tok.lower()
+        tok_stem = clean_stem(tok_low)
+        if tok_low in HARD_STOPWORDS or tok_stem in HARD_STOPWORDS:
+            return False
+        if (tok_low in GENERIC_WORDS or tok_stem in GENERIC_WORDS) and tok_low not in extracted_semantic:
+            return bool(has_strong_signals)
+        return True
+
+    # Filter identifiers, stems, and tokens
+    filtered_technical_identifiers = [ti for ti in technical_identifiers if should_keep_token(ti)]
+    stems = [s for s in stems if should_keep_token(s)]
+    tokens = [t for t in raw_tokens if should_keep_token(t)]
+
+    # Standard identifiers should only contain technical identifiers in queries
+    identifiers_to_use = filtered_technical_identifiers
 
     # Dedup
     def uniq(seq):
@@ -139,20 +261,34 @@ def extract_query_targets(query: str) -> dict[str, Any]:
                 out.append(x)
         return out
 
+    # paths: full_paths + filenames + filename_stems (deduplicated)
+    filename_stems = [re.sub(r'\.md$', '', f, flags=re.IGNORECASE) for f in filenames]
+    paths_list = uniq(full_paths + filenames + filename_stems)
+    files_list = uniq(filenames)
+
     return {
         "full_paths": uniq(full_paths),
         "filenames": uniq(filenames),
         "stems": uniq(stems),
         "dirs": uniq(dir_parts),
-        "identifiers": uniq(identifiers),
+        "identifiers": uniq(identifiers_to_use),
         "tokens": uniq(tokens),
         "phrases": uniq(phrases),
         "rule_intent": rule_intent,
         "technical_intent": technical_intent,
         "debug_intent": debug_intent,
-        "technical_identifiers": uniq(technical_identifiers),
+        "technical_identifiers": uniq(filtered_technical_identifiers),
         "project_terms": uniq(project_terms),
+        # New keys for Part 4
+        "files": files_list,
+        "paths": paths_list,
+        "semantic_terms": uniq(extracted_semantic),
+        "generic_terms": uniq(extracted_generic),
+        "stopwords": uniq(extracted_stopwords),
+        "has_strong_signals": has_strong_signals,
     }
+
+
 
 
 def _detect_technical_intent(query: str, general_identifiers: list[str]) -> tuple[bool, bool, list[str], list[str]]:
@@ -385,15 +521,16 @@ def _apply_boosts(
         reasons.append("outcome memory")
 
     # Active / open work signal (independent)
-    if ACTIVE_WORK_PATTERNS.search(document) or query_targets.get("rule_intent"):
+    if (ACTIVE_WORK_PATTERNS.search(document) or query_targets.get("rule_intent")) and query_targets.get("has_strong_signals", True):
         if "active_work_signal" not in boosts:
             boosts["active_work_signal"] = BOOST_ACTIVE_WORK_SIGNAL
             reasons.append("active/open work signal")
 
     # Workflow rule signal
-    if has_workflow_rule_signal(document):
+    if has_workflow_rule_signal(document) and query_targets.get("has_strong_signals", True):
         boosts["workflow_rule"] = BOOST_WORKFLOW_RULE
         reasons.append("workflow rule signal")
+
 
     # Hard-capped topic match
     topic_hits = 0

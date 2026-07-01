@@ -667,3 +667,101 @@ class TestPreflightRankingNotDoubleApplied:
         # Calling rank again should not multiply boosts in a way that changes structure
         ranked2 = rank_search_results("Essay_ID.md open project", ranked)
         assert ranked2[0]["memory_type"] == "decision"
+
+
+class TestMemoryStopwordFloodingAndGenericGuardrails:
+    def test_memory_ranking_stopword_the_not_identifier(self):
+        targets = extract_query_targets("the")
+        assert "the" not in targets["identifiers"]
+        assert "the" not in targets["stems"]
+
+    def test_memory_ranking_stopword_for_not_identifier(self):
+        targets = extract_query_targets("for")
+        assert "for" not in targets["identifiers"]
+        assert "for" not in targets["stems"]
+
+    def test_memory_ranking_stopwords_do_not_contribute_topic_match(self):
+        candidates = [
+            {"id": "doc1", "document": "the for showing context", "score": 1.0, "metadata": {}}
+        ]
+        ranked = rank_search_results("the for", candidates)
+        assert "topic_match" not in ranked[0]["ranking_boosts"]
+
+    def test_memory_ranking_generic_only_query_does_not_create_strong_match(self):
+        candidates = [
+            {"id": "doc1", "document": "Decision: current project state review health", "score": 1.0, "metadata": {}}
+        ]
+        ranked = rank_search_results("continue working on current project state", candidates)
+        assert ranked[0]["score"] <= 5.0
+
+    def test_fix_story_page_layout_does_not_match_indonesian_essay_workflow(self):
+        indonesian_essay_workflow = (
+            "Decision: For Indonesian essays: inspect, understand tone, propose changes. "
+            "Do not modify the file unless user explicitly says to edit. Continue working means analyze, not write."
+        )
+        candidates = [
+            {"id": "indo", "document": indonesian_essay_workflow, "score": 1.0, "metadata": {}}
+        ]
+        ranked = rank_search_results("fix the story page responsive layout", candidates)
+        reasons = ranked[0]["ranking_reason"]
+        assert not any("identifier/stem match: the" in r for r in reasons)
+        assert not any("identifier/stem match: for" in r for r in reasons)
+        assert not any("topic match capped: 1 terms -> +0.5" in r for r in reasons)
+
+    def test_technical_identifiers_still_match_after_stopword_filtering(self):
+        targets = extract_query_targets("GET_NOTEBOOK timeout pass source_ids explicitly chat.ask workaround")
+        assert "GET_NOTEBOOK" in targets["identifiers"]
+        assert "source_ids" in targets["identifiers"]
+        assert "chat.ask" in targets["identifiers"]
+
+    def test_exact_path_matching_still_works_after_stopword_filtering(self):
+        targets = extract_query_targets("2_Essay/expertise-debt/Essay_ID.md is the open project")
+        assert "2_Essay/expertise-debt/Essay_ID.md" in targets["full_paths"]
+        assert "Essay_ID.md" in targets["filenames"]
+        assert "Essay_ID" in targets["stems"]
+
+    def test_rule_phrase_extraction_still_works_without_path_or_identifier(self):
+        targets = extract_query_targets("do not modify file unless explicit")
+        assert len(targets["phrases"]) > 0
+        assert "do not modify file" in targets["phrases"]
+
+    def test_responsive_layout_preserved_as_semantic_phrase(self):
+        targets = extract_query_targets("fix the story page responsive layout")
+        assert "responsive" in targets["semantic_terms"]
+        assert "layout" in targets["semantic_terms"]
+        assert "story" in targets["generic_terms"]
+        assert "page" in targets["generic_terms"]
+        assert "fix" in targets["generic_terms"]
+        assert "the" in targets["stopwords"]
+
+    def test_story_page_layout_alone_does_not_match_unrelated_memory(self):
+        unrelated_memory = "This is a random document about design layout and page settings for book layout"
+        candidates = [
+            {"id": "doc", "document": unrelated_memory, "score": 1.0, "metadata": {}}
+        ]
+        ranked = rank_search_results("story page layout", candidates)
+        assert "identifier_match" not in ranked[0]["ranking_boosts"]
+        assert "topic_match" not in ranked[0]["ranking_boosts"]
+
+    def test_t1_t2_t3_assert_rank_one_after_stopword_filtering(self):
+        t1_cand = [
+            {"id": "other", "document": "Some other document", "score": 1.0, "metadata": {}},
+            {"id": "t1", "document": "Decision: 2_Essay/expertise-debt/Essay_ID.md is the open project", "score": 1.0, "metadata": {}},
+        ]
+        ranked_t1 = rank_search_results("2_Essay/expertise-debt/Essay_ID.md is the open project", t1_cand)
+        assert ranked_t1[0]["id"] == "t1"
+
+        t2_cand = [
+            {"id": "other", "document": "Some other document", "score": 1.0, "metadata": {}},
+            {"id": "t2", "document": "Decision: For Indonesian essays: inspect, understand tone, propose changes.", "score": 1.0, "metadata": {}},
+        ]
+        ranked_t2 = rank_search_results("For Indonesian essays continue working means analyze not write do not modify file unless explicit", t2_cand)
+        assert ranked_t2[0]["id"] == "t2"
+
+        t3_cand = [
+            {"id": "other", "document": "Some other document", "score": 1.0, "metadata": {}},
+            {"id": "t3", "document": "Handoff: x-becoming-television GET_NOTEBOOK timeout pass source_ids explicitly chat.ask workaround", "score": 1.0, "metadata": {}},
+        ]
+        ranked_t3 = rank_search_results("x-becoming-television GET_NOTEBOOK timeout pass source_ids explicitly chat.ask workaround", t3_cand)
+        assert ranked_t3[0]["id"] == "t3"
+
