@@ -662,3 +662,38 @@ def _run_knowledge_command_impl(args):
             if res.get("warnings"):
                 lines += ["", "Warnings:"] + [f"  ⚠ {w}" for w in res["warnings"]]
             print(render_panel("Source Stats", lines, status="stats"))
+
+    elif args.command == "active-work":
+        if getattr(args, "active_work_action", None) == "repair":
+            from oem_knowledge.runtime.active_work import repair_active_work
+            dry = bool(getattr(args, "dry_run", False))
+            app = bool(getattr(args, "apply", False))
+            bkp = getattr(args, "backup", None)
+            if not dry and not app:
+                # default to dry-run for safety
+                dry = True
+            harness = eng._resolve_harness(project)
+            res = repair_active_work(harness, dry_run=dry, apply=app, backup=bkp)
+            status = "ok" if res.get("status") in ("ok", "repaired", "no_changes_needed") else ("stats" if res.get("status") in ("conflict_detected", "repair_needed", "noop") else "error")
+            lines: list[str] = [
+                f"Mode: {res.get('mode')}",
+                f"Memory root: {res.get('memory_root')}",
+                f"Workspace root: {res.get('workspace_root')}",
+                f"Status: {res.get('status')}",
+                f"Backup: {res.get('backup_dir') or 'none'}",
+            ]
+            if res.get("planned_changes"):
+                lines += ["", "Planned changes:"]
+                for c in res["planned_changes"]:
+                    lines.append(f"  - {c.get('action')}: {c.get('file')}")
+            if res.get("changes_applied"):
+                lines += ["", "Applied:"]
+                for c in res["changes_applied"]:
+                    lines.append(f"  - {c.get('action')}: {c.get('file')}")
+            if res.get("detected_conflicts"):
+                lines += ["", "Conflicts (pre-repair):"]
+                for c in res["detected_conflicts"]:
+                    lines.append(f"  {c.get('type')}: {', '.join(c.get('sources', []))}")
+            print(render_panel("Active-Work Repair", lines, status=status))
+            if res.get("status") == "error":
+                sys.exit(1)

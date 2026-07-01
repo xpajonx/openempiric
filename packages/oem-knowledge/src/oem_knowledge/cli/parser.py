@@ -7,7 +7,8 @@ class _OEMArgumentParser(argparse.ArgumentParser):
     def parse_args(self, args=None, namespace=None):
         parsed = super().parse_args(args, namespace)
         cmd = getattr(parsed, "command", None)
-        if cmd in ("clean", "recover"):
+        aw_action = getattr(parsed, "active_work_action", None)
+        if cmd in ("clean", "recover") or (cmd == "active-work" and aw_action == "repair"):
             if getattr(parsed, "dry_run", False) and getattr(parsed, "apply", False):
                 self.error("--dry-run and --apply cannot be used together")
             if getattr(parsed, "backup", None) is False and not getattr(
@@ -388,6 +389,33 @@ def _setup_parser() -> argparse.ArgumentParser:
         type=float,
         default=0.85,
         help="Similarity threshold for duplicates",
+    )
+
+    # active-work repair (smallest safe repair for stale handoff/runtime conflicts)
+    aw_p = sub.add_parser(
+        "active-work",
+        help="[User] Inspect or repair active-work metadata consistency (handoff vs runtime)",
+    )
+    aw_sub = aw_p.add_subparsers(dest="active_work_action", required=True, metavar="ACTION")
+    aw_repair_p = aw_sub.add_parser(
+        "repair",
+        help="Repair stale active-work signals (session-handoff.json, session-handoff.md, runtime/context.md)",
+    )
+    aw_repair_p.add_argument("--project", type=str, default="")
+    aw_repair_p.add_argument("--dry-run", action="store_true", help="Analyze only; do not mutate")
+    aw_repair_p.add_argument("--apply", action="store_true", help="Apply safe repairs")
+    aw_repair_p.add_argument(
+        "--backup",
+        dest="backup",
+        action="store_true",
+        default=None,
+        help="Create a backup before applying repairs",
+    )
+    aw_repair_p.add_argument(
+        "--no-backup",
+        dest="backup",
+        action="store_false",
+        help="Apply repairs without creating a backup",
     )
 
     todo_sub = todo_p.add_subparsers(dest="todo_action", required=True)

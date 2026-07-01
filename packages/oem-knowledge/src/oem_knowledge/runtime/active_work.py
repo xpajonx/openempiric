@@ -1059,3 +1059,208 @@ def resolve_active_work(memory_root: Path) -> ActiveWorkResult:
         contradictions=contradictions,
         score=score,
     )
+
+
+# ---------------------------------------------------------------------------
+# Repair: smallest safe active-work repair (dry-run / apply)
+# ---------------------------------------------------------------------------
+
+import datetime as _dt
+
+
+def _active_work_backup_dir(harness: Path, timestamp: str) -> Path:
+    # Use .oem/.backups/active-work-repair/<timestamp>/ per spec
+    return harness / ".backups" / "active-work-repair" / timestamp
+
+
+def repair_active_work(
+    memory_root: Path,
+    *,
+    dry_run: bool = True,
+    apply: bool = False,
+    backup: bool | None = None,
+) -> dict:
+    """Smallest safe active-work repair.
+
+    - Detects via resolve_active_work_identity
+    - Backs up before mutation (if apply and backup is not False)
+    - Updates session-handoff.json to explicit canonical fields
+    - Neutralizes stale active-work claims in session-handoff.md
+    - Preserves outcomes.jsonl (no rewrite)
+    - Returns structured report with planned/applied changes
+    """
+    if dry_run and apply:
+        raise ValueError("dry_run and apply are mutually exclusive")
+    if backup is False and not apply:
+        raise ValueError("--no-backup is only valid with --apply")
+
+    ident = resolve_active_work_identity(memory_root)
+    conflicts = ident.conflicts or []
+
+    # Determine if we have a stale/active-work conflict to repair
+    has_conflict = any(
+        c.type in ("active_topic_mismatch", "active_work_item_mismatch", "active_work_source_disagreement")
+        or "active_project_mismatch" in str(c.type)
+        for c in conflicts
+    )
+
+    ws = ident.workspace_root
+    target_active_work_item = None
+    for source in ident.sources:
+        if source.source != SOURCE_RUNTIME_CONTEXT:
+            continue
+        field = source.get("active_work_item")
+        if field and field.value:
+            target_active_work_item = field.value
+            break
+    target_active_topic = None
+    target_active_task = None
+
+    report: dict = {
+        "status": "noop",
+        "mode": "dry_run" if (dry_run or not apply) else "apply",
+        "memory_root": str(memory_root),
+        "workspace_root": ws,
+        "detected_conflicts": [c.to_dict() for c in conflicts],
+        "planned_changes": [],
+        "changes_applied": [],
+        "backup_dir": None,
+    }
+
+    if not target_active_work_item:
+        report["status"] = "unsupported_repair_case"
+        report["reason"] = "no_runtime_context_active_work_item"
+        return report
+
+    now_iso = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    ts = _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%d-%H%M%S")
+    harness = memory_root if memory_root.name == ".oem" else memory_root.parent / ".oem"
+
+    # 1) session-handoff.json: ensure explicit fields, no project_label as active work
+    jpath = harness / "session-handoff.json"
+    current_json = {}
+    if jpath.exists():
+        try:
+            current_json = _read_json_safe(jpath) or {}
+        except Exception:
+            current_json = {}
+
+    planned_json: dict = {
+        "schema_version": "1.0.0",
+        "workspace_root": ws or current_json.get("workspace_root") or current_json.get("project_root"),
+        "memory_root": current_json.get("memory_root"),
+        "active_work_item": target_active_work_item,
+        "active_topic": target_active_topic,
+        "active_task": target_active_task,
+        "updated_at": now_iso,
+        "source_session_id": current_json.get("source_session_id") or current_json.get("source_session") or "",
+        "status": "active",
+        "primary_objective": current_json.get("primary_objective", ""),
+        "next_action": current_json.get("next_action", ""),
+        "previous": current_json.get("previous", {}),
+    }
+    # Strip legacy fields that could be misinterpreted
+    planned_json = {k: v for k, v in planned_json.items() if v is not None or k in ("active_work_item", "active_topic", "active_task")}
+    # Remove any project_label if present (never treat as active work)
+    if "project_label" in planned_json:
+        del planned_json["project_label"]
+
+    def _norm(d: dict) -> dict:
+        return {k: (str(v) if isinstance(v, (Path,)) else v) for k, v in d.items() if v is not None or k in ("active_work_item", "active_topic", "active_task")}
+
+    def _semantic_norm(d: dict) -> dict:
+        out = _norm(d)
+        out.pop("updated_at", None)
+        return out
+
+    if _semantic_norm(current_json) != _semantic_norm(planned_json):
+        report["planned_changes"].append({"file": str(jpath), "action": "update", "before": _norm(current_json), "after": _norm(planned_json)})
+
+    # 2) session-handoff.md: neutralize stale active-work claims while preserving history
+    md_candidates = [
+        harness / "session-handoff.md",
+        harness / "state" / "session-handoff.md",
+    ]
+    for mdp in md_candidates:
+        if not mdp.exists():
+            continue
+        txt = _read_text_safe(mdp) or ""
+        # Remove or comment out active project/topic lines that contradict canonical state
+        # Keep historical context under a "Historical Context" heading
+        new_lines = []
+        for line in txt.splitlines():
+            stripped = line.strip()
+            lower = line.lower()
+            if stripped.lower().startswith("# historical:"):
+                new_lines.append(line)
+                continue
+            # Detect and suppress stale active-work claims
+            if any(k in lower for k in ["primary objective:", "active project:", "open project:", "current project:", "project:"]):
+                # Keep the line but mark as historical
+                new_lines.append("# Historical: " + line.lstrip())
+                continue
+            new_lines.append(line)
+        new_txt = "\n".join(new_lines).rstrip() + "\n"
+        if new_txt != txt:
+            report["planned_changes"].append({"file": str(mdp), "action": "neutralize_stale_aw", "before_preview": txt[:200], "after_preview": new_txt[:200]})
+
+    if dry_run or not apply:
+        if report["planned_changes"]:
+            report["status"] = "conflict_detected" if has_conflict else "repair_needed"
+        else:
+            report["status"] = "no_changes_needed"
+        return report
+
+    # Apply path
+    backup_dir = None
+    do_backup = backup is not False
+    if do_backup:
+        backup_dir = _active_work_backup_dir(harness, ts)
+        backup_dir.mkdir(parents=True, exist_ok=True)
+
+    changes: list[dict] = []
+
+    # Backup first
+    if do_backup and backup_dir:
+        for change in report["planned_changes"]:
+            src = Path(change["file"])
+            if src.exists():
+                rel = src.relative_to(harness) if src.is_relative_to(harness) else src.name
+                dst = backup_dir / rel
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+                except Exception:
+                    pass
+        report["backup_dir"] = str(backup_dir)
+
+    # Apply JSON
+    if any(c["file"].endswith("session-handoff.json") for c in report["planned_changes"]):
+        jpath.parent.mkdir(parents=True, exist_ok=True)
+        jpath.write_text(json.dumps(planned_json, indent=2) + "\n", encoding="utf-8")
+        changes.append({"file": str(jpath), "action": "updated"})
+
+    # Apply MD neutralization
+    for mdp in md_candidates:
+        if not mdp.exists():
+            continue
+        txt = _read_text_safe(mdp) or ""
+        new_lines = []
+        for line in txt.splitlines():
+            stripped = line.strip()
+            lower = line.lower()
+            if stripped.lower().startswith("# historical:"):
+                new_lines.append(line)
+                continue
+            if any(k in lower for k in ["primary objective:", "active project:", "open project:", "current project:", "project:"]):
+                new_lines.append("# Historical: " + line.lstrip())
+                continue
+            new_lines.append(line)
+        new_txt = "\n".join(new_lines).rstrip() + "\n"
+        if new_txt != txt:
+            mdp.write_text(new_txt, encoding="utf-8")
+            changes.append({"file": str(mdp), "action": "neutralized_stale_aw"})
+
+    report["changes_applied"] = changes
+    report["status"] = "repaired" if changes else "ok"
+    return report

@@ -837,3 +837,196 @@ def test_handoff_writer_does_not_invent_active_work_item_from_workspace(tmp_path
     # Must not have invented an active_work_item
     assert data.get("active_work_item") in (None, "", "null")
     assert "2_Essay" not in str(data)
+
+
+# ---------------------------------------------------------------------------
+# P1: Active-work repair tests
+# ---------------------------------------------------------------------------
+
+
+def test_active_work_detects_stale_handoff_conflict(tmp_path: Path):
+    harness = tmp_path / ".oem"
+    harness.mkdir(parents=True, exist_ok=True)
+    (harness / "session-handoff.json").write_text(json.dumps({
+        "workspace_root": str(tmp_path),
+        "project_label": "X_autoresearch",
+    }), encoding="utf-8")
+    (harness / "session-handoff.md").write_text("Primary objective: x-becoming-television research\n", encoding="utf-8")
+    rt = harness / ".runtime"
+    rt.mkdir(parents=True, exist_ok=True)
+    (rt / "context.md").write_text("Active project: 2_Essay/expertise-debt/Essay_ID.md\n", encoding="utf-8")
+
+    from oem_knowledge.runtime.active_work import repair_active_work
+    res = repair_active_work(harness, dry_run=True, apply=False)
+    assert res["status"] in ("conflict_detected",)
+    assert any("session-handoff.json" in c.get("file", "") for c in res.get("planned_changes", []))
+    assert any("session-handoff.md" in c.get("file", "") for c in res.get("planned_changes", []))
+
+
+def test_active_work_repair_dry_run_does_not_mutate_files(tmp_path: Path):
+    harness = tmp_path / ".oem"
+    harness.mkdir(parents=True, exist_ok=True)
+    j = harness / "session-handoff.json"
+    j.write_text(json.dumps({"workspace_root": str(tmp_path), "project_label": "X"}), encoding="utf-8")
+    m = harness / "session-handoff.md"
+    m.write_text("Primary objective: x\n", encoding="utf-8")
+    (harness / ".runtime").mkdir(parents=True, exist_ok=True)
+    (harness / ".runtime" / "context.md").write_text("Active project: 2_Essay/expertise-debt/Essay_ID.md\n", encoding="utf-8")
+
+    before_j = j.read_text(encoding="utf-8")
+    before_m = m.read_text(encoding="utf-8")
+
+    from oem_knowledge.runtime.active_work import repair_active_work
+    res = repair_active_work(harness, dry_run=True, apply=False)
+    assert res["status"] in ("conflict_detected", "noop")
+    assert j.read_text(encoding="utf-8") == before_j
+    assert m.read_text(encoding="utf-8") == before_m
+    assert res.get("backup_dir") is None
+
+
+def test_active_work_repair_apply_creates_backup(tmp_path: Path):
+    harness = tmp_path / ".oem"
+    harness.mkdir(parents=True, exist_ok=True)
+    j = harness / "session-handoff.json"
+    j.write_text(json.dumps({"workspace_root": str(tmp_path), "project_label": "X"}), encoding="utf-8")
+    m = harness / "session-handoff.md"
+    m.write_text("Primary objective: x\n", encoding="utf-8")
+    (harness / ".runtime").mkdir(parents=True, exist_ok=True)
+    (harness / ".runtime" / "context.md").write_text("Active project: 2_Essay/expertise-debt/Essay_ID.md\n", encoding="utf-8")
+
+    from oem_knowledge.runtime.active_work import repair_active_work
+    res = repair_active_work(harness, dry_run=False, apply=True, backup=True)
+    assert res["status"] == "repaired"
+    assert res.get("backup_dir")
+    bdir = Path(res["backup_dir"])
+    assert (bdir / "session-handoff.json").exists()
+
+
+def test_active_work_repair_updates_stale_handoff_json(tmp_path: Path):
+    harness = tmp_path / ".oem"
+    harness.mkdir(parents=True, exist_ok=True)
+    j = harness / "session-handoff.json"
+    j.write_text(json.dumps({"workspace_root": str(tmp_path), "project_label": "X_autoresearch"}), encoding="utf-8")
+    (harness / ".runtime").mkdir(parents=True, exist_ok=True)
+    (harness / ".runtime" / "context.md").write_text("Active project: 2_Essay/expertise-debt/Essay_ID.md\n", encoding="utf-8")
+
+    from oem_knowledge.runtime.active_work import repair_active_work
+    res = repair_active_work(harness, dry_run=False, apply=True, backup=False)
+    assert res["status"] == "repaired"
+    data = json.loads(j.read_text(encoding="utf-8"))
+    assert data["workspace_root"] == str(tmp_path)
+    assert data["active_work_item"] == "2_Essay/expertise-debt/Essay_ID.md"
+    assert data.get("active_topic") in (None, "")
+    # no project_label leaking
+    assert "project_label" not in data
+
+
+def test_active_work_repair_derives_target_from_runtime_context(tmp_path: Path):
+    harness = tmp_path / ".oem"
+    harness.mkdir(parents=True, exist_ok=True)
+    j = harness / "session-handoff.json"
+    j.write_text(json.dumps({"workspace_root": str(tmp_path), "project_label": "X_autoresearch"}), encoding="utf-8")
+    (harness / ".runtime").mkdir(parents=True, exist_ok=True)
+    (harness / ".runtime" / "context.md").write_text("Active project: docs/current-work.md\n", encoding="utf-8")
+
+    from oem_knowledge.runtime.active_work import repair_active_work
+    res = repair_active_work(harness, dry_run=False, apply=True, backup=False)
+
+    assert res["status"] == "repaired"
+    data = json.loads(j.read_text(encoding="utf-8"))
+    assert data["active_work_item"] == "docs/current-work.md"
+
+
+def test_active_work_repair_unsupported_without_runtime_context_item(tmp_path: Path):
+    harness = tmp_path / ".oem"
+    harness.mkdir(parents=True, exist_ok=True)
+    (harness / "session-handoff.json").write_text(json.dumps({"workspace_root": str(tmp_path)}), encoding="utf-8")
+
+    from oem_knowledge.runtime.active_work import repair_active_work
+    res = repair_active_work(harness, dry_run=True, apply=False)
+
+    assert res["status"] == "unsupported_repair_case"
+    assert res["reason"] == "no_runtime_context_active_work_item"
+
+
+def test_active_work_repair_clean_dry_run_reports_no_changes_needed(tmp_path: Path):
+    harness = tmp_path / ".oem"
+    harness.mkdir(parents=True, exist_ok=True)
+    (harness / "session-handoff.json").write_text(json.dumps({
+        "schema_version": "1.0.0",
+        "workspace_root": str(tmp_path),
+        "active_work_item": "2_Essay/expertise-debt/Essay_ID.md",
+        "active_topic": None,
+        "active_task": None,
+        "updated_at": "2026-07-01T00:00:00Z",
+        "source_session_id": "s1",
+        "status": "active",
+        "primary_objective": "",
+        "next_action": "",
+        "previous": {},
+    }), encoding="utf-8")
+    (harness / ".runtime").mkdir(parents=True, exist_ok=True)
+    (harness / ".runtime" / "context.md").write_text("Active project: 2_Essay/expertise-debt/Essay_ID.md\n", encoding="utf-8")
+
+    from oem_knowledge.runtime.active_work import repair_active_work
+    res = repair_active_work(harness, dry_run=True, apply=False)
+
+    assert res["status"] == "no_changes_needed"
+    assert res["planned_changes"] == []
+
+
+def test_active_work_repair_preserves_outcomes_history(tmp_path: Path):
+    harness = tmp_path / ".oem"
+    state = harness / "state"
+    state.mkdir(parents=True, exist_ok=True)
+    out = state / "outcomes.jsonl"
+    out.write_text('{"schema_version":1,"session_id":"s1","outcome":"success"}\n', encoding="utf-8")
+    j = harness / "session-handoff.json"
+    j.write_text(json.dumps({"workspace_root": str(tmp_path), "project_label": "X"}), encoding="utf-8")
+    (harness / ".runtime").mkdir(parents=True, exist_ok=True)
+    (harness / ".runtime" / "context.md").write_text("Active project: 2_Essay/expertise-debt/Essay_ID.md\n", encoding="utf-8")
+
+    before = out.read_text(encoding="utf-8")
+    from oem_knowledge.runtime.active_work import repair_active_work
+    res = repair_active_work(harness, dry_run=False, apply=True, backup=False)
+    assert res["status"] == "repaired"
+    assert out.read_text(encoding="utf-8") == before
+
+
+def test_health_no_conflict_after_active_work_repair(tmp_path: Path):
+    harness = tmp_path / ".oem"
+    harness.mkdir(parents=True, exist_ok=True)
+    j = harness / "session-handoff.json"
+    j.write_text(json.dumps({"workspace_root": str(tmp_path), "project_label": "X"}), encoding="utf-8")
+    m = harness / "session-handoff.md"
+    m.write_text("Primary objective: x\n", encoding="utf-8")
+    rt = harness / ".runtime"
+    rt.mkdir(parents=True, exist_ok=True)
+    (rt / "context.md").write_text("Active project: 2_Essay/expertise-debt/Essay_ID.md\n", encoding="utf-8")
+
+    from oem_knowledge.runtime.active_work import repair_active_work
+    res = repair_active_work(harness, dry_run=False, apply=True, backup=False)
+    assert res["status"] == "repaired"
+
+    from oem_knowledge.health import build_health_report
+    rep = build_health_report(str(tmp_path), include_daemon_runtime=False)
+    assert rep.get("contradictions") in ([], None)
+    # active work resolved
+    aw = rep.get("active_work", {})
+    assert aw.get("active_work_item") == "2_Essay/expertise-debt/Essay_ID.md" or aw.get("active_topic") is None
+
+
+def test_workspace_root_not_treated_as_active_work_item(tmp_path: Path):
+    harness = tmp_path / ".oem"
+    harness.mkdir(parents=True, exist_ok=True)
+    j = harness / "session-handoff.json"
+    j.write_text(json.dumps({"workspace_root": str(tmp_path)}), encoding="utf-8")
+    (harness / ".runtime").mkdir(parents=True, exist_ok=True)
+    (harness / ".runtime" / "context.md").write_text("Active project: 2_Essay/expertise-debt/Essay_ID.md\n", encoding="utf-8")
+
+    from oem_knowledge.runtime.active_work import resolve_active_work_identity
+    ident = resolve_active_work_identity(harness)
+    assert ident.workspace_root == str(tmp_path)
+    assert ident.active_work_item == "2_Essay/expertise-debt/Essay_ID.md"
+    # no conflict between ws and awi
+    assert all(c.semantic_field not in ("active_work_item", "active_topic") or c.severity != "error" for c in ident.conflicts)

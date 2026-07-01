@@ -60,6 +60,7 @@ def main():
         "contradictions",
         "health",
         "source",
+        "active-work",
     ):
         from .commands.knowledge import run_knowledge_command
         run_knowledge_command(args)
