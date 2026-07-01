@@ -370,6 +370,79 @@ def rank_search_result(query: str, candidate: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _candidate_to_stable_item(c: dict[str, Any], rank: int, *, include_ranking_fields: bool = False) -> dict[str, Any]:
+    meta = c.get("metadata", {})
+    document = c.get("document", "") or ""
+    memory_type = c.get("memory_type") or classify_memory_type(
+        document,
+        meta.get("title"),
+        None,
+    )
+    item: dict[str, Any] = {
+        "rank": rank,
+        "id": c.get("id", ""),
+        "chunk_id": c.get("id", ""),
+        "source_id": meta.get("source", ""),
+        "title": meta.get("title", ""),
+        "source_path": meta.get("source", ""),
+        "snippet": document[:200],
+        "base_score": c.get("base_score", c.get("score", 0.0)),
+        "memory_type": memory_type,
+    }
+    if include_ranking_fields or "final_score" in c:
+        item["final_score"] = c.get("final_score", c.get("score", 0.0))
+        item["ranking_reason"] = c.get("ranking_reason", [])
+        item["ranking_boosts"] = c.get("ranking_boosts", {})
+        item["ranking_penalties"] = c.get("ranking_penalties", {})
+    return item
+
+
+def build_ranking_debug_report(
+    query: str,
+    targets: dict[str, Any],
+    raw_candidates: list[dict[str, Any]],
+    reranked_candidates: list[dict[str, Any]],
+    k: int = 3,
+    candidate_pool_size: int = 0,
+    used_fallback: bool = False,
+) -> dict[str, Any]:
+    """Build a deterministic debug report separating raw candidates from reranked results.
+
+    Raw candidates are shown *before* reranking (only base_score + memory_type).
+    Reranked candidates are shown *after* reranking (includes final_score and ranking diagnostics).
+
+    Stable identity fields (id, chunk_id, source_id, title, source_path) are included
+    on every candidate so test failures can be classified as recall vs rerank vs preflight.
+    """
+    raw_count = len(raw_candidates)
+    reranked_count = len(reranked_candidates)
+
+    raw_display = [_candidate_to_stable_item(c, i + 1) for i, c in enumerate(raw_candidates[:50])]
+    reranked_display = [
+        _candidate_to_stable_item(c, i + 1, include_ranking_fields=True)
+        for i, c in enumerate(reranked_candidates[:k])
+    ]
+
+    return {
+        "query": query,
+        "k": k,
+        "candidate_pool_size": candidate_pool_size or raw_count,
+        "raw_candidate_count": raw_count,
+        "reranked_candidate_count": reranked_count,
+        "returned_count": min(k, len(reranked_candidates)),
+        "used_fallback": used_fallback,
+        "targets": {
+            "paths": targets.get("full_paths", []),
+            "files": targets.get("filenames", []),
+            "identifiers": targets.get("stems", []) + targets.get("identifiers", []),
+            "phrases": targets.get("phrases", []),
+            "rule_intent": targets.get("rule_intent", False),
+        },
+        "raw_candidates": raw_display,
+        "reranked_candidates": reranked_display,
+    }
+
+
 def rank_search_results(query: str, candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ranked = [rank_search_result(query, c) for c in candidates]
 

@@ -89,6 +89,7 @@ def _setup_parser() -> argparse.ArgumentParser:
     search_p.add_argument("query", type=str)
     search_p.add_argument("--k", type=int, default=3)
     search_p.add_argument("--project", type=str, default="")
+    search_p.add_argument("--debug-ranking", action="store_true", help="Show raw/reranked candidate breakdown with identity fields and failure classification")
 
     source_p = sub.add_parser("source", help="[User] Search and read the project source corpus")
     source_sub = source_p.add_subparsers(dest="source_command", required=True, metavar="SOURCE_COMMAND")

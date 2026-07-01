@@ -87,6 +87,10 @@ def _run_knowledge_command_impl(args):
         print(render_panel("Init Complete", lines, status="bootstrap"))
 
     elif args.command == "search":
+        if getattr(args, "debug_ranking", False):
+            report = eng.search.debug_ranking(args.query, k=args.k)
+            print(json.dumps(report, indent=2))
+            return
         results = eng.search.search(args.query, k=args.k)
         lines = [f'Query: "{args.query}"', f"Results: {len(results)}", ""]
         for idx, r in enumerate(results):

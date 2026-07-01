@@ -8,12 +8,17 @@ import sys
 import time
 from collections import Counter
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from oem_knowledge.markdown.frontmatter import parse_frontmatter
 from oem_knowledge.source_classifier import classify_source
 from oem_knowledge.vector_store import VectorStore
-from oem_knowledge.memory_ranking import rank_search_results, classify_memory_type
+from oem_knowledge.memory_ranking import (
+    rank_search_results,
+    classify_memory_type,
+    extract_query_targets,
+    build_ranking_debug_report,
+)
 
 if TYPE_CHECKING:
     from oem_knowledge.engine import KnowledgeEngine
@@ -520,107 +525,95 @@ class SearchService:
 
         return stats
 
-    def search(self, query: str, k: int = 3, hybrid: bool = True) -> list[dict]:
-        try:
-            store = self.vector_store
-            if store.count() == 0:
-                harness = self.engine._resolve_harness()
-                wiki_dir = harness / "wiki"
-                has_md_files = (wiki_dir.exists() and any(wiki_dir.glob("*.md"))) or any(harness.glob("*.md"))
-                if has_md_files:
-                    import logging
-                    logging.info("[OEM] Vector database is empty. Auto-indexing existing wiki concepts...")
-                    self.index_all(force=True)
-                else:
-                    return []
-
-            retrieval_mode = self.resolve_retrieval_mode()
-            if retrieval_mode == "hybrid":
-                # Ensure fastembed is installed
-                try:
-                    from fastembed import TextEmbedding
-                except ImportError:
-                    raise ImportError(
-                        "Hybrid search requires fastembed. Please install it with 'uv tool install \"git+https://github.com/xpajonx/openempiric.git#subdirectory=packages/oem-knowledge[semantic]\"' "
-                        "or switch to automatic/BM25 retrieval using 'oem config retrieval auto' or 'oem config retrieval bm25'."
-                    )
-
-            chunks = store.all_chunks()
-            if not chunks:
+    def _collect_raw_candidates(self, query: str, hybrid: bool = True) -> list[dict]:
+        """Collect raw candidates from vector search with retrieval scores (no ranking applied)."""
+        store = self.vector_store
+        if store.count() == 0:
+            harness = self.engine._resolve_harness()
+            wiki_dir = harness / "wiki"
+            has_md_files = (wiki_dir.exists() and any(wiki_dir.glob("*.md"))) or any(harness.glob("*.md"))
+            if has_md_files:
+                import logging
+                logging.info("[OEM] Vector database is empty. Auto-indexing existing wiki concepts...")
+                self.index_all(force=True)
+            else:
                 return []
 
-            doc_texts = [c["document"] for c in chunks]
-            bm25_scores = self._compute_bm25(query, doc_texts)
+        retrieval_mode = self.resolve_retrieval_mode()
+        if retrieval_mode == "hybrid":
+            try:
+                from fastembed import TextEmbedding
+            except ImportError:
+                raise ImportError(
+                    "Hybrid search requires fastembed. Please install it with 'uv tool install \"git+https://github.com/xpajonx/openempiric.git#subdirectory=packages/oem-knowledge[semantic]\"' "
+                    "or switch to automatic/BM25 retrieval using 'oem config retrieval auto' or 'oem config retrieval bm25'."
+                )
 
-            if retrieval_mode == "hybrid":
-                query_vec = self.embed([query])[0]
-                candidates = []
-                for idx, chunk in enumerate(chunks):
-                    dense = self.cosine_similarity(query_vec, chunk["embedding"]) if chunk["embedding"] else 0.0
-                    sparse = bm25_scores[idx]
-                    meta = chunk["metadata"]
-                    recency = self._recency_score(meta.get("created_at", str(time.time())))
-                    importance = self._importance_score(meta.get("importance", "medium"))
-                    
-                    final = (
-                        (0.45 * dense)
-                        + (0.30 * sparse)
-                        + (0.15 * recency)
-                        + (0.10 * importance)
-                    )
-                    candidates.append({
-                        "id": chunk["id"],
-                        "document": chunk["document"],
-                        "metadata": meta,
-                        "score": final
-                    })
-            else:
-                candidates = []
-                for idx, chunk in enumerate(chunks):
-                    sparse = bm25_scores[idx]
-                    meta = chunk["metadata"]
-                    recency = self._recency_score(meta.get("created_at", str(time.time())))
-                    importance = self._importance_score(meta.get("importance", "medium"))
-                    
-                    final = (
-                        (0.75 * sparse)
-                        + (0.15 * recency)
-                        + (0.10 * importance)
-                    )
-                    candidates.append({
-                        "id": chunk["id"],
-                        "document": chunk["document"],
-                        "metadata": meta,
-                        "score": final
-                    })
+        chunks = store.all_chunks()
+        if not chunks:
+            return []
 
-            candidates.sort(key=lambda x: x["score"], reverse=True)
-            ranked = rank_search_results(query, candidates)
-            return ranked[:k]
-        except Exception as e:
-            import logging
-            logging.warning("Vector database search failed, falling back to registry-only: %s", e)
-            return self._search_registry_fallback(query, k)
+        doc_texts = [c["document"] for c in chunks]
+        bm25_scores = self._compute_bm25(query, doc_texts)
 
-    def _search_registry_fallback(self, query: str, k: int = 3) -> list[dict]:
-        """Fallback keyword search using the concept registry and wiki markdown files directly."""
+        if retrieval_mode == "hybrid":
+            query_vec = self.embed([query])[0]
+            candidates = []
+            for idx, chunk in enumerate(chunks):
+                dense = self.cosine_similarity(query_vec, chunk["embedding"]) if chunk["embedding"] else 0.0
+                sparse = bm25_scores[idx]
+                meta = chunk["metadata"]
+                recency = self._recency_score(meta.get("created_at", str(time.time())))
+                importance = self._importance_score(meta.get("importance", "medium"))
+                final = (
+                    (0.45 * dense)
+                    + (0.30 * sparse)
+                    + (0.15 * recency)
+                    + (0.10 * importance)
+                )
+                candidates.append({
+                    "id": chunk["id"],
+                    "document": chunk["document"],
+                    "metadata": meta,
+                    "score": final,
+                })
+        else:
+            candidates = []
+            for idx, chunk in enumerate(chunks):
+                sparse = bm25_scores[idx]
+                meta = chunk["metadata"]
+                recency = self._recency_score(meta.get("created_at", str(time.time())))
+                importance = self._importance_score(meta.get("importance", "medium"))
+                final = (
+                    (0.75 * sparse)
+                    + (0.15 * recency)
+                    + (0.10 * importance)
+                )
+                candidates.append({
+                    "id": chunk["id"],
+                    "document": chunk["document"],
+                    "metadata": meta,
+                    "score": final,
+                })
+
+        return candidates
+
+    def _collect_raw_fallback_candidates(self, query: str) -> list[dict]:
+        """Collect raw candidates from the concept registry (no ranking applied)."""
         try:
             registry = self.engine.state._load_registry()
         except Exception as e:
             logger.warning("Registry search fallback failed because the registry could not be loaded: %s", e)
             return []
 
-        query = query.lower().strip()
-        query_terms = [t for t in re.findall(r"\w+", query) if len(t) > 1]
-        
+        query_lower = query.lower().strip()
+        query_terms = [t for t in re.findall(r"\w+", query_lower) if len(t) > 1]
         candidates = []
         concepts_dir = self.engine._concepts_dir()
-        
+
         for cid, cdata in registry.items():
             canonical = cdata.get("canonical_name", cid).lower()
             aliases = [a.lower() for a in cdata.get("aliases", [])]
-            
-            # Read wiki content
             wiki_path = concepts_dir / f"{cid}.md"
             wiki_text = ""
             if wiki_path.exists():
@@ -628,15 +621,13 @@ class SearchService:
                     wiki_text = wiki_path.read_text(encoding="utf-8")
                 except Exception as e:
                     logger.warning("Failed to read concept wiki file %s: %s", wiki_path, e)
-            
-            # Compute score
+
             score = 0.0
-            if canonical == query:
+            if canonical == query_lower:
                 score = 1.0
-            elif query in aliases:
+            elif query_lower in aliases:
                 score = 0.85
             else:
-                # Calculate basic term overlap and similarity
                 text_to_search = f"{canonical} {' '.join(aliases)} {wiki_text}".lower()
                 matched_terms = 0
                 for term in query_terms:
@@ -644,30 +635,25 @@ class SearchService:
                         matched_terms += 1
                 if query_terms:
                     score = 0.5 * (matched_terms / len(query_terms))
-                
-                # Check fuzzy match on canonical name or aliases
                 max_sim = 0.0
                 for term in [canonical] + aliases:
-                    sim = self._string_similarity(query, term)
+                    sim = self._string_similarity(query_lower, term)
                     if sim > max_sim:
                         max_sim = sim
                 if max_sim >= 0.80:
                     score = max(score, 0.50 + 0.35 * max_sim)
 
-            if score > 0.1 or (not query_terms and not query):
+            if score > 0.1 or (not query_terms and not query_lower):
                 document = wiki_text if wiki_text else f"Concept: {cdata.get('canonical_name', cid)}\nDescription: {cdata.get('description', '')}"
-                
+                h = self.engine._resolve_harness()
                 try:
-                    h = self.engine._resolve_harness()
                     rel_path = str(wiki_path.relative_to(h.parent))
                 except Exception as e:
                     logger.debug("Failed to calculate relative path for %s: %s", wiki_path, e)
                     rel_path = f".oem/wiki/{cid}.md"
-
                 imp = self.derive_importance(rel_path)
                 importance_val = self._importance_score(imp)
                 final_score = 0.8 * score + 0.2 * importance_val
-                
                 candidates.append({
                     "id": f"{cid}#fallback",
                     "document": document,
@@ -679,12 +665,60 @@ class SearchService:
                         "linked_concepts": "",
                         "importance": imp,
                     },
-                    "score": final_score
+                    "score": final_score,
                 })
 
+        return candidates
+
+    def search(self, query: str, k: int = 3, hybrid: bool = True) -> list[dict]:
+        try:
+            candidates = self._collect_raw_candidates(query, hybrid)
+            if not candidates:
+                return []
+            candidates.sort(key=lambda x: x["score"], reverse=True)
+            ranked = rank_search_results(query, candidates)
+            return ranked[:k]
+        except Exception as e:
+            import logging
+            logging.warning("Vector database search failed, falling back to registry-only: %s", e)
+            return self._search_registry_fallback(query, k)
+
+    def _search_registry_fallback(self, query: str, k: int = 3) -> list[dict]:
+        candidates = self._collect_raw_fallback_candidates(query)
+        if not candidates:
+            return []
         candidates.sort(key=lambda x: x["score"], reverse=True)
         ranked = rank_search_results(query, candidates)
         return ranked[:k]
+
+    def debug_ranking(self, query: str, k: int = 3, hybrid: bool = True) -> dict[str, Any]:
+        used_fallback = False
+        try:
+            candidates = self._collect_raw_candidates(query, hybrid)
+        except Exception as e:
+            import logging
+            logging.warning("Vector search failed, using fallback for debug ranking: %s", e)
+            candidates = self._collect_raw_fallback_candidates(query)
+            used_fallback = True
+
+        if not candidates:
+            candidates = []
+
+        targets = extract_query_targets(query)
+        raw_before_sort = list(candidates)
+        candidates.sort(key=lambda x: x["score"], reverse=True)
+        pool_size = len(candidates)
+        ranked = rank_search_results(query, candidates)
+
+        return build_ranking_debug_report(
+            query=query,
+            targets=targets,
+            raw_candidates=raw_before_sort,
+            reranked_candidates=ranked,
+            k=k,
+            candidate_pool_size=pool_size,
+            used_fallback=used_fallback,
+        )
 
     def _string_similarity(self, s1: str, s2: str) -> float:
         import difflib
