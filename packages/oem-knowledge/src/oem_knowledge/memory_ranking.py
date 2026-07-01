@@ -482,6 +482,12 @@ def has_tech_id_boundary_match(text: str, tid: str) -> bool:
     return bool(re.search(pattern, text.lower()))
 
 
+def has_word_boundary_match(text: str, token: str) -> bool:
+    escaped = re.escape(token.lower())
+    pattern = rf"(?<![a-zA-Z0-9_\.]){escaped}(?:s|es)?(?![a-zA-Z0-9_\.])"
+    return bool(re.search(pattern, text.lower()))
+
+
 # ============================================================================
 # Core ranking
 # ============================================================================
@@ -633,7 +639,7 @@ def _apply_boosts(
     # Hard-capped topic match
     topic_hits = 0
     for t in query_targets.get("tokens", []):
-        if t in text_lower:
+        if has_word_boundary_match(text_lower, t):
             topic_hits += 1
     if topic_hits > 0:
         topic_boost = min(BOOST_TOPIC_MATCH, 0.5 * min(topic_hits, 4))

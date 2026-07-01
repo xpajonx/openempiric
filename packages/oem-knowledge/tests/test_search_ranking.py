@@ -890,5 +890,5 @@ class TestIdentifierMatchSubstringRegression:
         ]
         ranked = rank_search_results("api", candidates)
         assert "identifier_match" not in ranked[0]["ranking_boosts"]
-        assert ranked[0]["final_score"] == 0.5
+        assert ranked[0]["final_score"] == 0.0
 
