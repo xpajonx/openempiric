@@ -386,39 +386,82 @@ def has_consecutive_phrase_match(document: str, phrase: str, min_tokens: int = 4
 # Classification (high-value first)
 # ============================================================================
 
+def strip_code_fences(text: str) -> str:
+    return re.sub(r"```\w*[\s\S]*?```", "", text)
+
+
 def classify_memory_type(document: str, title: str | None = None, snippet: str | None = None) -> str:
     text = (title or "") + "\n" + (snippet or "") + "\n" + (document or "")
-    head = text.lstrip().split("\n", 3)[:3]
-    head_text = "\n".join(head)
+    clean_text = strip_code_fences(text)
 
-    if FAILURE_PATTERNS.search(head_text):
+    # Check failure patterns
+    has_failure = (
+        re.search(r"(?:^|\n)\s*#{1,6}\s*failure\b", clean_text, re.IGNORECASE) or
+        re.search(r"(?:^|\n)\s*(?:[-*]\s*)?(?:\*\*|__)??failure(?:\*\*|__)??\s*:", clean_text, re.IGNORECASE) or
+        re.search(r"\bdo-not-repeat\b", clean_text, re.IGNORECASE) or
+        re.search(r"\bbreaking\b", clean_text, re.IGNORECASE)
+    )
+
+    # Check decision patterns
+    has_decision = (
+        re.search(r"(?:^|\n)\s*#{1,6}\s*decision\b", clean_text, re.IGNORECASE) or
+        re.search(r"(?:^|\n)\s*(?:[-*]\s*)?(?:\*\*|__)??decision(?:\*\*|__)??\s*:", clean_text, re.IGNORECASE)
+    )
+
+    # Check outcome patterns
+    has_outcome = (
+        re.search(r"(?:^|\n)\s*#{1,6}\s*outcome\b", clean_text, re.IGNORECASE) or
+        re.search(r"(?:^|\n)\s*(?:[-*]\s*)?(?:\*\*|__)??outcome(?:\*\*|__)??\s*:", clean_text, re.IGNORECASE)
+    )
+
+    clean_head = clean_text.lstrip().split("\n", 3)[:3]
+    clean_head_text = "\n".join(clean_head)
+
+    # Priority 1: Failure
+    if has_failure or FAILURE_PATTERNS.search(clean_head_text):
         return "failure"
-    if DECISION_PATTERNS.search(head_text):
+    # Priority 2: Decision
+    if has_decision or DECISION_PATTERNS.search(clean_head_text):
         return "decision"
-    if OUTCOME_PATTERNS.search(head_text):
+    # Priority 3: Outcome
+    if has_outcome or OUTCOME_PATTERNS.search(clean_head_text):
         return "outcome"
 
+    # Support Observation: Constraint: Learning:
+    has_observation = (
+        re.search(r"(?:^|\n)\s*#{1,6}\s*observation\b", clean_text, re.IGNORECASE) or
+        re.search(r"(?:^|\n)\s*(?:[-*]\s*)?(?:\*\*|__)??observation(?:\*\*|__)??\s*:", clean_text, re.IGNORECASE) or
+        re.search(r"(?:^|\n)\s*#{1,6}\s*learning\b", clean_text, re.IGNORECASE) or
+        re.search(r"(?:^|\n)\s*(?:[-*]\s*)?(?:\*\*|__)??learning(?:\*\*|__)??\s*:", clean_text, re.IGNORECASE) or
+        re.search(r"(?:^|\n)\s*#{1,6}\s*constraint\b", clean_text, re.IGNORECASE) or
+        re.search(r"(?:^|\n)\s*(?:[-*]\s*)?(?:\*\*|__)??constraint(?:\*\*|__)??\s*:", clean_text, re.IGNORECASE)
+    )
+
     # v3: Technical handoff / workaround / debug note — check before logs
-    if TECHNICAL_HANDOFF_PATTERNS.search(head_text):
+    if TECHNICAL_HANDOFF_PATTERNS.search(clean_head_text):
         return "technical_handoff"
-    if DEBUG_NOTE_PATTERNS.search(head_text):
+    if DEBUG_NOTE_PATTERNS.search(clean_head_text):
         return "debug_note"
-    if WORKAROUND_PATTERNS.search(text):
+    if WORKAROUND_PATTERNS.search(clean_text):
         return "workaround"
-    if SESSION_HANDOFF_PATTERNS.search(text) and TECHNICAL_DETAIL_TERMS.search(text):
+    if SESSION_HANDOFF_PATTERNS.search(clean_text) and TECHNICAL_DETAIL_TERMS.search(clean_text):
         return "technical_handoff"
 
     # Now check logs
-    if SOURCE_DUMP_PATTERNS.search(text):
+    if SOURCE_DUMP_PATTERNS.search(clean_text):
         return "source_dump"
-    if COMMAND_LOG_PATTERNS.search(text):
+    if COMMAND_LOG_PATTERNS.search(clean_text):
         return "command_log"
-    if SEARCH_LOG_PATTERNS.search(text):
+    if SEARCH_LOG_PATTERNS.search(clean_text):
         return "search_log"
-    if ACTIVE_WORK_PATTERNS.search(text):
+    if ACTIVE_WORK_PATTERNS.search(clean_text):
         return "active_work_signal"
 
+    if has_observation:
+        return "observation"
+
     return "observation"
+
 
 
 def has_workflow_rule_signal(text: str) -> bool:

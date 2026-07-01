@@ -1365,4 +1365,63 @@ def test_preflight_active_work_conflict_can_still_suggest_after_weak_memory_filt
     assert "active work" in result.reason or "conflict" in result.reason or "signals differ" in result.reason
 
 
+def test_preflight_scoring_uses_materialized_wiki_memory_type_detection_integration(preflight_project: Path):
+    db_path = preflight_project / ".oem" / ".local_vector_db" / "vectors.db"
+    content = "## Learnings\n\n- **Decision**: 2_Essay/expertise-debt/Essay_ID.md is the open project."
+    _add_memory_rows(db_path, [
+        ("mem_dec_id", content, {"source": ".oem/wiki/concept_008.md", "title": "Learnings"}),
+    ])
+    result = run_preflight(
+        "continue working on Essay_ID.md",
+        project=str(preflight_project),
+        write_audit=False,
+    )
+    matched = [m for m in result.matched_memory if m.id == "mem_dec_id"]
+    assert len(matched) == 1
+    assert (matched[0].metadata or {}).get("memory_type") == "decision"
+    assert matched[0].score >= 4.0
+
+
+def test_preflight_scoring_materialized_wiki_failure_weighting(preflight_project: Path):
+    db_path = preflight_project / ".oem" / ".local_vector_db" / "vectors.db"
+    content = "## Learnings\n\n- **Failure**: Do not modify Indonesian essays unless explicitly asked."
+    _add_memory_rows(db_path, [
+        ("mem_fail_id", content, {"source": ".oem/wiki/concept_008.md", "title": "Learnings"}),
+    ])
+    result = run_preflight(
+        "For Indonesian essays continue working means analyze not write",
+        project=str(preflight_project),
+        write_audit=False,
+    )
+    matched = [m for m in result.matched_memory if m.id == "mem_fail_id"]
+    assert len(matched) == 1
+    assert (matched[0].metadata or {}).get("memory_type") == "failure"
+    assert matched[0].score >= 4.0
+
+
+def test_t1_t2_t3_remain_rank_one_after_materialized_type_detection():
+    from oem_knowledge.memory_ranking import rank_search_results
+    t1_cands = [
+        {"id": "other", "document": "random prose talking about essay project decision", "score": 1.0, "metadata": {}},
+        {"id": "t1", "document": "## Learnings\n- **Decision**: 2_Essay/expertise-debt/Essay_ID.md is the open project.", "score": 1.0, "metadata": {"memory_type": "decision"}},
+    ]
+    ranked_t1 = rank_search_results("2_Essay/expertise-debt/Essay_ID.md is the open project", t1_cands)
+    assert ranked_t1[0]["id"] == "t1"
+
+    t2_cands = [
+        {"id": "other", "document": "random prose talking about essay failure", "score": 1.0, "metadata": {}},
+        {"id": "t2", "document": "## Learnings\n- **Failure**: For Indonesian essays continue working means analyze not write do not modify file unless explicit", "score": 1.0, "metadata": {"memory_type": "failure"}},
+    ]
+    ranked_t2 = rank_search_results("For Indonesian essays continue working means analyze not write do not modify file unless explicit", t2_cands)
+    assert ranked_t2[0]["id"] == "t2"
+
+    t3_cands = [
+        {"id": "other", "document": "random prose about notebook logs", "score": 1.0, "metadata": {}},
+        {"id": "t3", "document": "Handoff: x-becoming-television GET_NOTEBOOK timeout pass source_ids explicitly chat.ask workaround", "score": 1.0, "metadata": {"memory_type": "technical_handoff"}},
+    ]
+    ranked_t3 = rank_search_results("x-becoming-television GET_NOTEBOOK timeout pass source_ids explicitly chat.ask workaround", t3_cands)
+    assert ranked_t3[0]["id"] == "t3"
+
+
+
 
