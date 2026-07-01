@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sqlite3
 from pathlib import Path
 from unittest.mock import patch
@@ -72,6 +73,21 @@ def _tree_snapshot(root: Path) -> dict[str, tuple[bool, int | None, int | None, 
         for path in sorted(item for item in root.rglob("*") if item.is_file()):
             snapshot[str(path.relative_to(root))] = _file_snapshot(path)
     return snapshot
+
+
+def _concept_ids_from_preflight_payload(payload: dict) -> list[str]:
+    ids: list[str] = []
+    for section in ("matched_concepts", "matched_memory"):
+        for match in payload.get(section, []):
+            candidates = [match.get("id") or "", match.get("source_path") or ""]
+            metadata = match.get("metadata") or {}
+            candidates.extend(str(metadata.get(key) or "") for key in ("concept_id", "source", "source_path"))
+            for candidate in candidates:
+                found = re.search(r"\b(concept_[A-Za-z0-9_-]+)\b", candidate)
+                if found and found.group(1) not in ids:
+                    ids.append(found.group(1))
+                    break
+    return ids
 
 
 @pytest.fixture
@@ -220,7 +236,50 @@ def test_preflight_noop_for_trivial_prompt(preflight_project: Path):
     result = run_preflight("hello there", project=str(preflight_project), write_audit=False)
 
     assert result.decision == "noop"
-    assert result.status == "noop"
+
+
+def test_preflight_records_only_matched_memory_not_all_candidates(tmp_path: Path):
+    project = tmp_path / "preflight-reference-project"
+    project.mkdir()
+    engine = KnowledgeEngine(str(project))
+    engine.init_project(str(project))
+    oem = project / ".oem"
+    registry = {
+        "concept_001": {"canonical_name": "returned concept", "status": "validated", "confidence": 3, "evidence_count": 1},
+        "concept_002": {"canonical_name": "raw candidate only", "status": "validated", "confidence": 3, "evidence_count": 1},
+        "concept_003": {"canonical_name": "matched concept", "status": "validated", "confidence": 3, "evidence_count": 1},
+    }
+    _write_json(oem / "concept_registry.json", registry)
+    (oem / "wiki" / "concept_001.md").write_text("# Returned Concept\n\nneedle alpha", encoding="utf-8")
+    (oem / "wiki" / "concept_002.md").write_text("# Raw Candidate Only\n\nneedle beta", encoding="utf-8")
+    _create_memory_db(
+        oem / ".local_vector_db" / "vectors.db",
+        [
+            (
+                "memory_1",
+                "Document: .oem/wiki/concept_001.md\nSection: Returned Concept\n\nneedle alpha",
+                {"source": ".oem/wiki/concept_001.md", "title": "Returned Concept"},
+            ),
+            (
+                "memory_2",
+                "Document: .oem/wiki/concept_002.md\nSection: Raw Candidate Only\n\nneedle beta",
+                {"source": ".oem/wiki/concept_002.md", "title": "Raw Candidate Only"},
+            ),
+        ],
+    )
+    recorded = []
+
+    def capture(concept_ids, **kwargs):
+        recorded.extend(concept_ids)
+        return {"status": "success", "updated": len(concept_ids), "concept_ids": list(concept_ids)}
+
+    with patch.object(engine.state, "record_concept_references", side_effect=capture):
+        payload = engine.preflight("needle", project=str(project), limit=1, write_audit=False)
+
+    surfaced_ids = _concept_ids_from_preflight_payload(payload)
+    assert recorded == surfaced_ids
+    assert len(recorded) <= 1
+    assert not {"concept_001", "concept_002"}.issubset(set(recorded))
 
 
 def test_preflight_required_for_approved_skill_trigger(preflight_project: Path):

@@ -1391,6 +1391,26 @@ project: {project or "default"}
             write_audit=write_audit,
             budget=budget,
         )
+        try:
+            surfaced_matches = list(result.matched_concepts[:clamped_limit]) + list(result.matched_memory[:clamped_limit])
+            concept_ids: list[str] = []
+            for match in surfaced_matches:
+                candidates = []
+                if match.id:
+                    candidates.append({"id": match.id})
+                if match.source_path:
+                    candidates.append({"source_path": match.source_path})
+                if match.metadata:
+                    candidates.append({"metadata": match.metadata})
+                concept_ids.extend(self.state.concept_ids_from_retrieval_results(candidates))
+            self.state.record_concept_references(
+                concept_ids,
+                source="preflight",
+                project=resolved_project_arg,
+                session_id=session_id,
+            )
+        except Exception as ref_err:
+            logger.warning("Failed to record concept references for preflight results: %s", ref_err)
         return normalize_preflight_result(
             result,
             operation="knowledge_preflight",

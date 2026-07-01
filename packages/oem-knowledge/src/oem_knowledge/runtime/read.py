@@ -116,22 +116,35 @@ def execute_knowledge_read(
 
     # 4. Important concepts — sorted by confidence * evidence_count
     important_concepts: list[str] = []
+    important_concept_ids: list[str] = []
     registry_warnings: list[str] = []
     try:
         registry = eng.state._load_registry(project)
         sorted_concepts = sorted(
-            registry.values(),
-            key=lambda c: float(c.get("confidence", 1)) * float(c.get("evidence_count", 0)),
+            registry.items(),
+            key=lambda item: float(item[1].get("confidence", 1)) * float(item[1].get("evidence_count", 0)),
             reverse=True,
         )
-        for c in sorted_concepts[:limit]:
+        for cid, c in sorted_concepts[:limit]:
             name = c.get("canonical_name") or c.get("concept_id", "?")
             conf = c.get("confidence", "?")
             ev = c.get("evidence_count", 0)
             status_val = c.get("status", "?")
             important_concepts.append(f"{name} (status={status_val}, confidence={conf}/5, evidence={ev})")
+            if str(cid).startswith("concept_"):
+                important_concept_ids.append(str(cid))
     except Exception as exc:
         registry_warnings.append(f"Could not load concept registry: {exc}")
+
+    if scope != "health" and important_concept_ids:
+        try:
+            eng.state.record_concept_references(
+                important_concept_ids,
+                source="read",
+                project=str(proj_path),
+            )
+        except Exception as exc:
+            registry_warnings.append(f"Could not record concept references: {exc}")
 
     # 5. Approved skills — read from skills service, bounded by limit
     approved_skills: list[str] = []

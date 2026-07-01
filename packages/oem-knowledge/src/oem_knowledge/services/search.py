@@ -677,7 +677,13 @@ class SearchService:
                 return []
             candidates.sort(key=lambda x: x["score"], reverse=True)
             ranked = rank_search_results(query, candidates)
-            return ranked[:k]
+            results = ranked[:k]
+            try:
+                concept_ids = self.engine.state.concept_ids_from_retrieval_results(results)
+                self.engine.state.record_concept_references(concept_ids, source="search")
+            except Exception as ref_err:
+                logger.warning("Failed to record concept references for search results: %s", ref_err)
+            return results
         except Exception as e:
             import logging
             logging.warning("Vector database search failed, falling back to registry-only: %s", e)
@@ -689,7 +695,13 @@ class SearchService:
             return []
         candidates.sort(key=lambda x: x["score"], reverse=True)
         ranked = rank_search_results(query, candidates)
-        return ranked[:k]
+        results = ranked[:k]
+        try:
+            concept_ids = self.engine.state.concept_ids_from_retrieval_results(results)
+            self.engine.state.record_concept_references(concept_ids, source="search")
+        except Exception as ref_err:
+            logger.warning("Failed to record concept references for fallback search results: %s", ref_err)
+        return results
 
     def debug_ranking(self, query: str, k: int = 3, hybrid: bool = True) -> dict[str, Any]:
         used_fallback = False

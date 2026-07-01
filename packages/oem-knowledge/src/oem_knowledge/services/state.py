@@ -81,6 +81,127 @@ class StateService:
             logger.error("Timed out acquiring state lock for %s", p)
             raise
 
+    def _atomic_save_registry_unlocked(self, registry: dict, project: str | None = None) -> None:
+        p = self.engine._registry_path(project)
+        sfs = self._sfs(project)
+        verified = sfs.resolve_path(p)
+        verified.parent.mkdir(parents=True, exist_ok=True)
+        tmp = verified.with_name(f".{verified.name}.{int(time.time() * 1000000)}.tmp")
+        tmp.write_text(json.dumps(registry, indent=2) + "\n", encoding="utf-8")
+        tmp.replace(verified)
+
+    def _active_session_id(self, project: str | None = None) -> str:
+        harness = self.engine._resolve_harness(project)
+        active_session_file = harness / "state" / "active_session.json"
+        if not active_session_file.exists():
+            return ""
+        try:
+            data = json.loads(active_session_file.read_text(encoding="utf-8"))
+        except Exception:
+            return ""
+        return str(data.get("session_id") or "")
+
+    def _completed_session_ids(self, project: str | None = None) -> list[str]:
+        harness = self.engine._resolve_harness(project)
+        outcomes_file = harness / "state" / "outcomes.jsonl"
+        sessions: list[str] = []
+        seen: set[str] = set()
+        if not outcomes_file.exists():
+            return sessions
+        try:
+            content = outcomes_file.read_text(encoding="utf-8")
+        except OSError as e:
+            logger.warning("Failed to read outcomes file at %s: %s", outcomes_file, e)
+            return sessions
+        except Exception as e:
+            logger.warning("Unexpected error reading outcomes file at %s: %s", outcomes_file, e)
+            return sessions
+
+        for line_idx, line in enumerate(content.splitlines(), start=1):
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError as e:
+                logger.warning("Skipping corrupt line %d in outcomes file %s: %s", line_idx, outcomes_file, e)
+                continue
+            sid = str(record.get("session_id") or "")
+            if sid and sid not in seen:
+                seen.add(sid)
+                sessions.append(sid)
+        return sessions
+
+    @staticmethod
+    def concept_ids_from_retrieval_results(results: list[dict]) -> list[str]:
+        ids: list[str] = []
+        seen: set[str] = set()
+        for result in results:
+            candidates: list[str] = []
+            rid = result.get("id")
+            if isinstance(rid, str):
+                candidates.append(rid)
+            meta = result.get("metadata", {}) if isinstance(result.get("metadata"), dict) else {}
+            for key in ("concept_id", "source", "source_path", "rel_path", "file_path"):
+                val = meta.get(key)
+                if isinstance(val, str):
+                    candidates.append(val)
+            source_path = result.get("source_path")
+            if isinstance(source_path, str):
+                candidates.append(source_path)
+
+            for candidate in candidates:
+                match = re.search(r"\b(concept_[A-Za-z0-9_-]+)\b", candidate)
+                if match:
+                    cid = match.group(1)
+                    if cid not in seen:
+                        seen.add(cid)
+                        ids.append(cid)
+                    break
+        return ids
+
+    def record_concept_references(
+        self,
+        concept_ids: list[str] | tuple[str, ...] | set[str],
+        *,
+        source: str,
+        project: str | None = None,
+        session_id: str = "",
+    ) -> dict:
+        unique_ids = []
+        seen = set()
+        for raw_cid in concept_ids:
+            cid = str(raw_cid or "").strip()
+            if not cid or cid in seen:
+                continue
+            seen.add(cid)
+            unique_ids.append(cid)
+        if not unique_ids:
+            return {"status": "success", "updated": 0, "concept_ids": []}
+
+        p = self.engine._registry_path(project)
+        resolved_session_id = session_id or self._active_session_id(project)
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+        try:
+            with FileLock(p.with_suffix(".lock")):
+                registry = self._load_registry(project, lock=False)
+                updated = []
+                for cid in unique_ids:
+                    cdata = registry.get(cid)
+                    if not isinstance(cdata, dict):
+                        continue
+                    cdata["last_referenced_at"] = now
+                    cdata["last_referenced_session"] = resolved_session_id
+                    cdata["last_reference_source"] = source
+                    updated.append(cid)
+                if updated:
+                    self._atomic_save_registry_unlocked(registry, project)
+        except LockTimeoutError:
+            logger.error("Timed out acquiring state lock for %s", p)
+            raise
+
+        return {"status": "success", "updated": len(updated), "concept_ids": updated}
+
     def _load_events(self, project: str | None = None) -> list[dict]:
         p = self.engine._events_path(project)
         sfs = self._sfs(project)
@@ -754,49 +875,84 @@ class StateService:
     def detect_stale_concepts(self, n_sessions: int = 5, project: str | None = None) -> list[dict]:
         """Identify concepts that have not been referenced in the last N sessions."""
         registry = self._load_registry(project)
-        harness = self.engine._resolve_harness(project)
-        outcomes_file = harness / "state" / "outcomes.jsonl"
-        
-        all_sessions = []
-        if outcomes_file.exists():
-            try:
-                content = outcomes_file.read_text(encoding="utf-8")
-                for line_idx, line in enumerate(content.splitlines(), start=1):
-                    if line.strip():
-                        try:
-                            record = json.loads(line)
-                            sid = record.get("session_id")
-                            if sid:
-                                all_sessions.append(sid)
-                        except json.JSONDecodeError as e:
-                            logger.warning("Skipping corrupt line %d in outcomes file %s: %s", line_idx, outcomes_file, e)
-            except OSError as e:
-                logger.warning("Failed to read outcomes file at %s: %s", outcomes_file, e)
-            except Exception as e:
-                logger.warning("Unexpected error reading outcomes file at %s: %s", outcomes_file, e)
+        completed_sessions = self._completed_session_ids(project)
+        active_session_id = self._active_session_id(project)
 
-        if len(all_sessions) < n_sessions:
+        if len(completed_sessions) < n_sessions:
             return []
 
-        last_n_sessions = set(all_sessions[-n_sessions:])
-        
+        last_n_sessions = set(completed_sessions[-n_sessions:])
+
         stale_concepts = []
         for cid, cdata in registry.items():
-            concept_sessions = set(cdata.get("sessions", []))
-            if not concept_sessions.intersection(last_n_sessions):
-                last_ref = None
-                sessions_since = len(all_sessions)
-                if cdata.get("sessions"):
-                    last_ref = cdata.get("sessions")[-1]
-                    if last_ref in all_sessions:
-                        sessions_since = len(all_sessions) - all_sessions.index(last_ref) - 1
-                
+            if not isinstance(cdata, dict):
+                continue
+
+            last_ref_session = str(cdata.get("last_referenced_session") or "")
+            last_ref_at = cdata.get("last_referenced_at")
+            last_ref_source = cdata.get("last_reference_source")
+
+            if last_ref_session and active_session_id and last_ref_session == active_session_id:
+                continue
+
+            if last_ref_session and last_ref_session in completed_sessions:
+                if last_ref_session in last_n_sessions:
+                    continue
+                sessions_since = len(completed_sessions) - completed_sessions.index(last_ref_session) - 1
                 stale_concepts.append({
                     "concept_id": cid,
                     "canonical_name": cdata.get("canonical_name", cid),
-                    "last_referenced_session": last_ref,
-                    "sessions_since_reference": sessions_since
+                    "last_referenced_session": last_ref_session,
+                    "last_referenced_at": last_ref_at,
+                    "last_reference_source": last_ref_source,
+                    "sessions_since_reference": sessions_since,
+                    "stale_status": "stale",
+                    "reference_confidence": "high",
                 })
+                continue
+
+            if last_ref_at:
+                stale_concepts.append({
+                    "concept_id": cid,
+                    "canonical_name": cdata.get("canonical_name", cid),
+                    "last_referenced_session": last_ref_session,
+                    "last_referenced_at": last_ref_at,
+                    "last_reference_source": last_ref_source,
+                    "sessions_since_reference": None,
+                    "stale_status": "unknown_reference_session",
+                    "reference_confidence": "unknown",
+                })
+                continue
+
+            legacy_sessions = [str(s) for s in cdata.get("sessions", []) if str(s)]
+            reliable_legacy_sessions = [s for s in legacy_sessions if s in completed_sessions]
+            if reliable_legacy_sessions:
+                last_legacy = reliable_legacy_sessions[-1]
+                if last_legacy in last_n_sessions:
+                    continue
+                sessions_since = len(completed_sessions) - completed_sessions.index(last_legacy) - 1
+                stale_concepts.append({
+                    "concept_id": cid,
+                    "canonical_name": cdata.get("canonical_name", cid),
+                    "last_referenced_session": last_legacy,
+                    "last_referenced_at": None,
+                    "last_reference_source": "legacy_sessions",
+                    "sessions_since_reference": sessions_since,
+                    "stale_status": "stale",
+                    "reference_confidence": "legacy",
+                })
+                continue
+
+            stale_concepts.append({
+                "concept_id": cid,
+                "canonical_name": cdata.get("canonical_name", cid),
+                "last_referenced_session": "",
+                "last_referenced_at": None,
+                "last_reference_source": "unknown",
+                "sessions_since_reference": None,
+                "stale_status": "unknown_reference_session",
+                "reference_confidence": "unknown",
+            })
 
         return stale_concepts
 

@@ -512,7 +512,10 @@ def _run_knowledge_command_impl(args):
         lines.append("Stale Concepts:")
         if stale:
             for s in stale:
-                lines.append(f"  ○ {s['canonical_name']} ({s['concept_id']}) - untouched for {s['sessions_since_reference']} sessions")
+                if s.get("sessions_since_reference") is None:
+                    lines.append(f"  ○ {s['canonical_name']} ({s['concept_id']}) - reference session unknown")
+                else:
+                    lines.append(f"  ○ {s['canonical_name']} ({s['concept_id']}) - untouched for {s['sessions_since_reference']} sessions")
         else:
             lines.append("  None")
         lines.append("")

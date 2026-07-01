@@ -328,3 +328,73 @@ This concept stores many learnings.
 
     # Frontmatter must not appear in any chunk
     assert "concept_id: concept_099" not in combined
+
+
+def test_record_concept_references_is_best_effort_for_search(temp_project):
+    engine = KnowledgeEngine(temp_project)
+    candidates = [
+        {
+            "id": "concept_001#chunk_0",
+            "document": "Document: .oem/wiki/concept_001.md\n\nAI safety notes",
+            "metadata": {"concept_id": "concept_001", "rel_path": ".oem/wiki/concept_001.md"},
+            "score": 1.0,
+        }
+    ]
+
+    with patch.object(engine.search, "_collect_raw_candidates", return_value=candidates):
+        with patch("oem_knowledge.services.search.rank_search_results", return_value=candidates):
+            with patch.object(engine.state, "record_concept_references", side_effect=RuntimeError("lock failed")):
+                results = engine.search.search("AI safety", k=1, hybrid=False)
+
+    assert len(results) == 1
+    assert results[0]["metadata"]["concept_id"] == "concept_001"
+
+
+def test_search_records_only_returned_results_not_raw_candidates(temp_project):
+    engine = KnowledgeEngine(temp_project)
+    candidates = [
+        {
+            "id": "concept_001#chunk_0",
+            "document": "Document: .oem/wiki/concept_001.md\n\nFirst returned concept",
+            "metadata": {"concept_id": "concept_001", "rel_path": ".oem/wiki/concept_001.md"},
+            "score": 1.0,
+        },
+        {
+            "id": "concept_002#chunk_0",
+            "document": "Document: .oem/wiki/concept_002.md\n\nRaw candidate only",
+            "metadata": {"concept_id": "concept_002", "rel_path": ".oem/wiki/concept_002.md"},
+            "score": 0.9,
+        },
+    ]
+    recorded = []
+
+    def capture(concept_ids, **kwargs):
+        recorded.extend(concept_ids)
+        return {"status": "success", "updated": len(concept_ids), "concept_ids": list(concept_ids)}
+
+    with patch.object(engine.search, "_collect_raw_candidates", return_value=candidates):
+        with patch("oem_knowledge.services.search.rank_search_results", return_value=candidates):
+            with patch.object(engine.state, "record_concept_references", side_effect=capture):
+                results = engine.search.search("returned", k=1, hybrid=False)
+
+    assert [r["metadata"]["concept_id"] for r in results] == ["concept_001"]
+    assert recorded == ["concept_001"]
+
+
+def test_debug_ranking_does_not_update_reference_metadata(temp_project):
+    engine = KnowledgeEngine(temp_project)
+    candidates = [
+        {
+            "id": "concept_001#chunk_0",
+            "document": "Document: .oem/wiki/concept_001.md\n\nDebug concept",
+            "metadata": {"concept_id": "concept_001", "rel_path": ".oem/wiki/concept_001.md"},
+            "score": 1.0,
+        }
+    ]
+
+    with patch.object(engine.search, "_collect_raw_candidates", return_value=candidates):
+        with patch.object(engine.state, "record_concept_references") as record_refs:
+            report = engine.search.debug_ranking("debug concept", k=1, hybrid=False)
+
+    assert report["candidate_pool_size"] == 1
+    record_refs.assert_not_called()
