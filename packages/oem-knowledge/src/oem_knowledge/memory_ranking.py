@@ -512,7 +512,7 @@ def _compute_exact_and_phrase_signals(query_targets: dict[str, Any], document: s
     # Stem / identifier
     if not has_exact:
         for ident in query_targets.get("stems", []) + query_targets.get("identifiers", []):
-            if ident.lower() in text_lower and len(ident) >= 3:
+            if has_tech_id_boundary_match(text_lower, ident) and len(ident) >= 3:
                 boosts["identifier_match"] = BOOST_IDENTIFIER_MATCH
                 reasons.append(f"identifier/stem match: {ident}")
                 has_exact = True  # counts as exact-ish for density

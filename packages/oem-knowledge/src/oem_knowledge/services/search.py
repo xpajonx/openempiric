@@ -679,7 +679,10 @@ class SearchService:
             ranked = rank_search_results(query, candidates)
             filtered_ranked = []
             for r in ranked:
-                is_memory = r.get("memory_type") in ("decision", "failure", "outcome")
+                is_memory = (
+                    r.get("memory_type") in ("decision", "failure", "outcome") or
+                    "active_work_signal" in r.get("ranking_boosts", {})
+                )
                 eligible = r.get("eligible_for_type_boost", True)
                 if is_memory and not eligible:
                     continue
@@ -706,7 +709,10 @@ class SearchService:
         ranked = rank_search_results(query, candidates)
         filtered_ranked = []
         for r in ranked:
-            is_memory = r.get("memory_type") in ("decision", "failure", "outcome")
+            is_memory = (
+                r.get("memory_type") in ("decision", "failure", "outcome") or
+                "active_work_signal" in r.get("ranking_boosts", {})
+            )
             eligible = r.get("eligible_for_type_boost", True)
             if is_memory and not eligible:
                 continue
