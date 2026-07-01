@@ -6,9 +6,30 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Semantic field types for active work
+# ---------------------------------------------------------------------------
+
+ActiveWorkField = Literal[
+    "workspace_root",
+    "memory_root",
+    "active_work_item",
+    "active_topic",
+    "active_task",
+    "unknown",
+]
+
+FIELD_PRIORITY = [
+    "workspace_root",
+    "memory_root",
+    "active_work_item",
+    "active_topic",
+    "active_task",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -32,7 +53,171 @@ class ActiveWorkResult:
 
 
 # ---------------------------------------------------------------------------
-# New data structures for active-project resolution
+# New data structures for active-work resolution (field-aware)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ActiveWorkFieldValue:
+    """A single semantic field value extracted from a source, with its own confidence."""
+    value: str | None
+    confidence: str  # "high", "medium", or "low"
+    evidence: str | None = None
+
+    def to_dict(self) -> dict[str, str | None]:
+        return {
+            "value": self.value,
+            "confidence": self.confidence,
+            "evidence": self.evidence,
+        }
+
+
+@dataclass
+class ActiveWorkSource:
+    """All active-work fields contributed by one source file."""
+    source: str
+    path: str | None = None
+    fields: dict[ActiveWorkField, ActiveWorkFieldValue] = field(default_factory=dict)
+
+    def get(self, field: ActiveWorkField) -> ActiveWorkFieldValue | None:
+        return self.fields.get(field)
+
+    def to_dict(self) -> dict:
+        return {
+            "source": self.source,
+            "path": self.path,
+            "fields": {k: v.to_dict() for k, v in self.fields.items()},
+        }
+
+
+@dataclass
+class ActiveWorkConflict:
+    """Conflict on a specific semantic field."""
+    semantic_field: ActiveWorkField
+    type: str  # e.g. "active_work_item_mismatch"
+    sources: list[str]
+    severity: str  # "error" or "warning"
+    message: str
+    source_details: dict[str, dict[str, str | None]] = field(default_factory=dict)
+    suggestion: str = "Inspect sources and align the specific field."
+
+    def to_dict(self) -> dict:
+        d = {
+            "field": self.semantic_field,
+            "type": self.type,
+            "severity": self.severity,
+            "message": self.message,
+            "sources": self.source_details,
+            "suggestion": self.suggestion,
+        }
+        # Back-compat alias for old consumers
+        if self.semantic_field == "active_work_item":
+            d["legacy_type"] = "active_project_mismatch"
+        return d
+
+
+@dataclass
+class ActiveWorkIdentity:
+    """Canonical field-aware active work identity."""
+    workspace_root: str | None = None
+    memory_root: str | None = None
+    active_work_item: str | None = None
+    active_topic: str | None = None
+    active_task: str | None = None
+
+    sources: list[ActiveWorkSource] = field(default_factory=list)
+    conflicts: list[ActiveWorkConflict] = field(default_factory=list)
+    warnings: list[dict] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {
+            "workspace_root": self.workspace_root,
+            "memory_root": self.memory_root,
+            "active_work_item": self.active_work_item,
+            "active_topic": self.active_topic,
+            "active_task": self.active_task,
+            "sources": [s.to_dict() for s in self.sources],
+            "conflicts": [c.to_dict() for c in self.conflicts],
+            "warnings": self.warnings,
+        }
+
+    def to_legacy_active_project_result(self) -> "ActiveProjectResult":
+        """Compatibility wrapper: produce old-shaped result."""
+        # Legacy "project" value: prefer active_work_item, then active_topic, then null.
+        # NEVER fall back to workspace_root here (prevents old bug).
+        legacy_value = self.active_work_item or self.active_topic
+        legacy_source = None
+        legacy_ev = None
+
+        # Find the actual source that provided the chosen legacy value so we can preserve its name
+        for s in self.sources:
+            awi = s.get("active_work_item")
+            if awi and awi.value == legacy_value:
+                legacy_source = s.source
+                legacy_ev = awi.evidence
+                break
+            at = s.get("active_topic")
+            if at and at.value == legacy_value:
+                legacy_source = s.source
+                legacy_ev = at.evidence
+                break
+
+        if legacy_source is None:
+            if self.active_work_item:
+                legacy_source = "active_work_item"
+            elif self.active_topic:
+                legacy_source = "active_topic"
+
+        ap_sources: list["ActiveProjectSource"] = []
+        for s in self.sources:
+            # For legacy surface, emit one "project" value per source if possible
+            val = None
+            conf = "low"
+            ev = None
+            awi = s.get("active_work_item")
+            if awi:
+                val = awi.value
+                conf = awi.confidence
+                ev = awi.evidence
+            else:
+                at = s.get("active_topic")
+                if at:
+                    val = at.value
+                    conf = at.confidence
+                    ev = at.evidence
+            # Do NOT treat workspace_root as legacy project value.
+            ap_sources.append(ActiveProjectSource(
+                source=s.source,
+                project=val,
+                raw_value=val,
+                confidence=conf,
+                path=s.path,
+                evidence=ev,
+            ))
+
+        conflicts = []
+        for c in self.conflicts:
+            if c.semantic_field in ("active_work_item", "active_topic"):
+                conflicts.append(ActiveProjectConflict(
+                    type="active_project_mismatch",
+                    sources=c.sources,
+                    severity=c.severity,
+                    message=c.message,
+                    source_details=c.source_details,
+                    suggestion=c.suggestion,
+                ))
+
+        return ActiveProjectResult(
+            latest_project=legacy_value,
+            selected_source=legacy_source,
+            active_projects_by_source={s.source: (s.project if s.project else None) for s in ap_sources},
+            sources=ap_sources,
+            conflicts=conflicts,
+            warnings=self.warnings,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Legacy ActiveProjectSource kept for compatibility (used by wrapper and old code)
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -180,6 +365,133 @@ def _projects_match(p1: str | None, p2: str | None) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Value shape classifier (existence is a signal, not a hard requirement)
+# ---------------------------------------------------------------------------
+
+_KNOWN_EXTENSIONS = {
+    ".md", ".txt", ".py", ".ts", ".tsx", ".js", ".jsx", ".json", ".yaml", ".yml",
+    ".toml", ".rst", ".html", ".css",
+}
+
+def classify_active_work_value(
+    value: str | None,
+    *,
+    workspace_root: Path | None = None,
+) -> ActiveWorkField:
+    """Classify a raw string into a semantic active-work field.
+
+    Rules (shape first, existence as helpful signal only):
+    - absolute path ending exactly in .oem (or under .oem) -> memory_root
+    - absolute dir that looks like repo root (has .git or .oem, or is workspace_root) -> workspace_root
+    - absolute path under workspace_root (or relative with / or known extension) -> active_work_item
+    - value ending in known doc/code extension -> active_work_item
+    - short noun-phrase like title -> active_topic
+    - imperative sentence / verb phrase -> active_task
+    - otherwise unknown
+    """
+    if not value:
+        return "unknown"
+    v = value.strip()
+    if not v:
+        return "unknown"
+
+    v_exp = os.path.expanduser(v)
+    is_abs = v_exp.startswith("/")
+
+    # Normalize for comparisons
+    try:
+        v_norm = str(Path(v_exp).resolve()) if is_abs else v_exp
+    except Exception:
+        v_norm = v_exp
+    if len(v_norm) > 1 and v_norm.endswith("/"):
+        v_norm = v_norm.rstrip("/")
+
+    # 1. memory_root: absolute path ending in .oem
+    if is_abs and (v_norm.endswith("/.oem") or v_norm.endswith(".oem")):
+        return "memory_root"
+
+    # 2. workspace_root signals
+    if is_abs:
+        # explicit workspace root if matches provided
+        if workspace_root:
+            try:
+                if Path(v_norm) == Path(workspace_root).resolve():
+                    return "workspace_root"
+            except Exception:
+                pass
+        # looks like repo root
+        p = Path(v_norm)
+        if p.is_dir() or True:  # even if not exist yet
+            try:
+                if (p / ".git").exists() or (p / ".oem").exists():
+                    return "workspace_root"
+            except Exception:
+                pass
+            # If it is a plausible root (no obvious file extension, not ending in known item)
+            if not any(v_norm.endswith(ext) for ext in _KNOWN_EXTENSIONS):
+                # Heuristic: absolute path without file extension often a root
+                # But only if it has typical project signals or is the workspace_root parent
+                pass
+
+    # 3. active_work_item: relative path with slash or known extension, or absolute under workspace
+    has_slash = "/" in v or "\\" in v
+    ends_with_ext = any(v.lower().endswith(ext) for ext in _KNOWN_EXTENSIONS)
+
+    if is_abs and workspace_root:
+        try:
+            if Path(v_norm).is_relative_to(Path(workspace_root).resolve()):
+                return "active_work_item"
+        except Exception:
+            pass
+
+    if (not is_abs and (has_slash or ends_with_ext)) or ends_with_ext:
+        return "active_work_item"
+
+    # 4. active_task: looks like an imperative / sentence with verb
+    # Simple heuristic: contains common action verbs or ends with action-like
+    lower = v.lower()
+    action_verbs = ("polish", "fix", "write", "edit", "continue", "implement", "add", "remove",
+                    "refactor", "update", "test", "review", "tighten", "clean", "investigate")
+    if any(verb in lower for verb in action_verbs) or (len(v.split()) >= 3 and any(lower.startswith(vb) for vb in action_verbs)):
+        return "active_task"
+
+    # 5. active_topic: short noun phrase (no verb, no path chars)
+    # Heuristic: relatively short, no path separators, no sentence punctuation at end
+    if not has_slash and not ends_with_ext:
+        # strip trailing punctuation
+        clean = re.sub(r"[.!?]+$", "", v).strip()
+        if len(clean.split()) <= 8 and not any(ch in clean for ch in ":/\\"):
+            # If it looks like a title (capitalized words or kebab)
+            if re.search(r"[A-Z]", clean) or "-" in clean or len(clean.split()) >= 2:
+                return "active_topic"
+            # fallback: treat short descriptive as topic
+            if len(clean) <= 80:
+                return "active_topic"
+
+    # 6. absolute path that looks like a file path even without existence
+    if is_abs and (has_slash or ends_with_ext):
+        return "active_work_item"
+
+    return "unknown"
+
+
+def _normalize_path_for_comparison(p: str | None) -> str:
+    if not p:
+        return ""
+    v = os.path.expanduser(p.strip())
+    if not v:
+        return ""
+    if len(v) > 1 and v.endswith("/"):
+        v = v.rstrip("/")
+    if v.startswith("/"):
+        try:
+            v = str(Path(v).resolve())
+        except Exception:
+            pass
+    return v
+
+
+# ---------------------------------------------------------------------------
 # Per-source project parsers
 # ---------------------------------------------------------------------------
 
@@ -265,7 +577,117 @@ def _parse_project_from_active_session(data: Any) -> tuple[str | None, str, str 
 
 
 # ---------------------------------------------------------------------------
-# Canonical active-project resolver
+# Field-aware parsers (new model)
+# ---------------------------------------------------------------------------
+
+_EXPLICIT_SEMANTIC_MARKERS = [
+    # workspace
+    ("Workspace root:", re.compile(r"(?im)^\s*(?:[-*]\s+)?Workspace\s+root\s*:\s*(.+?)\s*$")),
+    ("Project root:", re.compile(r"(?im)^\s*(?:[-*]\s+)?Project\s+root\s*:\s*(.+?)\s*$")),
+    # memory
+    ("Memory root:", re.compile(r"(?im)^\s*(?:[-*]\s+)?Memory\s+root\s*:\s*(.+?)\s*$")),
+    # active work item
+    ("Active work item:", re.compile(r"(?im)^\s*(?:[-*]\s+)?Active\s+work\s+item\s*:\s*(.+?)\s*$")),
+    ("Active file:", re.compile(r"(?im)^\s*(?:[-*]\s+)?Active\s+file\s*:\s*(.+?)\s*$")),
+    ("Open file:", re.compile(r"(?im)^\s*(?:[-*]\s+)?Open\s+file\s*:\s*(.+?)\s*$")),
+    ("Current file:", re.compile(r"(?im)^\s*(?:[-*]\s+)?Current\s+file\s*:\s*(.+?)\s*$")),
+    ("Primary file:", re.compile(r"(?im)^\s*(?:[-*]\s+)?Primary\s+file\s*:\s*(.+?)\s*$")),
+    # legacy that may map to active_work_item or topic
+    ("Active project:", re.compile(r"(?im)^\s*(?:[-*]\s+)?Active\s+project\s*:\s*(.+?)\s*$")),
+    ("Open project:", re.compile(r"(?im)^\s*(?:[-*]\s+)?Open\s+project\s*:\s*(.+?)\s*$")),
+    ("Current project:", re.compile(r"(?im)^\s*(?:[-*]\s+)?Current\s+project\s*:\s*(.+?)\s*$")),
+    ("Project:", re.compile(r"(?im)^\s*(?:[-*]\s+)?Project\s*:\s*(.+?)\s*$")),
+    # topic
+    ("Active topic:", re.compile(r"(?im)^\s*(?:[-*]\s+)?Active\s+topic\s*:\s*(.+?)\s*$")),
+    ("Current topic:", re.compile(r"(?im)^\s*(?:[-*]\s+)?Current\s+topic\s*:\s*(.+?)\s*$")),
+    # task / next action
+    ("Active task:", re.compile(r"(?im)^\s*(?:[-*]\s+)?Active\s+task\s*:\s*(.+?)\s*$")),
+    ("Next action:", re.compile(r"(?im)^\s*(?:[-*]\s+)?Next\s+action\s*:\s*(.+?)\s*$")),
+]
+
+def _parse_semantic_fields_from_text(text: str, workspace_root: Path | None = None) -> dict[ActiveWorkField, ActiveWorkFieldValue]:
+    """Parse explicit semantic markers into field->value map. Confidence per field."""
+    result: dict[ActiveWorkField, ActiveWorkFieldValue] = {}
+    for evidence, pattern in _EXPLICIT_SEMANTIC_MARKERS:
+        m = pattern.search(text)
+        if not m:
+            continue
+        raw = m.group(1).strip()
+        if not raw:
+            continue
+        ev_lower = evidence.lower()
+        # Special handling for Next action: extract file signal for active_work_item (medium)
+        if ev_lower.startswith("next action"):
+            signal = _FILE_SIGNAL.search(raw)
+            if signal:
+                pathish = signal.group(1).strip()
+                result["active_work_item"] = ActiveWorkFieldValue(value=pathish, confidence="medium", evidence="Next action:")
+            # also keep full phrase as task
+            result["active_task"] = ActiveWorkFieldValue(value=raw, confidence="medium", evidence=evidence)
+            continue
+
+        # Classify by shape (existence not required)
+        fld = classify_active_work_value(raw, workspace_root=workspace_root)
+        if fld == "unknown":
+            # Try to be more generous for legacy markers
+            if ev_lower.startswith(("active project", "open project", "current project", "project:")):
+                fld = classify_active_work_value(raw, workspace_root=workspace_root)
+                if fld == "unknown":
+                    fld = "active_work_item" if ("/" in raw or raw.endswith(".md")) else "active_topic"
+            else:
+                continue
+        conf = "high"
+        if "next action" in ev_lower:
+            conf = "medium"
+        result[fld] = ActiveWorkFieldValue(value=raw, confidence=conf, evidence=evidence)
+    return result
+
+
+def _parse_fields_from_handoff_json(data: Any, workspace_root: Path | None = None) -> dict[ActiveWorkField, ActiveWorkFieldValue]:
+    if not isinstance(data, dict):
+        return {}
+    out: dict[ActiveWorkField, ActiveWorkFieldValue] = {}
+    # Preferred explicit fields
+    preferred: list[tuple[str, ActiveWorkField]] = [
+        ("workspace_root", "workspace_root"),
+        ("memory_root", "memory_root"),
+        ("active_work_item", "active_work_item"),
+        ("active_topic", "active_topic"),
+        ("active_task", "active_task"),
+    ]
+    for key, fld in preferred:
+        val = data.get(key)
+        if isinstance(val, str) and val.strip():
+            out[fld] = ActiveWorkFieldValue(value=val.strip(), confidence="high", evidence=key)
+
+    # Legacy project_root / project_label / project -> classify
+    for legacy_key in ("project_root", "project_label", "project"):
+        val = data.get(legacy_key)
+        if isinstance(val, str) and val.strip():
+            fld = classify_active_work_value(val, workspace_root=workspace_root)
+            if fld != "unknown" and fld not in out:
+                out[fld] = ActiveWorkFieldValue(value=val.strip(), confidence="high", evidence=legacy_key)
+    return out
+
+
+def _parse_fields_from_active_session(data: Any, workspace_root: Path | None = None) -> dict[ActiveWorkField, ActiveWorkFieldValue]:
+    if not isinstance(data, dict):
+        return {}
+    out: dict[ActiveWorkField, ActiveWorkFieldValue] = {}
+    for key in ("project_root", "project"):
+        val = data.get(key)
+        if isinstance(val, str) and val.strip():
+            fld = classify_active_work_value(val, workspace_root=workspace_root)
+            # Special rule: active_session "project" is almost always workspace_root
+            if fld == "unknown" or fld in ("active_work_item", "active_topic"):
+                # Force to workspace_root for this source
+                fld = "workspace_root"
+            out[fld] = ActiveWorkFieldValue(value=val.strip(), confidence="high", evidence=key)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Canonical field-aware resolver
 # ---------------------------------------------------------------------------
 
 SOURCE_HANDOFF_JSON = "session_handoff_json"
@@ -276,9 +698,19 @@ SOURCE_LATEST_OUTCOME = "latest_outcome"
 SOURCE_ACTIVE_SESSION = "active_session_json"
 
 
-def resolve_active_project(memory_root: Path) -> ActiveProjectResult:
-    sources: list[ActiveProjectSource] = []
+def resolve_active_work_identity(memory_root: Path) -> ActiveWorkIdentity:
+    """New canonical resolver. Returns field-aware ActiveWorkIdentity."""
+    ws_root: Path | None = None
+    try:
+        ws_root = memory_root.parent if memory_root.name == ".oem" else memory_root
+    except Exception:
+        ws_root = None
+
+    collected: dict[str, list[tuple[str, ActiveWorkFieldValue, str | None]]] = {
+        f: [] for f in ["workspace_root", "memory_root", "active_work_item", "active_topic", "active_task"]
+    }
     warnings: list[dict] = []
+    sources_list: list[ActiveWorkSource] = []
 
     def rel(path: Path) -> str:
         try:
@@ -286,218 +718,141 @@ def resolve_active_project(memory_root: Path) -> ActiveProjectResult:
         except ValueError:
             return str(path)
 
-    # 1. session-handoff.json (canonical)
-    json_path = memory_root / "session-handoff.json"
-    json_data = _read_json_safe(json_path)
-    if json_data is not None:
-        project, conf, label = _parse_project_from_handoff_json(json_data)
-        sources.append(ActiveProjectSource(
-            source=SOURCE_HANDOFF_JSON,
-            project=project,
-            raw_value=project,
-            confidence=conf,
-            path=rel(json_path),
-            evidence=label,
-        ))
-    elif json_path.exists():
-        warnings.append({
-            "reason": "malformed_handoff_json",
-            "severity": "warning",
-            "message": f"Malformed session-handoff.json at {json_path}, falling back to Markdown",
-            "path": rel(json_path),
-        })
-        sources.append(ActiveProjectSource(
-            source=SOURCE_HANDOFF_JSON,
-            project=None,
-            raw_value=None,
-            confidence="low",
-            path=rel(json_path),
-            evidence="malformed_json",
-        ))
+    # 1. session-handoff.json
+    jpath = memory_root / "session-handoff.json"
+    jdata = _read_json_safe(jpath)
+    if jdata is not None:
+        fields = _parse_fields_from_handoff_json(jdata, workspace_root=ws_root)
+        src = ActiveWorkSource(source=SOURCE_HANDOFF_JSON, path=rel(jpath), fields=fields)
+        sources_list.append(src)
+        for f, fv in fields.items():
+            collected[f].append((SOURCE_HANDOFF_JSON, fv, rel(jpath)))
+    elif jpath.exists():
+        warnings.append({"reason": "malformed_handoff_json", "severity": "warning", "path": rel(jpath)})
 
-    # 2. session-handoff.md (root level)
-    md_path = memory_root / "session-handoff.md"
-    md_text = _read_text_safe(md_path)
-    if md_text:
-        project, conf, evidence = _parse_project_from_markdown(md_text)
-        sources.append(ActiveProjectSource(
-            source=SOURCE_HANDOFF_MD,
-            project=project,
-            raw_value=project,
-            confidence=conf,
-            path=rel(md_path),
-            evidence=evidence,
-        ))
+    # 2. session-handoff.md
+    for src_name, mdp in [
+        (SOURCE_HANDOFF_MD, memory_root / "session-handoff.md"),
+        (SOURCE_STATE_HANDOFF_MD, memory_root / "state" / "session-handoff.md"),
+    ]:
+        if mdp.exists():
+            txt = _read_text_safe(mdp)
+            if txt:
+                fields = _parse_semantic_fields_from_text(txt, workspace_root=ws_root)
+                src = ActiveWorkSource(source=src_name, path=rel(mdp), fields=fields)
+                sources_list.append(src)
+                for f, fv in fields.items():
+                    collected[f].append((src_name, fv, rel(mdp)))
 
-    # 3. state/session-handoff.md (legacy compat)
-    state_md_path = memory_root / "state" / "session-handoff.md"
-    state_md_text = _read_text_safe(state_md_path)
-    if state_md_text:
-        project, conf, evidence = _parse_project_from_markdown(state_md_text)
-        sources.append(ActiveProjectSource(
-            source=SOURCE_STATE_HANDOFF_MD,
-            project=project,
-            raw_value=project,
-            confidence=conf,
-            path=rel(state_md_path),
-            evidence=evidence,
-        ))
+    # 3. runtime context
+    cpath = memory_root / ".runtime" / "context.md"
+    ctxt = _read_text_safe(cpath)
+    if ctxt:
+        fields = _parse_semantic_fields_from_text(ctxt, workspace_root=ws_root)
+        src = ActiveWorkSource(source=SOURCE_RUNTIME_CONTEXT, path=rel(cpath), fields=fields)
+        sources_list.append(src)
+        for f, fv in fields.items():
+            collected[f].append((SOURCE_RUNTIME_CONTEXT, fv, rel(cpath)))
 
-    # 4. .runtime/context.md
-    context_path = memory_root / ".runtime" / "context.md"
-    context_text = _read_text_safe(context_path)
-    if context_text:
-        project, conf, evidence = _parse_project_from_markdown(context_text)
-        sources.append(ActiveProjectSource(
-            source=SOURCE_RUNTIME_CONTEXT,
-            project=project,
-            raw_value=project,
-            confidence=conf,
-            path=rel(context_path),
-            evidence=evidence,
-        ))
-
-    # 5. outcomes.jsonl tail
-    outcomes_path = memory_root / "state" / "outcomes.jsonl"
-    recent_outcomes = _read_jsonl_tail(outcomes_path, 3)
-    if recent_outcomes:
-        for line in reversed(recent_outcomes):
+    # 4. outcomes (best effort, usually low signal for work item)
+    opath = memory_root / "state" / "outcomes.jsonl"
+    recent = _read_jsonl_tail(opath, 3)
+    if recent:
+        for line in reversed(recent):
             try:
                 rec = json.loads(line)
-                project, conf = _parse_project_from_outcome(rec)
-                if project:
-                    sources.append(ActiveProjectSource(
-                        source=SOURCE_LATEST_OUTCOME,
-                        project=project,
-                        raw_value=project,
-                        confidence=conf,
-                        path=rel(outcomes_path),
-                        evidence="project" if rec.get("project") else "project_root",
-                    ))
-                    break
-            except json.JSONDecodeError:
-                pass
-
-    # 6. active_session.json
-    active_session_path = memory_root / "state" / "active_session.json"
-    active_session_data = _read_json_safe(active_session_path)
-    if active_session_data is not None:
-        project, conf, evidence = _parse_project_from_active_session(active_session_data)
-        sources.append(ActiveProjectSource(
-            source=SOURCE_ACTIVE_SESSION,
-            project=project,
-            raw_value=project,
-            confidence=conf,
-            path=rel(active_session_path),
-            evidence=evidence,
-        ))
-
-    # Build active_projects_by_source dict
-    active_projects_by_source: dict[str, str | None] = {}
-    for s in sources:
-        active_projects_by_source[s.source] = s.project
-
-    # Determine latest_project using precedence
-    precedence = [
-        SOURCE_HANDOFF_JSON,
-        SOURCE_HANDOFF_MD,
-        SOURCE_STATE_HANDOFF_MD,
-        SOURCE_RUNTIME_CONTEXT,
-        SOURCE_LATEST_OUTCOME,
-        SOURCE_ACTIVE_SESSION,
-    ]
-    latest_project: str | None = None
-    selected_source: str | None = None
-    for src_name in precedence:
-        for s in sources:
-            if s.source == src_name and s.project:
-                latest_project = s.project
-                selected_source = src_name
+                for k in ("project", "project_root", "active_work_item"):
+                    val = rec.get(k)
+                    if isinstance(val, str) and val.strip():
+                        fld = classify_active_work_value(val, workspace_root=ws_root)
+                        if fld in collected:
+                            collected[fld].append((SOURCE_LATEST_OUTCOME, ActiveWorkFieldValue(value=val.strip(), confidence="medium", evidence=k), rel(opath)))
+                            break
                 break
-        if latest_project:
-            break
+            except Exception:
+                continue
 
-    # Detect conflicts
-    conflicts = _detect_project_conflicts(sources)
+    # 5. active_session.json -> workspace_root (per spec)
+    apath = memory_root / "state" / "active_session.json"
+    adata = _read_json_safe(apath)
+    if adata is not None:
+        fields = _parse_fields_from_active_session(adata, workspace_root=ws_root)
+        src = ActiveWorkSource(source=SOURCE_ACTIVE_SESSION, path=rel(apath), fields=fields)
+        sources_list.append(src)
+        for f, fv in fields.items():
+            collected[f].append((SOURCE_ACTIVE_SESSION, fv, rel(apath)))
 
-    return ActiveProjectResult(
-        latest_project=latest_project,
-        selected_source=selected_source,
-        active_projects_by_source=active_projects_by_source,
-        sources=sources,
+    # Build final identity by taking highest-confidence per field
+    final: dict[str, str | None] = {f: None for f in ["workspace_root", "memory_root", "active_work_item", "active_topic", "active_task"]}
+
+    def _pick(values: list[tuple[str, ActiveWorkFieldValue, str | None]]) -> ActiveWorkFieldValue | None:
+        if not values:
+            return None
+        # Prefer high, then medium; first wins on tie
+        ordered = sorted(values, key=lambda t: ({"high": 3, "medium": 2, "low": 1}.get(t[1].confidence, 0)), reverse=True)
+        return ordered[0][1]
+
+    for f in list(final.keys()):
+        picked = _pick(collected[f])
+        if picked and picked.value:
+            final[f] = picked.value
+
+    # Conflict detection per field
+    conflicts: list[ActiveWorkConflict] = []
+    for f in ["workspace_root", "memory_root", "active_work_item", "active_topic", "active_task"]:
+        high_vals: dict[str, str] = {}
+        all_details: dict[str, dict[str, str | None]] = {}
+        for src_name, fv, pth in collected[f]:
+            if not fv.value:
+                continue
+            norm = _normalize_path_for_comparison(fv.value) if f in ("workspace_root", "memory_root", "active_work_item") else fv.value.strip()
+            all_details[src_name] = {"value": fv.value, "path": pth, "confidence": fv.confidence, "evidence": fv.evidence}
+            if fv.confidence == "high":
+                if norm not in high_vals:
+                    high_vals[norm] = src_name
+                elif high_vals[norm] != src_name:
+                    # conflict
+                    pass
+        if len(high_vals) >= 3:
+            conflicts.append(ActiveWorkConflict(
+                semantic_field=f,  # type: ignore[arg-type]
+                type=f"{f}_mismatch",
+                sources=list(high_vals.values()),
+                severity="error",
+                message=f"Three or more high-confidence {f} sources disagree.",
+                source_details={k: all_details.get(k, {}) for k in high_vals.values() if k in all_details},
+            ))
+        elif len(high_vals) >= 2:
+            conflicts.append(ActiveWorkConflict(
+                semantic_field=f,  # type: ignore[arg-type]
+                type=f"{f}_mismatch",
+                sources=list(high_vals.values()),
+                severity="warning",
+                message=f"High-confidence {f} sources disagree.",
+                source_details={k: all_details.get(k, {}) for k in high_vals.values() if k in all_details},
+            ))
+
+    identity = ActiveWorkIdentity(
+        workspace_root=final["workspace_root"],
+        memory_root=final["memory_root"],
+        active_work_item=final["active_work_item"],
+        active_topic=final["active_topic"],
+        active_task=final["active_task"],
+        sources=sources_list,
         conflicts=conflicts,
         warnings=warnings,
     )
+    return identity
 
 
-def _detect_project_conflicts(sources: list[ActiveProjectSource]) -> list[ActiveProjectConflict]:
-    comparable_sources = [
-        s for s in sources
-        if s.project is not None and s.confidence in {"high", "medium"}
-    ]
-    seen: dict[str, str] = {}
-    for s in comparable_sources:
-        norm = _normalize_project_identity(s.project)
-        if not norm:
-            continue
-        if norm not in seen:
-            seen[norm] = s.source
-        elif seen[norm] != s.source:
-            pass
+# ---------------------------------------------------------------------------
+# Legacy resolve_active_project kept as thin wrapper (deprecated for new code)
+# ---------------------------------------------------------------------------
 
-    unique_norms = list(seen.keys())
-    if len(unique_norms) <= 1:
-        return []
-
-    high_conflict_sources = [
-        s.source for s in comparable_sources
-        if s.project is not None and s.confidence == "high"
-    ]
-
-    unique_high = set()
-    for s in comparable_sources:
-        if s.project is not None and s.confidence == "high":
-            unique_high.add(_normalize_project_identity(s.project))
-
-    source_details = {
-        s.source: {
-            "project": s.project,
-            "value": s.project,
-            "path": s.path,
-            "confidence": s.confidence,
-            "evidence": s.evidence,
-        }
-        for s in comparable_sources
-        if s.project is not None
-    }
-
-    all_conflict_sources = list(source_details.keys())
-
-    if len(unique_high) >= 3:
-        return [ActiveProjectConflict(
-            type="active_project_mismatch",
-            sources=high_conflict_sources,
-            severity="error",
-            message="Three or more high-confidence active-project sources disagree.",
-            source_details={k: source_details[k] for k in high_conflict_sources if k in source_details},
-        )]
-    elif len(unique_high) >= 2:
-        return [ActiveProjectConflict(
-            type="active_project_mismatch",
-            sources=high_conflict_sources,
-            severity="warning",
-            message="High-confidence active-project sources disagree.",
-            source_details={k: source_details[k] for k in high_conflict_sources if k in source_details},
-        )]
-    elif len(unique_norms) >= 2:
-        return [ActiveProjectConflict(
-            type="active_project_mismatch",
-            sources=all_conflict_sources,
-            severity="warning",
-            message="Active-project sources disagree.",
-            source_details=source_details,
-        )]
-    return []
+def resolve_active_project(memory_root: Path) -> ActiveProjectResult:
+    """Deprecated compatibility wrapper. New code should call resolve_active_work_identity."""
+    ident = resolve_active_work_identity(memory_root)
+    return ident.to_legacy_active_project_result()
 
 
 # ---------------------------------------------------------------------------
@@ -593,15 +948,14 @@ def resolve_active_work(memory_root: Path) -> ActiveWorkResult:
             score=1.0,
         ))
 
-    # Contradiction detection uses structured active-project signals only.
+    # Contradiction detection uses the field-aware resolver.
     contradictions: list[str] = []
-    proj_result = resolve_active_project(memory_root)
-    for c in proj_result.conflicts:
+    ident = resolve_active_work_identity(memory_root)
+    for c in ident.conflicts:
         contradictions.append(
-            f"active project mismatch: {', '.join(c.sources)} "
-            f"(severity: {c.severity})"
+            f"{c.type}: {', '.join(c.sources)} (severity: {c.severity})"
         )
-    for w in proj_result.warnings:
+    for w in ident.warnings:
         message = w.get("message", str(w)) if isinstance(w, dict) else str(w)
         if message not in contradictions:
             contradictions.append(message)

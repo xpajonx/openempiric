@@ -189,33 +189,53 @@ def _status_from_checks(checks: list[dict], default: str = "ok") -> str:
 
 def _build_active_project_health(project: str | None = None) -> dict:
     from oem_knowledge.engine import KnowledgeEngine
-    from oem_knowledge.runtime.active_work import resolve_active_project
+    from oem_knowledge.runtime.active_work import resolve_active_work_identity
 
     eng = KnowledgeEngine(project)
     memory_root = eng._resolve_harness(project)
     project_root = memory_root.parent
-    result = resolve_active_project(Path(memory_root))
-    contradictions = [c.to_dict() for c in result.conflicts]
-    warnings = result.warnings[:]
+    ident = resolve_active_work_identity(Path(memory_root))
+
+    # Surface field-aware active_work
+    active_work = ident.to_dict()
+
+    # Legacy alias: active_project (do NOT fallback to workspace_root)
+    legacy_val = ident.active_work_item or ident.active_topic
+    legacy_alias = {
+        "legacy_alias": True,
+        "value": legacy_val,
+        "source_field": "active_work_item" if ident.active_work_item else ("active_topic" if ident.active_topic else None),
+    }
+    if not legacy_val:
+        legacy_alias["warning"] = "workspace_resolved_active_work_unknown"
+
+    # Build contradictions using field-specific types
+    contradictions = []
+    for c in ident.conflicts:
+        d = c.to_dict()
+        contradictions.append(d)
+
+    warnings = ident.warnings[:]
 
     checks: list[dict] = []
-    if result.latest_project:
+    if ident.active_work_item or ident.active_topic:
+        sel = ident.active_work_item or ident.active_topic
         checks.append({
-            "name": f"Active project selected from {result.selected_source}",
+            "name": "Active work resolved",
             "status": "success",
-            "source": result.selected_source,
-            "project": result.latest_project,
+            "active_work_item": ident.active_work_item,
+            "active_topic": ident.active_topic,
         })
     else:
         checks.append({
-            "name": "No active project selected from memory state",
+            "name": "No active work item resolved (workspace only)",
             "status": "success",
-            "reason": "active_project_source_missing",
+            "reason": "workspace_resolved_active_work_unknown",
         })
 
     for warning in warnings:
         checks.append({
-            "name": warning.get("message", warning.get("reason", "Active-project warning")),
+            "name": warning.get("message", warning.get("reason", "Active-work warning")),
             "status": "warn",
             "reason": warning.get("reason"),
             "path": warning.get("path"),
@@ -223,10 +243,11 @@ def _build_active_project_health(project: str | None = None) -> dict:
 
     for contradiction in contradictions:
         checks.append({
-            "name": contradiction["message"],
-            "status": "error" if contradiction["severity"] == "error" else "warn",
-            "type": contradiction["type"],
-            "sources": contradiction["sources"],
+            "name": contradiction.get("message", "Active-work field mismatch"),
+            "status": "error" if contradiction.get("severity") == "error" else "warn",
+            "type": contradiction.get("type"),
+            "field": contradiction.get("field"),
+            "sources": contradiction.get("sources"),
         })
 
     status = _status_from_checks(checks)
@@ -237,7 +258,11 @@ def _build_active_project_health(project: str | None = None) -> dict:
         "checks": checks,
         "contradictions": contradictions,
         "warnings": warnings,
-        "active_project": result.to_dict(),
+        "active_project": {
+            **legacy_alias,
+            "legacy_shape": True,
+        },
+        "active_work": active_work,
     }
 
 
@@ -285,13 +310,15 @@ def build_health_report(
     contradictions: list[dict] = []
     warnings: list[dict] = []
     active_project = {}
+    active_work = {}
     project_root = str(project or legacy.get("project", "."))
     memory_root = str(Path(project_root) / ".oem")
     if active_health:
         checks.extend(active_health["checks"])
         contradictions = active_health["contradictions"]
         warnings = active_health["warnings"]
-        active_project = active_health["active_project"]
+        active_project = active_health.get("active_project", {})
+        active_work = active_health.get("active_work", {})
         project_root = active_health["project_root"]
         memory_root = active_health["memory_root"]
 
@@ -312,6 +339,7 @@ def build_health_report(
         "contradictions": contradictions,
         "warnings": warnings,
         "active_project": active_project,
+        "active_work": active_work,
         "concept_integrity": legacy.get("concept_integrity", {}),
     }
     return report

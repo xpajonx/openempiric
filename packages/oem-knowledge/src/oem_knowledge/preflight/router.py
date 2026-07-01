@@ -19,6 +19,7 @@ from ..project import ProjectMismatchError, ProjectUnresolvedError, resolve_acti
 from ..runtime.active_work import (
     is_continuation_prompt,
     resolve_active_work,
+    resolve_active_work_identity,
     resolve_active_project as resolve_active_project_identity,
     ActiveWorkResult,
 )
@@ -696,6 +697,7 @@ def run_preflight(
         reason_detail = ""
         supporting_reasons: list[str] = []
         active_project_data: dict | None = None
+        active_work_data: dict | None = None
 
         top_match = None
         for candidate in matched_skills + matched_concepts + matched_memory:
@@ -725,71 +727,56 @@ def run_preflight(
             or not is_directive_generic_title_match
         )
 
-        # Generic continuation: resolve active project first
+        # Generic continuation: resolve active work (field-aware)
         is_generic = is_generic_continuation(task)
         if is_generic:
             try:
-                proj = resolve_active_project_identity(layout.root)
+                ident = resolve_active_work_identity(layout.root)
+                # Legacy shaped data for active_project (for backward compat)
+                legacy = ident.to_legacy_active_project_result()
                 active_project_data = {
-                    "latest_project": proj.latest_project,
-                    "selected_source": proj.selected_source,
-                    "active_projects_by_source": dict(
-                        proj.active_projects_by_source
-                    ),
+                    "latest_project": legacy.latest_project,
+                    "selected_source": legacy.selected_source,
+                    "active_projects_by_source": dict(legacy.active_projects_by_source),
                     "conflicts": [
-                        {
-                            "type": c.type,
-                            "sources": c.sources,
-                            "severity": c.severity,
-                        }
-                        for c in proj.conflicts
+                        {"type": c.type, "sources": c.sources, "severity": c.severity}
+                        for c in legacy.conflicts
                     ],
-                    "warnings": list(proj.warnings),
+                    "warnings": list(legacy.warnings),
                 }
+                active_work_data = ident.to_dict()
 
-                if proj.latest_project:
-                    # Active project resolved — primary reason
+                if ident.active_work_item or ident.active_topic:
                     decision = "suggest"
-                    reason = "active_project_resolved"
-                    reason_detail = (
-                        f"Active project resolved to {proj.latest_project}"
-                        f" via {proj.selected_source}"
-                    )
-                    supporting_reasons.append(
-                        f"active_project_source:{proj.selected_source}"
-                    )
+                    reason = "active_work_resolved"
+                    val = ident.active_work_item or ident.active_topic
+                    reason_detail = f"Active work resolved to {val}"
                 else:
-                    # No active project found
                     decision = "suggest"
-                    reason = "active_project_unknown"
+                    reason = "workspace_resolved_active_work_unknown"
                     reason_detail = (
-                        "Generic continuation detected but no active project "
-                        "found in session-handoff or runtime context."
+                        "Generic continuation detected but no active_work_item or active_topic "
+                        "found (workspace root resolved)."
                     )
-                    warnings.append("No active project found; inspect memory or ask user.")
+                    warnings.append("workspace_resolved_active_work_unknown; inspect memory or ask user.")
 
-                # Surface conflicts
-                for c in proj.conflicts:
+                # Surface field-specific conflicts
+                for c in ident.conflicts:
                     warnings.append(
-                        f"Active project conflict ({c.severity}): "
-                        f"{', '.join(c.sources)}"
+                        f"Active work conflict ({c.severity}): field={c.semantic_field} sources={', '.join(c.sources)}"
                     )
 
-                # Escalate to required for 3-way conflict
-                if proj.conflicts and proj.latest_project:
-                    for c in proj.conflicts:
-                        unique_high = set(
-                            s.project
-                            for s in proj.sources
-                            if s.confidence == "high" and s.project is not None
-                        )
-                        if c.severity == "error" and len(unique_high) >= 3:
-                            decision = "required"
-                            reason = "active_project_conflict_3way"
-                            reason_detail = (
-                                "Generic continuation with 3-way active-project conflict"
-                            )
-                            break
+                # Escalate on field conflicts
+                for c in ident.conflicts:
+                    if c.severity == "error":
+                        decision = "required"
+                        reason = "active_work_conflict"
+                        reason_detail = f"Generic continuation with active-work conflict on {c.semantic_field}"
+                        break
+                    elif c.severity == "warning" and decision != "required":
+                        decision = "suggest"
+                        reason = "active_work_conflict"
+                        reason_detail = f"Active-work field signals differ on {c.semantic_field}"
 
                 # Append relevant directives as supporting context
                 for md in matched_directives:
@@ -797,7 +784,7 @@ def run_preflight(
                         continue
                     supporting_reasons.append(f"directive:{md['title']}")
             except Exception as e:
-                logger.warning("Active-project resolution failed: %s", e)
+                logger.warning("Active-work resolution failed: %s", e)
 
         # ---- Decision cascade (posts for generic continuation) ----
         # Steps below only fire if generic continuation didn't already decide.
@@ -935,6 +922,9 @@ def run_preflight(
         # Build matched_memory_summary
         matched_memory_summary = memory_relevance.get("details", [])
 
+        if active_work_data is None:
+            active_work_data = None
+
         result = PreflightResult(
             status=decision,
             operation=OPERATION,
@@ -952,6 +942,7 @@ def run_preflight(
             context="",
             warnings=warnings,
             active_project=active_project_data,
+            active_work=active_work_data,
             matched_memory_summary=matched_memory_summary,
             reason_detail=reason_detail,
             supporting_reasons=supporting_reasons,

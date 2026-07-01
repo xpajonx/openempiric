@@ -684,9 +684,14 @@ class StateService:
         }
 
     def _update_structured_handoff(self, harness: Path, project_val: str, session_id: str) -> None:
-        """Update .oem/session-handoff.json only when explicit project is supplied
-        and handoff is missing or the project differs."""
-        from oem_knowledge.runtime.active_work import _normalize_project_identity
+        """Update .oem/session-handoff.json with semantic active-work fields only.
+        Never invent active_work_item from workspace root. Write only known values (or null/omit consistently).
+        """
+        from oem_knowledge.runtime.active_work import (
+            _normalize_project_identity,
+            classify_active_work_value,
+            ActiveWorkFieldValue,
+        )
         import datetime
 
         handoff_json = harness / "session-handoff.json"
@@ -699,32 +704,52 @@ class StateService:
             except (json.JSONDecodeError, OSError):
                 current = {}
 
-        existing_project = current.get("project_root") or current.get("project")
+        existing_project = current.get("project_root") or current.get("project") or current.get("workspace_root")
         existing_norm = _normalize_project_identity(existing_project) if existing_project else ""
         new_norm = _normalize_project_identity(project_val)
 
         if existing_norm == new_norm:
-            return  # Same project, no update needed
+            return  # Same workspace, no update needed
+
+        # Classify the supplied value
+        ws_candidate = classify_active_work_value(project_val)
+        workspace_root_val = project_val if ws_candidate == "workspace_root" else current.get("workspace_root")
+        memory_root_val = current.get("memory_root")
+
+        # Do NOT invent active_work_item / topic / task from workspace root.
+        # Only carry forward explicit previous values if present and not the workspace itself.
+        active_work_item_val = current.get("active_work_item")
+        if active_work_item_val and classify_active_work_value(active_work_item_val) == "workspace_root":
+            active_work_item_val = None
+        active_topic_val = current.get("active_topic")
+        active_task_val = current.get("active_task")
 
         previous_entry: dict = {}
         if existing_project:
             previous_entry = {
-                "project_root": current.get("project_root") or existing_project,
-                "project_label": current.get("project_label"),
+                "workspace_root": current.get("workspace_root") or (existing_project if classify_active_work_value(existing_project) == "workspace_root" else None),
                 "updated_at": current.get("updated_at", now_iso),
             }
 
-        handoff_json.write_text(json.dumps({
+        payload: dict = {
             "schema_version": "1.0.0",
-            "project_root": str(Path(project_val).resolve()) if Path(project_val).is_absolute() else project_val,
-            "project_label": Path(project_val).name if Path(project_val).is_absolute() else project_val,
+            "workspace_root": str(Path(workspace_root_val).resolve()) if workspace_root_val and Path(workspace_root_val).is_absolute() else workspace_root_val,
+            "memory_root": memory_root_val,
+            "active_work_item": active_work_item_val,
+            "active_topic": active_topic_val,
+            "active_task": active_task_val,
             "updated_at": now_iso,
             "source_session_id": session_id,
             "status": "active",
             "primary_objective": current.get("primary_objective", ""),
             "next_action": current.get("next_action", ""),
             "previous": previous_entry,
-        }, indent=2) + "\n", encoding="utf-8")
+        }
+
+        # Remove nulls for cleanliness (consistent with spec: do not invent)
+        payload = {k: v for k, v in payload.items() if v is not None or k in ("active_work_item", "active_topic", "active_task")}
+
+        handoff_json.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
     def detect_stale_concepts(self, n_sessions: int = 5, project: str | None = None) -> list[dict]:
         """Identify concepts that have not been referenced in the last N sessions."""

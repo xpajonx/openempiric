@@ -129,6 +129,11 @@ def normalize_preflight_result(
     else:
         payload["active_project"] = None
 
+    if getattr(result, "active_work", None):
+        payload["active_work"] = result.active_work
+    else:
+        payload["active_work"] = None
+
     if result.matched_memory_summary:
         payload["matched_memory_summary"] = result.matched_memory_summary
     else:

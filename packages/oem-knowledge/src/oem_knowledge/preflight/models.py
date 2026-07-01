@@ -32,6 +32,7 @@ class PreflightResult:
     context: str = ""
     warnings: list[str] = field(default_factory=list)
     active_project: dict | None = None
+    active_work: dict | None = None
     matched_memory_summary: list[dict] = field(default_factory=list)
     reason_detail: str = ""
     supporting_reasons: list[str] = field(default_factory=list)

@@ -740,7 +740,8 @@ def test_preflight_current_project_uses_active_project_resolver(preflight_projec
     assert result.decision != "noop"
     assert result.active_project is not None
     assert result.active_project.get("latest_project") is not None
-    assert "active_project" in result.reason
+    # New reason uses active_work_resolved (old name allowed only as alias per spec)
+    assert "active_work_resolved" in (result.reason or "") or "active_project" in (result.reason or "")
 
 
 def test_preflight_current_project_conflict_returns_suggest(preflight_project: Path):
