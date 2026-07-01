@@ -875,3 +875,20 @@ def test_tech_id_boundary_matching():
     assert has_tech_id_boundary_match("my_func() call", "my_func") is True
     assert has_tech_id_boundary_match("my_func_2", "my_func") is False
     assert has_tech_id_boundary_match("chat.ask()", "chat.ask") is True
+
+
+class TestIdentifierMatchSubstringRegression:
+    def test_identifier_match_ignores_substring_false_positives(self):
+        from oem_knowledge.memory_ranking import rank_search_results
+        candidates = [
+            {
+                "id": "mem1",
+                "document": "capitalization is important",
+                "score": 0.0,
+                "metadata": {},
+            }
+        ]
+        ranked = rank_search_results("api", candidates)
+        assert "identifier_match" not in ranked[0]["ranking_boosts"]
+        assert ranked[0]["final_score"] == 0.5
+

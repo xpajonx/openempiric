@@ -701,7 +701,7 @@ def _apply_boosts(
     # Part 5: Downrank generic active-project decisions for technical queries
     if query_targets.get("technical_intent") and "active_work_signal" in boosts:
         has_technical_identifier = any(
-            tid.lower() in text_lower and len(tid) >= 3
+            has_tech_id_boundary_match(text_lower, tid) and len(tid) >= 3
             for tid in query_targets.get("technical_identifiers", [])
         )
         if not has_technical_identifier and id_cooccurrence == 0:

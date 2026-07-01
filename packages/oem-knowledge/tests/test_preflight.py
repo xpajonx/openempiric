@@ -1499,6 +1499,20 @@ def test_search_excludes_below_floor_memory(preflight_project: Path):
     assert len(matched) == 0
 
 
+def test_search_excludes_below_floor_active_work_signal_memory(preflight_project: Path):
+    engine = KnowledgeEngine(str(preflight_project))
+    db_path = preflight_project / ".oem" / ".local_vector_db" / "vectors.db"
+    content = "Observation: 2_Essay/expertise-debt/Essay_ID.md is the open project."
+    _add_memory_rows(db_path, [
+        ("mem_obs_id", content, {"source": ".oem/wiki/concept_009.md", "title": "Observations"}),
+    ])
+    engine.session_start(str(preflight_project))
+    results = engine.search.search("fix the story page responsive layout")
+    matched = [r for r in results if r.get("id") == "mem_obs_id"]
+    assert len(matched) == 0
+
+
+
 
 
 
