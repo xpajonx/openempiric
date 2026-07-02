@@ -280,7 +280,7 @@ def test_health_unknown_reference_session_does_not_report_inflated_count(engine,
     stale = engine.state.detect_stale_concepts(n_sessions=5, project=str(tmp_path))
 
     assert stale[0]["concept_id"] == "concept_008"
-    assert stale[0]["stale_status"] == "unknown_reference_session"
+    assert stale[0]["stale_status"] == "reference_session_missing"
     assert stale[0]["sessions_since_reference"] is None
     assert stale[0]["sessions_since_reference"] != 58
 
@@ -387,10 +387,10 @@ def test_detect_stale_concepts_does_not_hide_unknown_reference_session_when_sess
 
     stale = engine.state.detect_stale_concepts(n_sessions=5, project=str(tmp_path))
 
-    # unknown_reference_session should still be surfaced even with few sessions
+    # reference_session_missing should still be surfaced even with few sessions
     assert len(stale) == 1
     assert stale[0]["concept_id"] == "concept_008"
-    assert stale[0]["stale_status"] == "unknown_reference_session"
+    assert stale[0]["stale_status"] == "reference_session_missing"
     assert stale[0]["sessions_since_reference"] is None
 
 
@@ -412,7 +412,7 @@ def test_health_displays_sessions_since_reference_unknown(engine, tmp_path):
 
     stale = engine.state.detect_stale_concepts(n_sessions=5, project=str(tmp_path))
 
-    assert stale[0]["stale_status"] == "unknown_reference_session"
+    assert stale[0]["stale_status"] == "reference_session_missing"
     assert stale[0]["sessions_since_reference"] is None
 
     # Verify CLI/MCP diagnostic string logic
@@ -503,6 +503,332 @@ def test_recently_referenced_without_session_not_reported_as_numeric_stale(engin
     stale = engine.state.detect_stale_concepts(n_sessions=5, project=str(tmp_path))
 
     assert stale[0]["concept_id"] == "concept_008"
-    assert stale[0]["stale_status"] == "unknown_reference_session"
+    assert stale[0]["stale_status"] == "reference_session_missing"
     assert stale[0]["sessions_since_reference"] is None
     assert stale[0]["sessions_since_reference"] != 58
+
+
+def test_health_classifies_missing_reference_metadata_as_legacy_unknown(engine, tmp_path):
+    # If the metadata fields are present but empty, and it has pre-watermark created_at
+    engine.state._save_registry(
+        {
+            "concept_009": {
+                "canonical_name": "Old concept",
+                "last_referenced_session": "",
+                "last_referenced_at": None,
+                "last_reference_source": "unknown",
+                "created_at": 1781858056.0
+            }
+        },
+        str(tmp_path),
+    )
+    stale = engine.state.detect_stale_concepts(n_sessions=5, project=str(tmp_path))
+    assert len(stale) == 1
+    assert stale[0]["concept_id"] == "concept_009"
+    assert stale[0]["stale_status"] == "legacy_no_reference_metadata"
+    assert stale[0]["sessions_since_reference"] is None
+    assert stale[0]["last_referenced_at"] is None
+    assert stale[0]["reference_confidence"] == "unknown"
+    assert stale[0]["severity"] == "info"
+
+
+def test_health_unknown_reference_has_explanation(engine, tmp_path):
+    engine.state._save_registry(
+        {
+            "concept_009": {
+                "canonical_name": "Old concept",
+                "last_referenced_session": "",
+                "last_referenced_at": None,
+                "last_reference_source": "unknown",
+                "created_at": 1781858056.0
+            }
+        },
+        str(tmp_path),
+    )
+    stale = engine.state.detect_stale_concepts(n_sessions=5, project=str(tmp_path))
+    assert "explanation" in stale[0]
+    assert "likely because it was created before" in stale[0]["explanation"]
+
+
+def test_health_unknown_reference_has_recommended_action(engine, tmp_path):
+    engine.state._save_registry(
+        {
+            "concept_009": {
+                "canonical_name": "Old concept",
+                "last_referenced_session": "",
+                "last_referenced_at": None,
+                "last_reference_source": "unknown",
+                "created_at": 1781858056.0
+            }
+        },
+        str(tmp_path),
+    )
+    stale = engine.state.detect_stale_concepts(n_sessions=5, project=str(tmp_path))
+    assert "recommended_action" in stale[0]
+    assert "Run a search/read that surfaces" in stale[0]["recommended_action"]
+
+
+def test_health_unknown_reference_summary_counts(engine, tmp_path):
+    # Save a registry with 1 legacy concept, 1 never referenced, 1 missing metadata, 1 stale
+    engine.state._save_registry(
+        {
+            "concept_009": {
+                "canonical_name": "Legacy",
+                "last_referenced_session": "",
+                "last_referenced_at": None,
+                "last_reference_source": "unknown",
+                "created_at": 1781858056.0
+            },
+            "concept_010": {
+                "canonical_name": "Never Ref",
+                "last_referenced_session": "",
+                "last_referenced_at": None,
+                "last_reference_source": "unknown",
+                "created_at": 1783000000.0
+            },
+            "concept_011": {
+                "canonical_name": "No fields at all"
+            },
+            "concept_012": {
+                "canonical_name": "Stale",
+                "last_referenced_session": "session_0",
+                "last_referenced_at": "2026-07-02T00:00:00Z",
+                "last_reference_source": "search"
+            }
+        },
+        str(tmp_path),
+    )
+    
+    # Record 6 sessions so completed session count is above stale threshold
+    for i in range(6):
+        engine.state.record_outcome("success", session_id=f"session_{i}", project=str(tmp_path))
+
+    # Test the summary count calculation that we perform in the CLI or health report
+    stale = engine.state.detect_stale_concepts(n_sessions=5, project=str(tmp_path))
+    
+    active_stale = sum(1 for s in stale if s.get("stale_status") == "stale")
+    unknown_ref = sum(1 for s in stale if s.get("stale_status") in (
+        "legacy_no_reference_metadata", "reference_metadata_missing",
+        "reference_session_missing", "reference_history_unavailable",
+        "never_referenced_since_tracking_enabled"
+    ))
+    
+    assert active_stale == 1  # concept_012 is stale
+    assert unknown_ref == 3  # concept_009, concept_010, concept_011
+    
+    # Check specific categories
+    legacy_count = sum(1 for s in stale if s.get("stale_status") == "legacy_no_reference_metadata")
+    never_count = sum(1 for s in stale if s.get("stale_status") == "never_referenced_since_tracking_enabled")
+    missing_count = sum(1 for s in stale if s.get("stale_status") == "reference_metadata_missing")
+    
+    assert legacy_count == 1
+    assert never_count == 1
+    assert missing_count == 1
+
+
+def test_health_unknown_reference_is_info_not_warning_when_legacy(engine, tmp_path):
+    engine.state._save_registry(
+        {
+            "concept_009": {
+                "canonical_name": "Old concept",
+                "last_referenced_session": "",
+                "last_referenced_at": None,
+                "last_reference_source": "unknown",
+                "created_at": 1781858056.0
+            }
+        },
+        str(tmp_path),
+    )
+    stale = engine.state.detect_stale_concepts(n_sessions=5, project=str(tmp_path))
+    assert stale[0]["severity"] == "info"
+
+
+def test_health_confirmed_stale_known_reference_remains_warning(engine, tmp_path):
+    engine.state._save_registry(
+        {
+            "concept_008": {
+                "canonical_name": "general-learning",
+                "last_referenced_session": "session_0",
+                "last_referenced_at": "2026-07-02T00:00:00Z",
+                "last_reference_source": "search",
+            }
+        },
+        str(tmp_path),
+    )
+    for i in range(6):
+        engine.state.record_outcome("success", session_id=f"session_{i}", project=str(tmp_path))
+
+    stale = engine.state.detect_stale_concepts(n_sessions=5, project=str(tmp_path))
+    assert stale[0]["severity"] == "warning"
+
+
+def test_health_does_not_fabricate_sessions_since_reference_for_unknown(engine, tmp_path):
+    engine.state._save_registry(
+        {
+            "concept_009": {
+                "canonical_name": "Old concept",
+                "last_referenced_session": "",
+                "last_referenced_at": None,
+                "last_reference_source": "unknown",
+            }
+        },
+        str(tmp_path),
+    )
+    stale = engine.state.detect_stale_concepts(n_sessions=5, project=str(tmp_path))
+    assert stale[0]["sessions_since_reference"] is None
+
+
+def test_health_does_not_fabricate_last_referenced_at_for_unknown(engine, tmp_path):
+    engine.state._save_registry(
+        {
+            "concept_009": {
+                "canonical_name": "Old concept",
+                "last_referenced_session": "",
+                "last_referenced_at": None,
+                "last_reference_source": "unknown",
+            }
+        },
+        str(tmp_path),
+    )
+    stale = engine.state.detect_stale_concepts(n_sessions=5, project=str(tmp_path))
+    assert stale[0]["last_referenced_at"] is None
+
+
+def test_health_reference_session_missing_classified_separately(engine, tmp_path):
+    engine.state._save_registry(
+        {
+            "concept_009": {
+                "canonical_name": "Session missing concept",
+                "last_referenced_session": "missing_session_id",
+                "last_referenced_at": "2026-07-02T00:00:00Z",
+                "last_reference_source": "search",
+            }
+        },
+        str(tmp_path),
+    )
+    stale = engine.state.detect_stale_concepts(n_sessions=5, project=str(tmp_path))
+    assert stale[0]["stale_status"] == "reference_session_missing"
+    assert stale[0]["severity"] == "info"
+
+
+def test_health_unknown_reference_not_counted_as_confirmed_stale_warning(engine, tmp_path):
+    engine.state._save_registry(
+        {
+            "concept_009": {
+                "canonical_name": "Old concept",
+                "last_referenced_session": "",
+                "last_referenced_at": None,
+                "last_reference_source": "unknown",
+            }
+        },
+        str(tmp_path),
+    )
+    stale = engine.state.detect_stale_concepts(n_sessions=5, project=str(tmp_path))
+    active_stale = sum(1 for s in stale if s.get("stale_status") == "stale")
+    assert active_stale == 0
+
+
+def test_health_legacy_classification_requires_pre_watermark_evidence(engine, tmp_path):
+    engine.state._save_registry(
+        {
+            "concept_009": {
+                "canonical_name": "Legacy",
+                "last_referenced_session": "",
+                "last_referenced_at": None,
+                "last_reference_source": "unknown",
+                "created_at": 1781858056.0  # pre-watermark
+            }
+        },
+        str(tmp_path),
+    )
+    stale = engine.state.detect_stale_concepts(n_sessions=5, project=str(tmp_path))
+    assert stale[0]["stale_status"] == "legacy_no_reference_metadata"
+
+
+def test_health_never_referenced_classification_requires_post_watermark_evidence(engine, tmp_path):
+    engine.state._save_registry(
+        {
+            "concept_009": {
+                "canonical_name": "Never Ref",
+                "last_referenced_session": "",
+                "last_referenced_at": None,
+                "last_reference_source": "unknown",
+                "created_at": 1783000000.0  # post-watermark
+            }
+        },
+        str(tmp_path),
+    )
+    stale = engine.state.detect_stale_concepts(n_sessions=5, project=str(tmp_path))
+    assert stale[0]["stale_status"] == "never_referenced_since_tracking_enabled"
+
+
+def test_health_missing_creation_time_uses_metadata_missing_not_guessed_legacy(engine, tmp_path):
+    engine.state._save_registry(
+        {
+            "concept_009": {
+                "canonical_name": "Legacy",
+                "last_referenced_session": "",
+                "last_referenced_at": None,
+                "last_reference_source": "unknown",
+                # created_at is missing
+            }
+        },
+        str(tmp_path),
+    )
+    stale = engine.state.detect_stale_concepts(n_sessions=5, project=str(tmp_path))
+    assert stale[0]["stale_status"] == "reference_metadata_missing"
+
+
+def test_health_registry_read_error_is_warning_not_info(engine, tmp_path):
+    # Corrupt concept_registry.json to trigger read error
+    harness = engine._resolve_harness(str(tmp_path))
+    (harness / "concept_registry.json").write_text("invalid json", encoding="utf-8")
+    
+    stale = engine.state.detect_stale_concepts(n_sessions=5, project=str(tmp_path))
+    assert len(stale) == 1
+    assert stale[0]["stale_status"] == "reference_history_unavailable"
+    assert stale[0]["severity"] == "warning"
+
+
+def test_health_json_output_preserves_existing_keys(engine, tmp_path):
+    from oem_knowledge.cli.commands.knowledge import run_knowledge_command
+    import sys
+    from unittest.mock import MagicMock
+    
+    # Save a registry
+    engine.state._save_registry(
+        {"concept_001": {"canonical_name": "Concept One"}},
+        str(tmp_path),
+    )
+    
+    # Mock args
+    args = MagicMock()
+    args.command = "health"
+    args.project = str(tmp_path)
+    args.stale_sessions = 5
+    args.similarity_threshold = 0.85
+    args.json = True
+    
+    # Patch sys.exit and print
+    printed_data = []
+    def mock_print(val):
+        printed_data.append(val)
+        
+    with patch("builtins.print", mock_print), patch("sys.exit") as mock_exit:
+        run_knowledge_command(args)
+        
+    assert len(printed_data) == 1
+    report = json.loads(printed_data[0])
+    
+    # Verify existing keys are present
+    assert "status" in report
+    assert "operation" in report
+    assert "project_root" in report
+    assert "memory_root" in report
+    assert "checks" in report
+    assert "contradictions" in report
+    
+    # Verify new keys are present
+    assert "stale_reference_summary" in report
+    assert "stale_concepts" in report
+    assert report["stale_reference_summary"]["unknown_reference"] == 1

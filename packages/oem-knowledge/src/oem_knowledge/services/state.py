@@ -14,6 +14,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+REFERENCE_TRACKING_WATERMARK_TS = 1782864000.0  # 2026-07-01T00:00:00Z
+REFERENCE_TRACKING_WATERMARK_ISO = "2026-07-01T00:00:00Z"
+
+
 class StateCorruptionError(ValueError):
     """Raised when state files (like the concept registry) contain corrupt or invalid JSON."""
     pass
@@ -879,16 +883,25 @@ class StateService:
         handoff_json.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
     def detect_stale_concepts(self, n_sessions: int = 5, project: str | None = None) -> list[dict]:
-        """Identify concepts that have not been referenced in the last N sessions.
-
-        When the completed session count is below n_sessions, numeric stale
-        determinations are skipped, but concepts with reference metadata that
-        cannot be tied to a reliable session are still surfaced with
-        stale_status='unknown_reference_session'.
-        """
-        registry = self._load_registry(project)
-        completed_sessions = self._completed_session_ids(project)
-        active_session_id = self._active_session_id(project)
+        """Identify concepts that have not been referenced in the last N sessions."""
+        try:
+            registry = self._load_registry(project)
+            completed_sessions = self._completed_session_ids(project)
+            active_session_id = self._active_session_id(project)
+        except Exception as e:
+            return [{
+                "concept_id": "all",
+                "canonical_name": "all",
+                "stale_status": "reference_history_unavailable",
+                "sessions_since_reference": None,
+                "last_referenced_session": "",
+                "last_referenced_at": None,
+                "last_reference_source": "unknown",
+                "reference_confidence": "unknown",
+                "severity": "warning",
+                "explanation": f"Cannot determine reference history due to registry or outcome file loading error: {e}",
+                "recommended_action": "Verify that your registry and outcome files exist and are readable."
+            }]
 
         sessions_below_threshold = len(completed_sessions) < n_sessions
         last_n_sessions: set[str] = set()
@@ -904,6 +917,54 @@ class StateService:
             last_ref_session = str(cdata.get("last_referenced_session") or "")
             last_ref_at = cdata.get("last_referenced_at")
             last_ref_source = cdata.get("last_reference_source")
+            legacy_sessions = [str(s) for s in cdata.get("sessions", []) if str(s)]
+
+            # Determine if we have any reference history
+            is_empty_reference = (
+                not last_ref_session and
+                not last_ref_at and
+                (not last_ref_source or last_ref_source in ("unknown", "")) and
+                not legacy_sessions
+            )
+
+            if is_empty_reference:
+                created_at = cdata.get("created_at")
+                if created_at is not None:
+                    try:
+                        created_ts = float(created_at)
+                        if created_ts < REFERENCE_TRACKING_WATERMARK_TS:
+                            stale_status = "legacy_no_reference_metadata"
+                        else:
+                            stale_status = "never_referenced_since_tracking_enabled"
+                    except (ValueError, TypeError):
+                        stale_status = "reference_metadata_missing"
+                else:
+                    stale_status = "reference_metadata_missing"
+
+                if stale_status == "legacy_no_reference_metadata":
+                    explanation = "This concept has no reference metadata, likely because it was created before reference tracking was added."
+                    rec_action = "Run a search/read that surfaces this concept to record a fresh reference, or run a future reference backfill command if available."
+                elif stale_status == "never_referenced_since_tracking_enabled":
+                    explanation = "This concept was created after reference tracking was enabled but has never been referenced."
+                    rec_action = "Interact with this concept in a session to establish a reference history."
+                else:
+                    explanation = "This registry concept lacks reference tracking fields entirely."
+                    rec_action = "Interact with this concept to initialize its reference tracking metadata."
+
+                stale_concepts.append({
+                    "concept_id": cid,
+                    "canonical_name": cdata.get("canonical_name", cid),
+                    "last_referenced_session": "",
+                    "last_referenced_at": None,
+                    "last_reference_source": "unknown",
+                    "sessions_since_reference": None,
+                    "stale_status": stale_status,
+                    "reference_confidence": "unknown",
+                    "severity": "info",
+                    "explanation": explanation,
+                    "recommended_action": rec_action,
+                })
+                continue
 
             # Current active session — not stale; sessions_since_reference = 0
             if last_ref_session and active_session_id and last_ref_session == active_session_id:
@@ -925,25 +986,13 @@ class StateService:
                     "sessions_since_reference": sessions_since,
                     "stale_status": "stale",
                     "reference_confidence": "high",
-                })
-                continue
-
-            # Has reference timestamp but no reliable session ID — surface even below threshold
-            if last_ref_at:
-                stale_concepts.append({
-                    "concept_id": cid,
-                    "canonical_name": cdata.get("canonical_name", cid),
-                    "last_referenced_session": last_ref_session,
-                    "last_referenced_at": last_ref_at,
-                    "last_reference_source": last_ref_source,
-                    "sessions_since_reference": None,
-                    "stale_status": "unknown_reference_session",
-                    "reference_confidence": "unknown",
+                    "severity": "warning",
+                    "explanation": "This concept has not been referenced in the last N sessions.",
+                    "recommended_action": "Touch or reference this concept if it is still valid, or prune it if it is obsolete.",
                 })
                 continue
 
             # Legacy sessions field
-            legacy_sessions = [str(s) for s in cdata.get("sessions", []) if str(s)]
             reliable_legacy_sessions = [s for s in legacy_sessions if s in completed_sessions]
             if reliable_legacy_sessions:
                 if sessions_below_threshold:
@@ -961,20 +1010,27 @@ class StateService:
                     "sessions_since_reference": sessions_since,
                     "stale_status": "stale",
                     "reference_confidence": "legacy",
+                    "severity": "warning",
+                    "explanation": "This concept has not been referenced in the last N sessions.",
+                    "recommended_action": "Touch or reference this concept if it is still valid, or prune it if it is obsolete.",
                 })
                 continue
 
-            # No reference metadata at all — surface even below threshold
+            # Has reference timestamp or session but not in completed_sessions — surface even below threshold
             stale_concepts.append({
                 "concept_id": cid,
                 "canonical_name": cdata.get("canonical_name", cid),
-                "last_referenced_session": "",
-                "last_referenced_at": None,
-                "last_reference_source": "unknown",
+                "last_referenced_session": last_ref_session,
+                "last_referenced_at": last_ref_at,
+                "last_reference_source": last_ref_source,
                 "sessions_since_reference": None,
-                "stale_status": "unknown_reference_session",
+                "stale_status": "reference_session_missing",
                 "reference_confidence": "unknown",
+                "severity": "info",
+                "explanation": "The last referenced session ID exists in the concept metadata but is missing from the known completed sessions.",
+                "recommended_action": "This can happen if session history was pruned or cleared. Surface this concept in a new session to refresh the metadata.",
             })
+            continue
 
         return stale_concepts
 

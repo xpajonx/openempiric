@@ -487,7 +487,46 @@ def _run_knowledge_command_impl(args):
         stale = eng.state.detect_stale_concepts(args.stale_sessions, project)
         merges = eng.propose_merges(args.similarity_threshold, project)
         concept_conflicts = eng.detect_contradictions(project)
-        
+
+        # Compute stale reference summary
+        registry = eng.state._load_registry(project)
+        total_concepts = len(registry)
+
+        active_stale = sum(1 for s in stale if s.get("stale_status") == "stale")
+        unknown_ref = sum(1 for s in stale if s.get("stale_status") in (
+            "legacy_no_reference_metadata", "reference_metadata_missing",
+            "reference_session_missing", "reference_history_unavailable",
+            "never_referenced_since_tracking_enabled"
+        ))
+
+        unknown_breakdown = {}
+        for status in (
+            "legacy_no_reference_metadata", "reference_metadata_missing",
+            "reference_session_missing", "reference_history_unavailable",
+            "never_referenced_since_tracking_enabled"
+        ):
+            count = sum(1 for s in stale if s.get("stale_status") == status)
+            if count > 0:
+                unknown_breakdown[status] = count
+
+        known_recent = total_concepts - active_stale - unknown_ref
+        stale_ref_summary = {
+            "active_stale": active_stale,
+            "unknown_reference": unknown_ref,
+            "known_recent": max(0, known_recent),
+            **unknown_breakdown
+        }
+
+        health_res["stale_reference_summary"] = stale_ref_summary
+        health_res["stale_concepts"] = stale
+
+        if getattr(args, "json", False):
+            health_res["duplicate_merge_proposals"] = merges
+            health_res["concept_contradictions"] = concept_conflicts
+            print(json.dumps(health_res, indent=2))
+            sys.exit(0)
+            return
+
         lines = []
 
         # Runtime health section
@@ -510,9 +549,25 @@ def _run_knowledge_command_impl(args):
 
         # Stale concepts section
         lines.append("Stale Concepts:")
+        if unknown_ref > 0:
+            lines.append(
+                f"  Stale reference metadata: {unknown_ref} concepts have unknown reference history, "
+                "likely legacy concepts from before reference tracking. This is informational and not a release blocker."
+            )
+            lines.append("")
+
         if stale:
             for s in stale:
-                if s.get("sessions_since_reference") is None:
+                status = s.get("stale_status")
+                if status == "legacy_no_reference_metadata":
+                    lines.append(f"  ○ {s['canonical_name']} ({s['concept_id']}) - reference session unknown")
+                elif status == "reference_metadata_missing":
+                    lines.append(f"  ○ {s['canonical_name']} ({s['concept_id']}) - reference session unknown")
+                elif status == "reference_session_missing":
+                    lines.append(f"  ○ {s['canonical_name']} ({s['concept_id']}) - reference session unknown")
+                elif status == "reference_history_unavailable":
+                    lines.append(f"  ○ {s['canonical_name']} ({s['concept_id']}) - reference history unavailable")
+                elif status == "never_referenced_since_tracking_enabled":
                     lines.append(f"  ○ {s['canonical_name']} ({s['concept_id']}) - reference session unknown")
                 else:
                     lines.append(f"  ○ {s['canonical_name']} ({s['concept_id']}) - untouched for {s['sessions_since_reference']} sessions")

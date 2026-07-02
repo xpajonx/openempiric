@@ -390,6 +390,11 @@ def _setup_parser() -> argparse.ArgumentParser:
         default=0.85,
         help="Similarity threshold for duplicates",
     )
+    health_p.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the health report as JSON",
+    )
 
     # active-work repair (smallest safe repair for stale handoff/runtime conflicts)
     aw_p = sub.add_parser(
