@@ -373,12 +373,12 @@ def _has_symbol_definition(identifier: str, document: str) -> bool:
     return False
 
 
-def _count_identifier_cooccurrence(identifiers: list[str], document: str) -> int:
-    count = 0
-    for ident in identifiers:
-        if _has_boundary_identifier_match(ident, document):
-            count += 1
-    return count
+def _matched_source_identifiers(document: str, identifiers: list[str]) -> list[str]:
+    return [ident for ident in identifiers if _has_boundary_identifier_match(ident, document)]
+
+
+def _count_matched_identifiers(identifiers: list[str], document: str) -> int:
+    return len(_matched_source_identifiers(document, identifiers))
 
 
 def _detect_source_query_intent(query: str) -> dict:
@@ -461,9 +461,7 @@ def _classify_source_result(rel_path: str, document: str, identifiers: list[str]
                    or name.endswith("_test.js")
                    or name.endswith("_test.tsx"))
         if is_test:
-            if identifiers and any(
-                _has_boundary_identifier_match(i, document) for i in identifiers
-            ):
+            if identifiers and _matched_source_identifiers(document, identifiers):
                 return "relevant_test"
             return "unrelated_test"
 
@@ -1443,16 +1441,12 @@ class SourceCorpusService:
         for idx, row in enumerate(rows):
             rel_path = row["rel_path"]
             document = row["document"]
-            base_score = normalized_bm25[idx]
+            normalized_base_score = normalized_bm25[idx]
 
             source_type = _classify_source_result(rel_path, document, identifiers)
 
-            matching_idents = [
-                i for i in identifiers
-                if _has_boundary_identifier_match(i, document)
-            ]
-            num_exact = len(matching_idents)
-            cooccurrence = num_exact
+            matched_identifiers = _matched_source_identifiers(document, identifiers)
+            matched_identifier_count = len(matched_identifiers)
 
             rel_lower = f"/{rel_path.lower()}"
             path_matches = 0
@@ -1468,32 +1462,31 @@ class SourceCorpusService:
 
             # Exact identifiers
             exact_ident_boost = 0.0
-            for ident in identifiers:
-                if _has_boundary_identifier_match(ident, document):
-                    if "." in ident:
-                        exact_ident_boost += BOOST_DOTTED_IDENTIFIER
-                        reasons.append(f"dotted identifier: {ident}")
-                    elif "_" in ident:
-                        exact_ident_boost += BOOST_SNAKE_IDENTIFIER
-                        reasons.append(f"exact identifier: {ident}")
-                    else:
-                        exact_ident_boost += BOOST_CAMEL_IDENTIFIER
-                        reasons.append(f"exact identifier: {ident}")
-                    
-                    if _has_symbol_definition(ident, document):
-                        exact_ident_boost += BOOST_SYMBOL_DEFINITION
-                        reasons.append(f"symbol definition: {ident}")
+            for ident in matched_identifiers:
+                if "." in ident:
+                    exact_ident_boost += BOOST_DOTTED_IDENTIFIER
+                    reasons.append(f"dotted identifier: {ident}")
+                elif "_" in ident:
+                    exact_ident_boost += BOOST_SNAKE_IDENTIFIER
+                    reasons.append(f"exact identifier: {ident}")
+                else:
+                    exact_ident_boost += BOOST_CAMEL_IDENTIFIER
+                    reasons.append(f"exact identifier: {ident}")
+                
+                if _has_symbol_definition(ident, document):
+                    exact_ident_boost += BOOST_SYMBOL_DEFINITION
+                    reasons.append(f"symbol definition: {ident}")
             
             if exact_ident_boost > 0.0:
                 boosts["exact_identifier"] = round(exact_ident_boost, 2)
 
-            if cooccurrence >= 3:
+            if matched_identifier_count >= 3:
                 boosts["identifier_cooccurrence"] = BOOST_COOCCURRENCE_3_PLUS
                 reasons.append("identifier co-occurrence (3+)")
-            elif cooccurrence == 2:
+            elif matched_identifier_count == 2:
                 boosts["identifier_cooccurrence"] = BOOST_COOCCURRENCE_2
                 reasons.append("identifier co-occurrence (2)")
-            elif cooccurrence == 1:
+            elif matched_identifier_count == 1:
                 boosts["identifier_cooccurrence"] = BOOST_COOCCURRENCE_1
                 reasons.append("identifier co-occurrence (1)")
 
@@ -1553,24 +1546,24 @@ class SourceCorpusService:
                 penalties["generated_or_cache"] = PENALTY_GENERATED_OR_CACHE
                 reasons.append("generated/cache penalty")
 
-            if len(document) > LARGE_DOCUMENT_THRESHOLD_CHARS and num_exact == 0:
+            if len(document) > LARGE_DOCUMENT_THRESHOLD_CHARS and matched_identifier_count == 0:
                 penalties["large_low_density"] = PENALTY_LARGE_LOW_DENSITY
                 reasons.append("large low density penalty")
 
             total_boost = sum(boosts.values())
             total_penalty = sum(penalties.values())
-            final_score = round(base_score + total_boost - total_penalty, 4)
+            final_score = round(normalized_base_score + total_boost - total_penalty, 4)
 
             metadata = dict(row["metadata"])
             metadata["source_type"] = source_type
             metadata["source_diagnostics"] = {
                 "source_type": source_type,
-                "base_score": round(base_score, 4),
+                "base_score": round(normalized_base_score, 4),
                 "final_score": final_score,
                 "ranking_reason": reasons,
                 "ranking_boosts": boosts,
                 "ranking_penalties": penalties,
-                "exact_identifier_count": num_exact,
+                "exact_identifier_count": matched_identifier_count,
                 "query_intent": {
                     "source_intent": source_intent,
                     "debug_intent": debug_intent,

@@ -8,7 +8,7 @@ import pytest
 
 from oem_knowledge.services.source_corpus import (
     _classify_source_result,
-    _count_identifier_cooccurrence,
+    _count_matched_identifiers,
     _detect_source_query_intent,
     _extract_source_identifiers,
     _has_boundary_identifier_match,
@@ -78,26 +78,26 @@ class TestBoundaryIdentifierMatch:
         )
 
 
-class TestCountIdentifierCooccurrence:
+class TestCountMatchedIdentifiers:
     def test_zero_when_no_identifiers_match(self):
-        assert _count_identifier_cooccurrence(
+        assert _count_matched_identifiers(
             ["foo", "bar"], "nothing matches here"
         ) == 0
 
     def test_counts_only_distinct_matching_identifiers(self):
-        assert _count_identifier_cooccurrence(
+        assert _count_matched_identifiers(
             ["foo", "bar", "baz"],
             "foo is here and bar is also here foo again",
         ) == 2
 
     def test_returns_minimum_of_identifiers_length_and_matches(self):
-        assert _count_identifier_cooccurrence(
+        assert _count_matched_identifiers(
             ["getNotebook", "source_ids"],
             "getNotebook uses source_ids and source_ids again",
         ) == 2
 
     def test_empty_identifiers_returns_zero(self):
-        assert _count_identifier_cooccurrence([], "any doc") == 0
+        assert _count_matched_identifiers([], "any doc") == 0
 
 
 class TestDetectSourceQueryIntent:
@@ -732,6 +732,26 @@ class TestIndexedSearchRanking:
         results = res["results"]
         # Sorting should be completely stable and deterministic
         assert len(results) > 0
+
+    def test_source_search_symbol_definition_boosts_exact_function_definition(self, indexed_engine):
+        # We search for "get_notebook".
+        # src/adapter.py defines the function: "def get_notebook(source_ids):"
+        # tests/test_adapter.py contains a broad mention in a comment: "# test get_notebook and chat.ask"
+        # Since src/adapter.py has the symbol definition, it should get BOOST_SYMBOL_DEFINITION boost
+        # and therefore rank above tests/test_adapter.py.
+        res = indexed_engine.source.search("get_notebook", k=10)
+        results = res["results"]
+        rel_paths = [r["metadata"]["rel_path"] for r in results]
+        
+        src_idx = rel_paths.index("src/adapter.py")
+        test_idx = rel_paths.index("tests/test_adapter.py")
+        
+        # Check that src/adapter.py ranks above tests/test_adapter.py
+        assert src_idx < test_idx
+        
+        # Verify diagnostics show the symbol definition boost for src/adapter.py
+        src_diag = next(r for r in results if r["metadata"]["rel_path"] == "src/adapter.py")["metadata"]["source_diagnostics"]
+        assert any("symbol definition: get_notebook" in reason for reason in src_diag["ranking_reason"])
 
 
 class TestHasSymbolDefinition:
