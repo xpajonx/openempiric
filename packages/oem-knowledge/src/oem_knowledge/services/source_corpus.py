@@ -89,6 +89,7 @@ DEFAULT_SOURCE_CONFIG: dict[str, Any] = {
         "dist/**",
         "build/**",
         ".venv/**",
+        ".obsidian/plugins/**",
         "*.png",
         "*.jpg",
         "*.pdf",
@@ -920,7 +921,22 @@ class SourceCorpusService:
                     size_bytes=resolved.stat().st_size
                 )
 
-        # 5. Lockfile/large file/binary check
+        # 5. Include configuration check (before lockfile/large/binary so files
+        # outside the include set never become metadata-only search rows)
+        if config.include:
+            include_matcher = _IgnoreMatcher(config.include)
+            if not include_matcher.matches(rel_path, is_dir=False):
+                return SourceFileClassification(
+                    path=resolved,
+                    rel_path=rel_path,
+                    eligible=False,
+                    reason="not_included",
+                    file_type="unknown",
+                    language="unknown",
+                    size_bytes=resolved.stat().st_size
+                )
+
+        # 6. Lockfile/large file/binary check
         size_bytes = resolved.stat().st_size
         file_type = _guess_file_type(resolved)
         language = _guess_language(resolved)
@@ -959,20 +975,6 @@ class SourceCorpusService:
                 language=language,
                 size_bytes=size_bytes
             )
-
-        # 6. Include configuration check (after lockfile so lockfiles are always metadata-indexed)
-        if config.include:
-            include_matcher = _IgnoreMatcher(config.include)
-            if not include_matcher.matches(rel_path, is_dir=False):
-                return SourceFileClassification(
-                    path=resolved,
-                    rel_path=rel_path,
-                    eligible=False,
-                    reason="not_included",
-                    file_type="unknown",
-                    language="unknown",
-                    size_bytes=resolved.stat().st_size
-                )
 
         return SourceFileClassification(
             path=resolved,
@@ -1204,7 +1206,18 @@ class SourceCorpusService:
 
     def index(self, force: bool = False, dry_run: bool = False) -> dict[str, Any]:
         project_root = self._project_root()
-        config = self._load_config()
+        effective_config = self.load_config()
+        config = {
+            "version": DEFAULT_SOURCE_CONFIG["version"],
+            "include": list(effective_config.include),
+            "exclude": list(effective_config.exclude),
+            "chunk_lines": effective_config.chunk_lines,
+            "chunk_overlap_lines": effective_config.chunk_overlap_lines,
+            "max_file_size_bytes": effective_config.max_file_size_bytes,
+            "max_read_lines": effective_config.max_read_lines,
+            "max_read_characters": effective_config.max_read_characters,
+            "exclude_globs": list(effective_config.exclude_globs),
+        }
         previous_manifest = self._load_manifest()
         previous_files = previous_manifest.get("files", {}) if isinstance(previous_manifest, dict) else {}
         previous_config = previous_manifest.get("config", {}) if isinstance(previous_manifest, dict) else {}

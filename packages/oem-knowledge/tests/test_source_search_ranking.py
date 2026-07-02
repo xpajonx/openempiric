@@ -608,14 +608,16 @@ class TestIndexedSearchRanking:
         
         agent_dir = tmp_path / "agent"
         agent_dir.mkdir(parents=True, exist_ok=True)
-        (agent_dir / "_utils.py").write_text("def agent_util():\n    # helper functions for agents\n    pass")
+        (agent_dir / "_utils.py").write_text("def call_execution_script(script_name, action, input_data, cwd=None, timeout=300):\n    # helper for agents\n    pass")
+
+        # Add x_source_discovery.py with discover_sources function
+        (execution_dir / "x_source_discovery.py").write_text("def discover_sources():\n    # discover sources from arxiv and youtube\n    pass")
         
         (tests_dir / "test_notebooklm_adapter.py").write_text("def test_notebooklm_adapter():\n    # test notebooklm_adapter and call_execution_script\n    pass")
 
-        # Create a metadata-only file by writing a large file under .obsidian
-        obsidian_dir = tmp_path / ".obsidian/plugins/terminal"
-        obsidian_dir.mkdir(parents=True, exist_ok=True)
-        (obsidian_dir / "main.js").write_text("console.log('terminal');\n" + ("a" * 600000))
+        # Create a metadata-only file by writing a very large file under src/
+        src_giant = tmp_path / "src" / "giant_bundle.js"
+        src_giant.write_text("console.log('giant');\n" + ("a" * 600000))
 
         eng = KnowledgeEngine(project_path=tmp_path)
         eng.init_project(str(tmp_path))
@@ -814,14 +816,11 @@ class TestIndexedSearchRanking:
         assert res["results"][0]["metadata"]["rel_path"] == "agent/_utils.py"
 
     def test_metadata_only_file_does_not_receive_implementation_boost_without_content_match(self, indexed_engine):
-        # Searching for something unrelated to Obsidian terminal
         res = indexed_engine.source.search("get_notebook")
         results = res["results"]
-        # Find .obsidian result if returned
-        obsidian_res = [r for r in results if ".obsidian" in r["metadata"]["rel_path"]]
-        if obsidian_res:
-            diag = obsidian_res[0]["metadata"]["source_diagnostics"]
-            assert diag["source_type"] == "generated_or_cache"
+        giant_res = [r for r in results if "giant_bundle" in r["metadata"]["rel_path"]]
+        if giant_res:
+            diag = giant_res[0]["metadata"]["source_diagnostics"]
             assert "implementation_code" not in diag["ranking_boosts"]
             assert "metadata_only result" in diag["ranking_reason"]
 
@@ -829,12 +828,12 @@ class TestIndexedSearchRanking:
         res = indexed_engine.source.search("get_notebook")
         results = res["results"]
         rel_paths = [r["metadata"]["rel_path"] for r in results]
-        
-        # Real source code should outrank the metadata-only obsidian file
-        if ".obsidian/plugins/terminal/main.js" in rel_paths:
-            obs_idx = rel_paths.index(".obsidian/plugins/terminal/main.js")
+
+        # Real source code should outrank the metadata-only giant file
+        if "src/giant_bundle.js" in rel_paths:
+            giant_idx = rel_paths.index("src/giant_bundle.js")
             src_idx = rel_paths.index("src/adapter.py")
-            assert src_idx < obs_idx
+            assert src_idx < giant_idx
 
     def test_implementation_code_boost_requires_positive_evidence(self, indexed_engine):
         # If we query an unrelated term that exists nowhere, normal results are empty
@@ -924,13 +923,12 @@ class TestIndexedSearchRanking:
             assert rel_paths.index("execution/notebooklm_adapter.py") < rel_paths.index("tests/test_notebooklm_adapter.py")
 
     def test_metadata_only_boosts_are_suppressed_before_source_type_boosts(self, indexed_engine):
-        # Search for "terminal main.js" (matches obsidian file but metadata-only)
-        res = indexed_engine.source.search("terminal main.js")
+        # Search for "giant bundle" (matches giant metadata-only file)
+        res = indexed_engine.source.search("giant bundle")
         results = res["results"]
-        obsidian_res = [r for r in results if ".obsidian" in r["metadata"]["rel_path"]]
-        if obsidian_res:
-            diag = obsidian_res[0]["metadata"]["source_diagnostics"]
-            assert diag["source_type"] == "generated_or_cache"
+        giant_res = [r for r in results if "giant_bundle" in r["metadata"]["rel_path"]]
+        if giant_res:
+            diag = giant_res[0]["metadata"]["source_diagnostics"]
             assert "implementation_code" not in diag["ranking_boosts"]
             assert diag["ranking_penalties"]["metadata_only"] == 10.0
 
@@ -951,6 +949,64 @@ class TestIndexedSearchRanking:
         results = res["results"]
         rel_paths = [r["metadata"]["rel_path"] for r in results]
         assert "pyproject.toml" in rel_paths
+
+    def test_execution_content_taxonomy_returns_impl_file_rank_one(self, indexed_engine):
+        res = indexed_engine.source.search("execution/content_taxonomy.py")
+        assert res["status"] == "success"
+        assert len(res["results"]) > 0
+        assert res["results"][0]["metadata"]["rel_path"] == "execution/content_taxonomy.py"
+
+    def test_normalize_post_type_infer_content_function_returns_impl_before_tests(self, indexed_engine):
+        res = indexed_engine.source.search("normalize_post_type infer_content_function content taxonomy implementation")
+        results = res["results"]
+        rel_paths = [r["metadata"]["rel_path"] for r in results]
+        exec_idx = rel_paths.index("execution/content_taxonomy.py")
+        if "tests/test_notebooklm_adapter.py" in rel_paths:
+            test_idx = rel_paths.index("tests/test_notebooklm_adapter.py")
+            assert exec_idx < test_idx
+
+    def test_agent_utils_call_execution_script_returns_impl_file(self, indexed_engine):
+        res = indexed_engine.source.search("agent/_utils.py call_execution_script")
+        assert res["status"] == "success"
+        results = res["results"]
+        rel_paths = [r["metadata"]["rel_path"] for r in results]
+        assert "agent/_utils.py" in rel_paths
+
+    def test_x_source_discovery_returns_impl_file(self, indexed_engine):
+        res = indexed_engine.source.search("execution/x_source_discovery.py discover sources")
+        assert res["status"] == "success"
+        results = res["results"]
+        rel_paths = [r["metadata"]["rel_path"] for r in results]
+        assert "execution/x_source_discovery.py" in rel_paths
+
+    def test_nonsense_source_query_returns_empty(self, indexed_engine):
+        res = indexed_engine.source.search("asdfghjkl qwertyuiop nonexistent symbol")
+        assert res["status"] == "no_relevant_source_results"
+        assert len(res["results"]) == 0
+
+    def test_obsidian_plugins_excluded_by_default(self, indexed_engine):
+        manifest = indexed_engine.source._load_manifest()
+        files = manifest.get("files", {})
+        obsidian_files = [k for k in files if ".obsidian" in k]
+        assert len(obsidian_files) == 0
+
+    def test_stale_config_migrates_to_include_execution_and_agent(self, tmp_path):
+        from oem_knowledge.engine import KnowledgeEngine
+        import yaml
+
+        oem_dir = tmp_path / ".oem"
+        oem_dir.mkdir(parents=True, exist_ok=True)
+        (oem_dir / "source_index_config.yml").write_text(yaml.safe_dump({
+            "include": ["src/**", "packages/**", "tests/**", "docs/**",
+                         "README.md", "AGENTS.md", "pyproject.toml", "package.json"],
+            "max_read_lines": 400,
+        }), encoding="utf-8")
+
+        eng = KnowledgeEngine(project_path=tmp_path)
+        eng.init_project(str(tmp_path))
+        config = eng.source.load_config()
+        assert "execution/**" in config.include
+        assert "agent/**" in config.include
 
 
 class TestHasSymbolDefinition:

@@ -187,10 +187,12 @@ def test_source_discovery_rejects_symlink_outside_project(temp_project, tmp_path
 
 def test_source_discovery_records_lockfiles_metadata_only(temp_project):
     service = SourceCorpusService(temp_project)
-    (temp_project / "uv.lock").write_text("uv lock content", encoding="utf-8")
+    src_dir = temp_project / "src"
+    src_dir.mkdir(parents=True, exist_ok=True)
+    (src_dir / "uv.lock").write_text("uv lock content", encoding="utf-8")
     
     res = service.discover_files()
-    lock_cls = next((c for c in res.discovered_files if c.rel_path == "uv.lock"), None)
+    lock_cls = next((c for c in res.discovered_files if c.rel_path == "src/uv.lock"), None)
     
     assert lock_cls is not None
     assert lock_cls.eligible is False
