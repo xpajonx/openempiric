@@ -1749,7 +1749,7 @@ class SourceCorpusService:
 
         def compare_results(a, b):
             score_diff = a["score"] - b["score"]
-            if abs(score_diff) > 1e-9:
+            if abs(score_diff) > SCORE_TIE_EPSILON:
                 return 1 if score_diff > 0 else -1
                 
             p_a = TYPE_PRIORITY.get(a["metadata"]["source_type"], 0)
@@ -1791,7 +1791,7 @@ class SourceCorpusService:
             )
 
             # Exclude zero or negative scores
-            if score <= 0.0:
+            if score <= MIN_POSITIVE_RESULT_SCORE:
                 continue
 
             # Skip demotion filtering for legitimate doc/config queries
@@ -1803,7 +1803,7 @@ class SourceCorpusService:
             # For very weak topic-only results:
             if not has_positive_evidence and not is_legit_doc_config_query:
                 # Exclude if score is low, unless it's a single-word query
-                if score < 5.0 and len(query_cleaned.split()) > 1:
+                if score < WEAK_RESULT_MIN_SCORE and len(query_cleaned.split()) > 1:
                     continue
 
             filtered_ranked.append(r)
