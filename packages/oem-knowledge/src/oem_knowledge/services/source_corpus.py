@@ -265,6 +265,152 @@ def _guess_file_type(path: Path) -> str:
     return "text"
 
 
+# ============================================================================
+# Source search ranking — intent detection, classification, boosts, diagnostics
+# ============================================================================
+
+SOURCE_STOPWORDS = {
+    "the", "a", "an", "of", "to", "in", "on", "for", "with", "from",
+    "by", "at", "as", "is", "are", "was", "were", "be", "been", "being",
+    "and", "or", "but", "if", "then", "than", "that", "this", "it", "its",
+    "not", "no", "how", "why", "what", "where", "who", "which",
+    "do", "does", "did", "will", "would", "could", "should", "can", "may",
+}
+
+_UPPER_NOISE = {"THE", "AND", "FOR", "ARE", "NOT", "ALL", "GET", "SET", "PUT", "HOW", "WHY", "CAN", "YOU", "HAS", "HAD", "WAS", "WERE"}
+
+CODE_SUFFIXES = {".py", ".ts", ".js", ".tsx", ".jsx", ".rs", ".go", ".java", ".kt"}
+
+
+def _extract_source_identifiers(query: str) -> list[str]:
+    dotted = re.findall(r'\b[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]+)+', query)
+    dotted = [d for d in dotted if not any(
+        d.lower().endswith(f".{ext}") for ext in
+        ["md", "py", "ts", "js", "json", "yaml", "yml", "toml", "txt", "css", "html", "sh"])]
+    dotted = [d for d in dotted if all(len(seg) >= 2 for seg in d.split("."))]
+
+    snake_case = re.findall(r'\b[a-z]+_[a-z]+\w*\b', query)
+    snake_case = [s for s in snake_case if len(s) >= 4]
+
+    upper_case = re.findall(r'\b[A-Z][A-Z_0-9]{2,}(?:_[A-Z0-9]+)*\b', query)
+    upper_case = [u for u in upper_case if u not in _UPPER_NOISE]
+
+    pascal_case = re.findall(r'\b[A-Z][a-z]+[A-Z][a-zA-Z]*\b', query)
+    lower_camel = re.findall(r'\b[a-z]+[A-Z][a-zA-Z]*[a-z]\b', query)
+
+    all_idents = list(set(dotted + snake_case + upper_case + pascal_case + lower_camel))
+    all_idents = [i for i in all_idents if len(i) >= 3]
+    return all_idents
+
+
+def _has_boundary_identifier_match(identifier: str, document: str) -> bool:
+    escaped = re.escape(identifier)
+    if re.search(rf'(?<![\w.]){escaped}(?!\w)', document, re.IGNORECASE):
+        return True
+    if re.search(rf'(?<!\w)_{escaped}(?!\w)', document, re.IGNORECASE):
+        return True
+    return False
+
+
+def _count_identifier_cooccurrence(identifiers: list[str], document: str) -> int:
+    count = 0
+    for ident in identifiers:
+        if _has_boundary_identifier_match(ident, document):
+            count += 1
+    return count
+
+
+def _detect_source_query_intent(query: str) -> dict:
+    q = query.strip()
+    q_lower = q.lower()
+
+    identifiers = _extract_source_identifiers(q)
+
+    words = re.findall(r'\w+', q_lower)
+    ident_lower = {i.lower() for i in identifiers}
+    domain_terms = [
+        w for w in words
+        if w not in SOURCE_STOPWORDS and w not in ident_lower and len(w) > 2
+    ]
+
+    error_signals = {"timeout", "error", "exception", "fail", "failed", "failure",
+                     "crash", "broken", "bug", "regression"}
+    error_terms = [w for w in words if w in error_signals]
+
+    debug_signals = {"debug", "fix", "repair", "trace", "workaround", "patch"}
+    has_debug = any(w in words for w in debug_signals) or bool(error_terms)
+
+    test_signals = {"test", "regression", "pytest", "unittest", "failing"}
+    has_test = any(w in words for w in test_signals)
+
+    has_identifiers = len(identifiers) > 0
+    source_intent = has_identifiers or has_debug
+    debug_intent = has_debug
+    test_intent = has_test
+    doc_intent = any(w in words for w in
+                     ["agent", "instruction", "documentation", "docs", "readme", "help"])
+    config_intent = any(w in words for w in ["config", "configuration", "settings"])
+
+    return {
+        "source_intent": source_intent,
+        "debug_intent": debug_intent,
+        "test_intent": test_intent,
+        "doc_intent": doc_intent,
+        "config_intent": config_intent,
+        "identifiers": identifiers,
+        "domain_terms": domain_terms,
+        "error_terms": error_terms,
+    }
+
+
+def _classify_source_result(rel_path: str, document: str, identifiers: list[str]) -> str:
+    rel_lower = rel_path.lower()
+    prefixed = f"/{rel_lower}"
+    name = PurePosixPath(rel_lower).name
+
+    if name in ("agents.md", "claude.md") or "/.agents/" in prefixed:
+        return "agent_instruction"
+    if name == "readme.md":
+        return "readme_doc"
+    if name == "readme.txt":
+        return "readme_doc"
+
+    if "/docs/" in prefixed:
+        return "project_doc"
+
+    if any(p in rel_lower for p in ["/generated/", "/cache/", "/__pycache__/"]) or rel_lower.startswith("generated/"):
+        return "generated_or_cache"
+
+    suffix = PurePosixPath(rel_lower).suffix
+    if suffix in (".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf"):
+        return "config_file"
+
+    if suffix in CODE_SUFFIXES:
+        is_test = ("/tests/" in f"/{rel_lower}" or name.startswith("test_")
+                   or name.endswith("_test.py"))
+        is_adapter = "adapter" in rel_lower
+        is_service = "service" in rel_lower
+        is_client = "client" in rel_lower
+
+        if is_test:
+            if identifiers and any(
+                _has_boundary_identifier_match(i, document) for i in identifiers
+            ):
+                return "relevant_test"
+            return "unrelated_test"
+
+        if is_adapter:
+            return "adapter_code"
+        if is_service:
+            return "service_code"
+        if is_client:
+            return "client_code"
+
+        return "implementation_code"
+
+    return "unknown"
+
+
 class _IgnoreMatcher:
     def __init__(self, patterns: list[str]):
         self.patterns = self._clean_patterns(patterns)
@@ -1212,40 +1358,157 @@ class SourceCorpusService:
             rows = store.iter_chunks()
         finally:
             store.close()
-        bm25 = self._bm25_scores(query, [row["document"] for row in rows])
-        phrase = query.lower()
-        query_terms = {term.lower() for term in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", query) if len(term) > 1}
+        bm25_raw = self._bm25_scores(query, [row["document"] for row in rows])
+        max_bm25 = max(bm25_raw) if bm25_raw else 1.0
+        normalized_bm25 = [s / max_bm25 if max_bm25 > 0 else 0.0 for s in bm25_raw]
+
+        intent = _detect_source_query_intent(query)
+        identifiers = intent["identifiers"]
+        source_intent = intent["source_intent"]
+        debug_intent = intent["debug_intent"]
+        test_intent = intent["test_intent"]
+        doc_intent = intent["doc_intent"]
+        config_intent = intent["config_intent"]
+
         ranked = []
         for idx, row in enumerate(rows):
             rel_path = row["rel_path"]
+            document = row["document"]
+            base_score = normalized_bm25[idx]
+
+            source_type = _classify_source_result(rel_path, document, identifiers)
+
+            matching_idents = [
+                i for i in identifiers
+                if _has_boundary_identifier_match(i, document)
+            ]
+            num_exact = len(matching_idents)
+            cooccurrence = _count_identifier_cooccurrence(identifiers, document)
+
+            rel_lower = f"/{rel_path.lower()}"
+            path_matches = 0
+            for ident in identifiers:
+                if re.search(rf'(?<!\w){re.escape(ident.lower())}(?!\w)', rel_lower):
+                    path_matches += 1
+            for term in intent.get("domain_terms", []):
+                if re.search(rf'(?<!\w){re.escape(term.lower())}(?!\w)', rel_lower):
+                    path_matches += 1
+
+            boosts = {}
+            reasons = []
+
+            if num_exact > 0:
+                boosts["exact_identifier"] = round(3.0 * num_exact, 2)
+
+            if cooccurrence >= 3:
+                boosts["identifier_cooccurrence"] = 6.0
+            elif cooccurrence == 2:
+                boosts["identifier_cooccurrence"] = 4.0
+            elif cooccurrence == 1:
+                boosts["identifier_cooccurrence"] = 2.0
+
+            if path_matches > 0:
+                boosts["path_match"] = round(1.5 * path_matches, 2)
+
+            if source_intent or debug_intent or test_intent:
+                if source_type in ("adapter_code", "service_code", "client_code"):
+                    boosts[source_type] = 3.0
+                elif source_type == "implementation_code" and num_exact > 0:
+                    boosts["implementation_code"] = 2.0
+                elif source_type == "relevant_test":
+                    boosts["relevant_test"] = 4.0 if test_intent else 2.0
+
+            penalties = {}
+
+            if source_type == "agent_instruction" and not doc_intent:
+                penalties["agent_instruction"] = -5.0
+            elif source_type == "readme_doc" and not doc_intent:
+                penalties["readme_doc"] = -4.0
+            elif source_type == "project_doc" and not doc_intent:
+                penalties["project_doc"] = -3.0
+
+            if source_type == "unrelated_test":
+                if not test_intent:
+                    penalties["unrelated_test"] = -3.0
+                elif num_exact == 0:
+                    penalties["unrelated_test"] = -2.0
+
+            if source_type == "config_file" and not config_intent:
+                penalties["config_file"] = -2.0
+
+            if source_type == "generated_or_cache":
+                penalties["generated_or_cache"] = -8.0
+
+            if len(document) > 2000 and num_exact == 0:
+                penalties["large_low_density"] = -3.0
+
+            total_boost = round(sum(boosts.values()), 2)
+            total_penalty = round(sum(penalties.values()), 2)
+            final_score = round(base_score + total_boost + total_penalty, 4)
+
+            matching_sorted = sorted(matching_idents, key=lambda x: (x.count("."), x.count("_"), x))
+            for ident in matching_sorted:
+                if "." in ident:
+                    reasons.append(f"dotted identifier: {ident}")
+                elif "_" in ident:
+                    reasons.append(f"identifier: {ident}")
+                else:
+                    reasons.append(f"identifier: {ident}")
+
+            if cooccurrence >= 3:
+                reasons.append("identifier co-occurrence (3+)")
+            elif cooccurrence == 2:
+                reasons.append("identifier co-occurrence (2)")
+            elif cooccurrence == 1:
+                reasons.append("identifier co-occurrence (1)")
+
+            if path_matches > 0:
+                reasons.append(f"path match ({path_matches})")
+
+            if source_type in ("adapter_code", "service_code", "client_code"):
+                reasons.append(f"{source_type.replace('_code', '')} code file")
+            elif source_type == "implementation_code" and num_exact > 0:
+                reasons.append("implementation code file")
+            if source_type == "relevant_test":
+                reasons.append("relevant test")
+
+            if "agent_instruction" in penalties:
+                reasons.append("agent instruction penalty")
+            if "readme_doc" in penalties or "project_doc" in penalties:
+                reasons.append("broad doc penalty")
+            if "unrelated_test" in penalties:
+                reasons.append("unrelated test penalty")
+            if "generated_or_cache" in penalties:
+                reasons.append("generated/cache penalty")
+            if "config_file" in penalties:
+                reasons.append("config file penalty")
+            if "large_low_density" in penalties:
+                reasons.append("large low density penalty")
+
             metadata = dict(row["metadata"])
-            path_tokens = set(row["path_text"].split())
-            symbol_tokens = {token.lower() for token in row["symbols_text"].split() if token}
-            document_lower = row["document"].lower()
-            rel_lower = rel_path.lower()
-            path_boost = 0.0
-            if phrase and phrase in rel_lower:
-                path_boost += 0.75
-            path_boost += 0.18 * sum(1 for term in query_terms if term in path_tokens)
-            symbol_boost = 0.25 * sum(1 for term in query_terms if term in symbol_tokens)
-            phrase_boost = 0.45 if phrase and phrase in document_lower else 0.0
-            test_boost = 0.1 if "/tests/" in f"/{rel_lower}" or PurePosixPath(rel_lower).name.startswith("test_") else 0.0
-            final_score = bm25[idx] + path_boost + symbol_boost + phrase_boost + test_boost
+            metadata["source_type"] = source_type
+            metadata["source_diagnostics"] = {
+                "source_type": source_type,
+                "base_score": round(base_score, 4),
+                "final_score": final_score,
+                "ranking_reason": reasons,
+                "ranking_boosts": boosts,
+                "ranking_penalties": penalties,
+            }
+            metadata["rel_path"] = rel_path
+            metadata["start_line"] = row["start_line"]
+            metadata["end_line"] = row["end_line"]
+
             file_entry = manifest.get("files", {}).get(rel_path, {}) if manifest else {}
-            ranked.append(
-                {
-                    "id": row["id"],
-                    "document": row["snippet"],
-                    "metadata": {
-                        **metadata,
-                        "rel_path": rel_path,
-                        "start_line": row["start_line"],
-                        "end_line": row["end_line"],
-                        "status": file_entry.get("status", metadata.get("indexing_mode", "indexed")),
-                    },
-                    "score": final_score,
-                }
-            )
+            metadata["status"] = file_entry.get("status", metadata.get("indexing_mode", "indexed"))
+
+            ranked.append({
+                "id": row["id"],
+                "document": row["snippet"],
+                "metadata": metadata,
+                "score": final_score,
+            })
+
         ranked.sort(key=lambda item: item["score"], reverse=True)
         return {
             "status": "success",
