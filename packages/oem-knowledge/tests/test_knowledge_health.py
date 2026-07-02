@@ -814,7 +814,7 @@ def test_health_json_output_preserves_existing_keys(engine, tmp_path):
     def mock_print(val):
         printed_data.append(val)
         
-    with patch("builtins.print", mock_print), patch("sys.exit") as mock_exit:
+    with patch("builtins.print", mock_print), pytest.raises(SystemExit):
         run_knowledge_command(args)
         
     assert len(printed_data) == 1
@@ -832,3 +832,68 @@ def test_health_json_output_preserves_existing_keys(engine, tmp_path):
     assert "stale_reference_summary" in report
     assert "stale_concepts" in report
     assert report["stale_reference_summary"]["unknown_reference"] == 1
+
+
+def test_health_supports_iso8601_creation_timestamp_watermark_check(engine, tmp_path):
+    # Test pre-watermark ISO 8601 string
+    engine.state._save_registry(
+        {
+            "concept_009": {
+                "canonical_name": "Old concept",
+                "last_referenced_session": "",
+                "last_referenced_at": None,
+                "last_reference_source": "unknown",
+                "created_at": "2026-06-30T12:00:00Z"  # before watermark July 1st
+            },
+            "concept_010": {
+                "canonical_name": "New concept",
+                "last_referenced_session": "",
+                "last_referenced_at": None,
+                "last_reference_source": "unknown",
+                "created_at": "2026-07-02T12:00:00Z"  # after watermark July 1st
+            }
+        },
+        str(tmp_path),
+    )
+    stale = engine.state.detect_stale_concepts(n_sessions=5, project=str(tmp_path))
+    assert len(stale) == 2
+    
+    stale_map = {s["concept_id"]: s for s in stale}
+    assert stale_map["concept_009"]["stale_status"] == "legacy_no_reference_metadata"
+    assert stale_map["concept_010"]["stale_status"] == "never_referenced_since_tracking_enabled"
+
+
+def test_health_summary_message_distinguishes_legacy_vs_unavailable(engine, tmp_path):
+    from oem_knowledge.cli.commands.knowledge import run_knowledge_command
+    from unittest.mock import MagicMock
+    
+    args = MagicMock()
+    args.command = "health"
+    args.project = str(tmp_path)
+    args.stale_sessions = 5
+    args.similarity_threshold = 0.85
+    args.json = False
+    
+    printed_lines = []
+    def mock_print(val):
+        printed_lines.append(val)
+        
+    stale_mock = [{
+        "concept_id": "all",
+        "canonical_name": "all",
+        "stale_status": "reference_history_unavailable",
+        "sessions_since_reference": None,
+        "last_referenced_session": "",
+        "reference_confidence": "unknown",
+        "severity": "warning",
+        "explanation": "Cannot determine reference history due to registry or outcome file loading error",
+        "recommended_action": "Verify that your registry and outcome files exist and are readable."
+    }]
+    
+    with patch("oem_knowledge.services.state.StateService.detect_stale_concepts", return_value=stale_mock):
+        with patch("builtins.print", mock_print):
+            run_knowledge_command(args)
+        
+    console_out = "\n".join(printed_lines)
+    assert "Stale reference checking is unavailable" in console_out
+    assert "likely legacy concepts from before reference tracking" not in console_out

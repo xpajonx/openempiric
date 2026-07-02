@@ -525,7 +525,6 @@ def _run_knowledge_command_impl(args):
             health_res["concept_contradictions"] = concept_conflicts
             print(json.dumps(health_res, indent=2))
             sys.exit(0)
-            return
 
         lines = []
 
@@ -549,9 +548,18 @@ def _run_knowledge_command_impl(args):
 
         # Stale concepts section
         lines.append("Stale Concepts:")
-        if unknown_ref > 0:
+        history_unavailable = sum(1 for s in stale if s.get("stale_status") == "reference_history_unavailable")
+        other_unknown = unknown_ref - history_unavailable
+
+        if history_unavailable > 0:
             lines.append(
-                f"  Stale reference metadata: {unknown_ref} concepts have unknown reference history, "
+                "  Stale reference checking is unavailable: reference history registry or outcomes could not be read."
+            )
+            lines.append("")
+
+        if other_unknown > 0:
+            lines.append(
+                f"  Stale reference metadata: {other_unknown} concepts have unknown reference history, "
                 "likely legacy concepts from before reference tracking. This is informational and not a release blocker."
             )
             lines.append("")

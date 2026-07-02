@@ -18,6 +18,25 @@ REFERENCE_TRACKING_WATERMARK_TS = 1782864000.0  # 2026-07-01T00:00:00Z
 REFERENCE_TRACKING_WATERMARK_ISO = "2026-07-01T00:00:00Z"
 
 
+def _parse_timestamp(val) -> float | None:
+    if val is None:
+        return None
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        pass
+    if isinstance(val, str):
+        try:
+            from datetime import datetime
+            iso_str = val.strip()
+            if iso_str.endswith("Z"):
+                iso_str = iso_str[:-1] + "+00:00"
+            return datetime.fromisoformat(iso_str).timestamp()
+        except Exception:
+            pass
+    return None
+
+
 class StateCorruptionError(ValueError):
     """Raised when state files (like the concept registry) contain corrupt or invalid JSON."""
     pass
@@ -930,13 +949,13 @@ class StateService:
             if is_empty_reference:
                 created_at = cdata.get("created_at")
                 if created_at is not None:
-                    try:
-                        created_ts = float(created_at)
+                    created_ts = _parse_timestamp(created_at)
+                    if created_ts is not None:
                         if created_ts < REFERENCE_TRACKING_WATERMARK_TS:
                             stale_status = "legacy_no_reference_metadata"
                         else:
                             stale_status = "never_referenced_since_tracking_enabled"
-                    except (ValueError, TypeError):
+                    else:
                         stale_status = "reference_metadata_missing"
                 else:
                     stale_status = "reference_metadata_missing"
