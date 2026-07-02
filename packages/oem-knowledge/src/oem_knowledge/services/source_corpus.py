@@ -794,8 +794,7 @@ class SourceCorpusService:
             include = list(include)
             old_defaults_1 = {"src/**", "tests/**"}
             old_defaults_2 = {"src/**", "packages/**", "tests/**", "docs/**", "README.md", "AGENTS.md", "pyproject.toml", "package.json"}
-            has_custom_fields = any(k in config_dict for k in ("max_file_size_bytes", "chunk_lines", "chunk_overlap_lines", "max_read_lines", "max_read_characters"))
-            is_old_defaults = (set(include) == old_defaults_1 or set(include) == old_defaults_2) and not has_custom_fields
+            is_old_defaults = (set(include) == old_defaults_1 or set(include) == old_defaults_2) and config_dict.get("max_read_lines") != 200
             if is_old_defaults:
                 include = list(DEFAULT_SOURCE_CONFIG["include"])
             
