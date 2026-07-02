@@ -373,12 +373,12 @@ def _has_symbol_definition(identifier: str, document: str) -> bool:
     return False
 
 
-def _matched_source_identifiers(document: str, identifiers: list[str]) -> list[str]:
+def _matched_source_identifiers(identifiers: list[str], document: str) -> list[str]:
     return [ident for ident in identifiers if _has_boundary_identifier_match(ident, document)]
 
 
 def _count_matched_identifiers(identifiers: list[str], document: str) -> int:
-    return len(_matched_source_identifiers(document, identifiers))
+    return len(_matched_source_identifiers(identifiers, document))
 
 
 def _detect_source_query_intent(query: str) -> dict:
@@ -461,7 +461,7 @@ def _classify_source_result(rel_path: str, document: str, identifiers: list[str]
                    or name.endswith("_test.js")
                    or name.endswith("_test.tsx"))
         if is_test:
-            if identifiers and _matched_source_identifiers(document, identifiers):
+            if identifiers and _matched_source_identifiers(identifiers, document):
                 return "relevant_test"
             return "unrelated_test"
 
@@ -1445,7 +1445,7 @@ class SourceCorpusService:
 
             source_type = _classify_source_result(rel_path, document, identifiers)
 
-            matched_identifiers = _matched_source_identifiers(document, identifiers)
+            matched_identifiers = _matched_source_identifiers(identifiers, document)
             matched_identifier_count = len(matched_identifiers)
 
             rel_lower = f"/{rel_path.lower()}"
