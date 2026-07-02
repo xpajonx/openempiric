@@ -1512,6 +1512,197 @@ def test_search_excludes_below_floor_active_work_signal_memory(preflight_project
     assert len(matched) == 0
 
 
+def test_topic_only_score_1_memory_excluded_from_preflight_context(preflight_project: Path):
+    db_path = preflight_project / ".oem" / ".local_vector_db" / "vectors.db"
+    content = "Some random notes about split memory warning."
+    _add_memory_rows(db_path, [
+        ("mem_weak_id", content, {"source": "notes.md", "title": "Random Notes"}),
+    ])
+    result = run_preflight(
+        "Check split memory warning",
+        project=str(preflight_project),
+        write_audit=False,
+    )
+    matched = [m for m in result.matched_memory if m.id == "mem_weak_id"]
+    assert len(matched) == 0
+
+
+def test_topic_only_memory_match_records_weak_topic_rejection_reason(preflight_project: Path):
+    db_path = preflight_project / ".oem" / ".local_vector_db" / "vectors.db"
+    content = "Some random notes about split memory warning."
+    _add_memory_rows(db_path, [
+        ("mem_weak_id", content, {"source": "notes.md", "title": "Random Notes"}),
+    ])
+    result = run_preflight(
+        "Check split memory warning",
+        project=str(preflight_project),
+        write_audit=False,
+    )
+    assert "weak_topic_only" in result.rejection_reasons
+    assert result.rejection_reasons["weak_topic_only"] >= 1
+
+
+def test_check_split_memory_warning_does_not_surface_irrelevant_memory(preflight_project: Path):
+    db_path = preflight_project / ".oem" / ".local_vector_db" / "vectors.db"
+    content = "Notes about splits and warnings."
+    _add_memory_rows(db_path, [
+        ("mem_weak_id", content, {"source": "notes.md", "title": "Notes"}),
+    ])
+    result = run_preflight(
+        "Check split memory warning",
+        project=str(preflight_project),
+        write_audit=False,
+    )
+    assert len(result.matched_memory) == 0
+
+
+def test_topic_only_match_does_not_drive_suggest(preflight_project: Path):
+    db_path = preflight_project / ".oem" / ".local_vector_db" / "vectors.db"
+    content = "Notes about splits and warnings."
+    _add_memory_rows(db_path, [
+        ("mem_weak_id", content, {"source": "notes.md", "title": "Notes"}),
+    ])
+    result = run_preflight(
+        "Check split memory warning",
+        project=str(preflight_project),
+        write_audit=False,
+    )
+    assert result.decision == "noop"
+
+
+def test_exact_phrase_memory_still_surfaces_after_topic_only_filter(preflight_project: Path):
+    db_path = preflight_project / ".oem" / ".local_vector_db" / "vectors.db"
+    content = "This contains exact phrase Check split memory warning in text."
+    _add_memory_rows(db_path, [
+        ("mem_phrase_id", content, {"source": "notes.md", "title": "Notes"}),
+    ])
+    result = run_preflight(
+        "Check split memory warning",
+        project=str(preflight_project),
+        write_audit=False,
+    )
+    matched = [m for m in result.matched_memory if m.id == "mem_phrase_id"]
+    assert len(matched) == 1
+    assert "exact phrase match" in matched[0].reason
+
+
+def test_t1_t2_t3_remain_rank_one_after_topic_only_filter(preflight_project: Path):
+    db_path = preflight_project / ".oem" / ".local_vector_db" / "vectors.db"
+    
+    # T1
+    t1_content = "## Learnings\n\n- **Decision**: 2_Essay/expertise-debt/Essay_ID.md is the open project."
+    _add_memory_rows(db_path, [
+        ("mem_t1_id", t1_content, {"source": "2_Essay/expertise-debt/Essay_ID.md", "title": "Learnings"}),
+    ])
+    res_t1 = run_preflight(
+        "2_Essay/expertise-debt/Essay_ID.md is the open project",
+        project=str(preflight_project),
+        write_audit=False,
+    )
+    assert len(res_t1.matched_memory) >= 1
+    assert res_t1.matched_memory[0].id == "mem_t1_id"
+    
+    # T2
+    t2_content = "## Learnings\n\n- **Failure**: For Indonesian essays continue working means Indonesian essays Indonesian essays continue working means analyze not write Indonesian essays Indonesian essays continue working."
+    _add_memory_rows(db_path, [
+        ("mem_t2_id", t2_content, {"source": "workflow.md", "title": "Learnings"}),
+    ])
+    res_t2 = run_preflight(
+        "Indonesian essays continue working means analyze not write do not modify Indonesian essays unless explicit",
+        project=str(preflight_project),
+        write_audit=False,
+    )
+    assert len(res_t2.matched_memory) >= 1
+    assert res_t2.matched_memory[0].id == "mem_t2_id"
+    
+    # T3
+    t3_content = "## Learnings\n\n- **Handoff**: x-becoming-television GET_NOTEBOOK timeout pass source_ids explicitly chat.ask workaround."
+    _add_memory_rows(db_path, [
+        ("mem_t3_id", t3_content, {"source": "handoff.md", "title": "Learnings"}),
+    ])
+    res_t3 = run_preflight(
+        "x-becoming-television GET_NOTEBOOK timeout pass source_ids explicitly chat.ask workaround",
+        project=str(preflight_project),
+        write_audit=False,
+    )
+    assert len(res_t3.matched_memory) >= 1
+    assert res_t3.matched_memory[0].id == "mem_t3_id"
+
+
+def test_topic_only_ranking_reason_without_boosts_is_filtered(preflight_project: Path):
+    db_path = preflight_project / ".oem" / ".local_vector_db" / "vectors.db"
+    content = "Some random notes about split memory warning."
+    _add_memory_rows(db_path, [
+        ("mem_weak_id", content, {"source": "notes.md", "title": "Random Notes"}),
+    ])
+    result = run_preflight(
+        "Check split memory warning",
+        project=str(preflight_project),
+        write_audit=False,
+    )
+    assert "mem_weak_id" not in [m.id for m in result.matched_memory]
+
+
+def test_topic_only_boost_key_without_strong_evidence_is_filtered(preflight_project: Path):
+    from oem_knowledge.preflight.router import is_weak_memory_match
+    rm = {
+        "final_score": 1.0,
+        "score": 1.0,
+        "memory_type": "observation",
+        "ranking_boosts": {"topic_match": 1.0},
+        "ranking_reason": ["topic match capped: 2 terms -> +1.0"],
+        "document": "Random text containing split memory",
+    }
+    task_targets = {
+        "semantic_terms": ["split", "memory"],
+        "query_text": "Check split memory",
+    }
+    is_weak, reason = is_weak_memory_match(rm, task_targets)
+    assert is_weak is True
+    assert reason == "weak_topic_only"
+
+
+def test_active_work_phrase_in_document_alone_does_not_rescue_topic_only_match(preflight_project: Path):
+    db_path = preflight_project / ".oem" / ".local_vector_db" / "vectors.db"
+    content = "This is the open project notes. Some random notes about split memory warning."
+    _add_memory_rows(db_path, [
+        ("mem_weak_id", content, {"source": "notes.md", "title": "Random Notes"}),
+    ])
+    result = run_preflight(
+        "Check split memory warning",
+        project=str(preflight_project),
+        write_audit=False,
+    )
+    assert "mem_weak_id" not in [m.id for m in result.matched_memory]
+
+
+def test_below_relevance_floor_and_weak_topic_only_rejection_reasons_are_distinct(preflight_project: Path):
+    db_path = preflight_project / ".oem" / ".local_vector_db" / "vectors.db"
+    
+    content_floor = "## Learnings\n\n- **Failure**: Do not modify Indonesian essays unless explicitly asked. page layout."
+    content_topic = "Some random notes about split memory warning."
+    
+    _add_memory_rows(db_path, [
+        ("mem_floor_id", content_floor, {"source": "notes.md", "title": "Floor"}),
+        ("mem_topic_id", content_topic, {"source": "notes.md", "title": "Topic"}),
+    ])
+    
+    res_floor = run_preflight(
+        "fix the story page responsive layout",
+        project=str(preflight_project),
+        write_audit=False,
+    )
+    assert res_floor.rejection_reasons.get("below_relevance_floor", 0) >= 1
+    
+    res_topic = run_preflight(
+        "Check split memory warning",
+        project=str(preflight_project),
+        write_audit=False,
+    )
+    assert res_topic.rejection_reasons.get("weak_topic_only", 0) >= 1
+
+
+
 
 
 

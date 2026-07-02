@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 OPERATION = "run_preflight"
 MEMORY_ROW_LIMIT = 200
 PARAGRAPH_CHAR_LIMIT = 220
+WEAK_TOPIC_ONLY_MEMORY_THRESHOLD = 1.5
 
 
 def _ensure_tuple(value: Any) -> tuple[str, ...]:
@@ -249,6 +250,7 @@ def _extract_task_targets(task: str) -> dict:
     task_lower = task.lower().strip()
     return {
         **targets,
+        "query_text": task,
         "files": targets.get("files", []),
         "identifiers": targets.get("identifiers", []),
         "stems": targets.get("stems", []),
@@ -390,11 +392,116 @@ def _evaluate_matched_memory_relevance(
     }
 
 
+def _is_query_active_work_aligned(document: str, task_targets: dict) -> bool:
+    from oem_knowledge.memory_ranking import ACTIVE_WORK_PATTERNS
+    if not ACTIVE_WORK_PATTERNS.search(document):
+        return False
+    has_query_paths_or_files = bool(task_targets.get("paths") or task_targets.get("files"))
+    query_text = task_targets.get("query_text", "")
+    has_continuation_intent = any(p in query_text.lower() for p in ("continue", "working on", "current project", "active task", "open project"))
+    return bool(has_query_paths_or_files or has_continuation_intent)
+
+
+def _is_topic_only_memory_match(rm: dict, task_targets: dict) -> bool:
+    final_score = rm.get("final_score", rm.get("score", 0.0))
+    boosts = rm.get("ranking_boosts", {})
+    reasons = rm.get("ranking_reason", [])
+
+    # Check if active-work is query-aligned
+    document = rm.get("document", "")
+    is_aw_aligned = _is_query_active_work_aligned(document, task_targets)
+
+    # Check if workflow rules are query-aligned
+    is_rule_aligned = bool(task_targets.get("rule_intent"))
+
+    # Now calculate the adjusted score (excluding non-aligned boosts)
+    adjusted_score = final_score
+    if not is_aw_aligned and "active_work_signal" in boosts:
+        adjusted_score -= boosts["active_work_signal"]
+    if not is_rule_aligned:
+        if "workflow_rule" in boosts:
+            adjusted_score -= boosts["workflow_rule"]
+        if "rule_phrase" in boosts:
+            adjusted_score -= boosts["rule_phrase"]
+
+    if adjusted_score > 1.5:
+        return False
+
+    # Title check to rescue concept/wiki files targeted by name
+    title = rm.get("title", "") or rm.get("metadata", {}).get("title", "")
+    if title and len(title) >= 3:
+        title_lower = title.lower()
+        query_text = task_targets.get("query_text", "")
+        if query_text:
+            if title_lower in query_text.lower() or query_text.lower() in title_lower:
+                return False
+
+    has_path_file = (
+        "exact_path_match" in boosts or
+        "exact_filename_match" in boosts or
+        any("exact path match" in r or "exact filename match" in r for r in reasons)
+    )
+    if has_path_file:
+        return False
+
+    has_phrase = (
+        "exact_phrase" in boosts or
+        any("exact phrase match" in r for r in reasons)
+    )
+    if has_phrase:
+        return False
+
+    has_workflow = is_rule_aligned and (
+        "workflow_rule" in boosts or
+        "rule_phrase" in boosts or
+        any("workflow rule" in r for r in reasons)
+    )
+    if has_workflow:
+        return False
+
+    has_technical = (
+        "identifier_match" in boosts or
+        "identifier_cooccurrence" in boosts or
+        "identifier_with_term" in boosts or
+        "technical_handoff" in boosts or
+        "workaround" in boosts or
+        "debug_note" in boosts or
+        "session_handoff_technical" in boosts or
+        any(
+            any(w in r for w in ("identifier/stem match", "identifier co-occurrence", "workaround memory", "debug note memory", "technical handoff memory"))
+            for r in reasons
+        )
+    )
+    if has_technical:
+        return False
+
+    mem_type = rm.get("memory_type")
+    eligible = rm.get("eligible_for_type_boost", False)
+    has_type_boost = mem_type in {"decision", "failure", "outcome"} and eligible
+    if has_type_boost:
+        return False
+
+    if is_aw_aligned:
+        return False
+
+    has_topic_evidence = (
+        "topic_match" in boosts or
+        any("topic match" in r or "topic_match" in r for r in reasons)
+    )
+    if not has_topic_evidence:
+        return False
+
+    return True
+
+
 def is_weak_memory_match(rm: dict, task_targets: dict) -> tuple[bool, str]:
     mem_type = rm.get("memory_type")
     eligible = rm.get("eligible_for_type_boost", True)
     if mem_type in {"decision", "failure", "outcome"} and not eligible:
         return True, "below_relevance_floor"
+
+    if _is_topic_only_memory_match(rm, task_targets):
+        return True, "weak_topic_only"
 
     boosts = rm.get("ranking_boosts", {})
     
@@ -727,6 +834,7 @@ def run_preflight(
             "generic_only": 0,
             "single_weak_topic": 0,
             "below_relevance_floor": 0,
+            "weak_topic_only": 0,
         }
         if memory_items:
             mem_candidates = []
