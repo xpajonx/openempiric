@@ -337,3 +337,65 @@ def test_source_config_old_defaults_upgrade_triggers_with_missing_max_read_lines
     # Default max_read_lines is 400, so upgrade should trigger
     assert "execution/**" in config.include
     assert "agent/**" in config.include
+
+def test_source_config_exclude_globs_is_loaded_and_applied(temp_project):
+    """exclude_globs should be loaded from config and applied during file classification."""
+    oem_dir = temp_project / ".oem"
+    oem_dir.mkdir(parents=True, exist_ok=True)
+    (oem_dir / "source_index_config.yml").write_text(yaml.safe_dump({
+        "include": ["src/**"],
+        "exclude_globs": ["src/generated/**"],  # Should exclude generated files via ignore matcher
+    }), encoding="utf-8")
+
+    src_dir = temp_project / "src"
+    src_dir.mkdir(parents=True, exist_ok=True)
+    (src_dir / "real.py").write_text("print('real')")
+    gen_dir = src_dir / "generated"
+    gen_dir.mkdir(parents=True, exist_ok=True)
+    (gen_dir / "file.py").write_text("print('generated')")
+
+    service = SourceCorpusService(temp_project)
+    config = service.load_config()
+
+    # exclude_globs must be available in the config
+    assert config.exclude_globs == ["src/generated/**"]
+
+    real_cls = service.classify_file(src_dir / "real.py")
+    gen_cls = service.classify_file(gen_dir / "file.py")
+
+    assert real_cls.eligible is True, f"real.py should be eligible: {real_cls.reason}"
+    assert gen_cls.eligible is False, f"generated/file.py should be excluded via exclude_globs: {gen_cls.reason}"
+
+def test_source_config_exclude_and_exclude_globs_both_applied(temp_project):
+    """Both exclude and exclude_globs should be applied during classification, each in its own slot."""
+    oem_dir = temp_project / ".oem"
+    oem_dir.mkdir(parents=True, exist_ok=True)
+    (oem_dir / "source_index_config.yml").write_text(yaml.safe_dump({
+        "include": ["src/**"],
+        "exclude": ["src/tmp/**"],  # Explicit exclude section
+        "exclude_globs": ["src/generated/**"],  # Gitignore-style ignore matcher
+    }), encoding="utf-8")
+
+    src_dir = temp_project / "src"
+    src_dir.mkdir(parents=True, exist_ok=True)
+    (src_dir / "real.py").write_text("print('real')")
+
+    # File that should be excluded by include/exclude matching
+    tmp_dir = src_dir / "tmp"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    (tmp_dir / "file.py").write_text("print('tmp')")
+
+    # File that should be excluded by exclude_globs (ignore matcher)
+    gen_dir = src_dir / "generated"
+    gen_dir.mkdir(parents=True, exist_ok=True)
+    (gen_dir / "file.py").write_text("print('generated')")
+
+    service = SourceCorpusService(temp_project)
+
+    real_cls = service.classify_file(src_dir / "real.py")
+    tmp_cls = service.classify_file(tmp_dir / "file.py")
+    gen_cls = service.classify_file(gen_dir / "file.py")
+
+    assert real_cls.eligible is True, f"real.py should be eligible: {real_cls.reason}"
+    assert tmp_cls.eligible is False, f"tmp/file.py should be excluded via exclude: {tmp_cls.reason}"
+    assert gen_cls.eligible is False, f"generated/file.py should be excluded via exclude_globs: {gen_cls.reason}"

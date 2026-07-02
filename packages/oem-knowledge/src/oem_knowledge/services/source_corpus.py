@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 class SourceIndexConfig:
     include: list[str]
     exclude: list[str]
+    exclude_globs: list[str]
     max_file_size_bytes: int
     chunk_lines: int
     chunk_overlap_lines: int
@@ -806,6 +807,7 @@ class SourceCorpusService:
         return SourceIndexConfig(
             include=[str(i) for i in include],
             exclude=[str(e) for e in exclude],
+            exclude_globs=[str(e) for e in config_dict.get("exclude_globs", DEFAULT_SOURCE_CONFIG["exclude_globs"])],
             max_file_size_bytes=int(config_dict.get("max_file_size_bytes", DEFAULT_SOURCE_CONFIG["max_file_size_bytes"])),
             chunk_lines=int(config_dict.get("chunk_lines", DEFAULT_SOURCE_CONFIG["chunk_lines"])),
             chunk_overlap_lines=int(config_dict.get("chunk_overlap_lines", DEFAULT_SOURCE_CONFIG["chunk_overlap_lines"])),
@@ -884,7 +886,7 @@ class SourceCorpusService:
         # 3. Ignore Matcher check (.gitignore / .oemignore)
         config = self.load_config()
         ignore_matcher = self._build_ignore_matcher({
-            "exclude_globs": config.exclude
+            "exclude_globs": config.exclude_globs
         })
         if ignore_matcher.matches(rel_path, is_dir=False):
             return SourceFileClassification(
