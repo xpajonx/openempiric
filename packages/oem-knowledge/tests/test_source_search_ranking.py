@@ -612,6 +612,14 @@ class TestIndexedSearchRanking:
 
         # Add x_source_discovery.py with discover_sources function
         (execution_dir / "x_source_discovery.py").write_text("def discover_sources():\n    # discover sources from arxiv and youtube\n    pass")
+
+        # Create a large implementation file (>2000 chars) to test large_low_density penalty
+        large_func_body = "    print('processing data')\n" * 250  # ~7500 chars
+        (execution_dir / "virality_scorer.py").write_text(
+            "import json\n\ndef score_virality(posts, source_point):\n"
+            + large_func_body
+            + "    return 0.85\n"
+        )
         
         (tests_dir / "test_notebooklm_adapter.py").write_text("def test_notebooklm_adapter():\n    # test notebooklm_adapter and call_execution_script\n    pass")
 
@@ -1007,6 +1015,23 @@ class TestIndexedSearchRanking:
         config = eng.source.load_config()
         assert "execution/**" in config.include
         assert "agent/**" in config.include
+
+    def test_large_implementation_file_not_filtered_by_weak_result_threshold(self, indexed_engine):
+        res = indexed_engine.source.search("score virality posts source point")
+        results = res["results"]
+        rel_paths = [r["metadata"]["rel_path"] for r in results]
+        assert "execution/virality_scorer.py" in rel_paths
+
+    def test_large_implementation_file_no_false_large_low_density_penalty(self, indexed_engine):
+        res = indexed_engine.source.search("score virality posts")
+        results = res["results"]
+        for r in results:
+            if "virality" in r["metadata"]["rel_path"]:
+                diag = r["metadata"]["source_diagnostics"]
+                assert "large_low_density" not in diag["ranking_penalties"], (
+                    f"{r['metadata']['rel_path']} should not get "
+                    "large_low_density penalty"
+                )
 
 
 class TestHasSymbolDefinition:

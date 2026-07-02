@@ -1705,7 +1705,8 @@ class SourceCorpusService:
                     penalties["generated_or_cache"] = PENALTY_GENERATED_OR_CACHE
                     reasons.append("generated/cache penalty")
 
-                if len(document) > LARGE_DOCUMENT_THRESHOLD_CHARS and matched_identifier_count == 0:
+                _CODE_SOURCE_TYPES = {"implementation_code", "adapter_code", "service_code", "client_code", "relevant_test"}
+                if len(document) > LARGE_DOCUMENT_THRESHOLD_CHARS and matched_identifier_count == 0 and source_type not in _CODE_SOURCE_TYPES:
                     penalties["large_low_density"] = PENALTY_LARGE_LOW_DENSITY
                     reasons.append("large low density penalty")
 
