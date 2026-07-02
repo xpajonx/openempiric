@@ -411,7 +411,7 @@ def _detect_source_query_intent(query: str) -> dict:
     config_intent = any(w in words for w in ["config", "configuration", "settings", "setup", "pyproject", "package"])
 
     has_identifiers = len(identifiers) > 0
-    source_intent = (not doc_intent and not config_intent) and (has_identifiers or bool(words))
+    source_intent = (has_identifiers or has_debug or (not doc_intent and not config_intent)) and (has_identifiers or bool(words))
     debug_intent = has_debug
     test_intent = has_test
 
@@ -1473,7 +1473,6 @@ class SourceCorpusService:
         # Check if the query is an exact path query
         is_exact_path_query = False
         potential_path = None
-        query_cleaned = query.strip().strip("'\"")
         
         try:
             test_path = Path(project_root / query_cleaned).resolve()
@@ -1567,7 +1566,7 @@ class SourceCorpusService:
                 query_lower == rel_path.lower() or 
                 query_lower == name.lower() or 
                 query_lower == name_no_ext.lower() or
-                name_no_ext.lower() in query_lower
+                re.search(rf'(?<!\w){re.escape(name_no_ext.lower())}(?!\w)', query_lower) is not None
             )
             
             has_boost_evidence = (

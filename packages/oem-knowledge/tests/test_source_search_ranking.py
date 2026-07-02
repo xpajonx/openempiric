@@ -329,12 +329,9 @@ class TestSearchRankingIntegration:
             )
         assert result["status"] == "success"
         results = result["results"]
-        src_rank = next(i for i, r in enumerate(results) if "src/chat.py" in r["metadata"]["rel_path"])
-        agents_matches = [i for i, r in enumerate(results) if "AGENTS.md" in r["metadata"]["rel_path"]]
-        if agents_matches:
-            assert src_rank < agents_matches[0], (
-                f"src/chat.py at rank {src_rank} should be above AGENTS.md at rank {agents_matches[0]}"
-            )
+        rel_paths = [r["metadata"]["rel_path"] for r in results]
+        assert "src/chat.py" in rel_paths
+        assert "AGENTS.md" not in rel_paths
 
     def test_relevant_test_boosted_for_test_query(self, engine):
         """Test query should boost relevant_test results."""
@@ -400,12 +397,9 @@ class TestSearchRankingIntegration:
                 )
         assert result["status"] == "success"
         results = result["results"]
-        src_rank = next(i for i, r in enumerate(results) if "src/module.py" in r["metadata"]["rel_path"])
-        test_matches = [i for i, r in enumerate(results) if "tests/test_other.py" in r["metadata"]["rel_path"]]
-        if test_matches:
-            assert src_rank < test_matches[0], (
-                f"src/module.py at rank {src_rank} should be above test_other.py at rank {test_matches[0]}"
-            )
+        rel_paths = [r["metadata"]["rel_path"] for r in results]
+        assert "src/module.py" in rel_paths
+        assert "tests/test_other.py" not in rel_paths
 
     def test_generated_cache_heavily_penalized(self, engine):
         """Generated/cache files should be heavily penalized for any query."""
@@ -433,12 +427,9 @@ class TestSearchRankingIntegration:
                 )
         assert result["status"] == "success"
         results = result["results"]
-        src_rank = next(i for i, r in enumerate(results) if "src/module.py" in r["metadata"]["rel_path"])
-        gen_matches = [i for i, r in enumerate(results) if "generated/output.txt" in r["metadata"]["rel_path"]]
-        if gen_matches:
-            assert src_rank < gen_matches[0], (
-                f"src/module.py at rank {src_rank} should be above generated at rank {gen_matches[0]}"
-            )
+        rel_paths = [r["metadata"]["rel_path"] for r in results]
+        assert "src/module.py" in rel_paths
+        assert "generated/output.txt" not in rel_paths
 
     def test_diagnostics_shape_is_present(self, engine):
         """Every search result should include source_diagnostics."""
@@ -609,11 +600,9 @@ class TestIndexedSearchRanking:
         results = res["results"]
         rel_paths = [r["metadata"]["rel_path"] for r in results]
         
-        # src/adapter.py should rank above AGENTS.md
-        src_idx = rel_paths.index("src/adapter.py")
-        if "AGENTS.md" in rel_paths:
-            agents_idx = rel_paths.index("AGENTS.md")
-            assert src_idx < agents_idx
+        # src/adapter.py should rank above AGENTS.md (which is excluded under the new guardrails)
+        assert "src/adapter.py" in rel_paths
+        assert "AGENTS.md" not in rel_paths
 
     def test_source_search_identifier_cooccurrence_boosts_implementation_file(self, indexed_engine):
         res = indexed_engine.source.search("get_notebook chat.ask", k=10)
@@ -625,22 +614,16 @@ class TestIndexedSearchRanking:
         res = indexed_engine.source.search("notebooklm get_notebook", k=10)
         results = res["results"]
         rel_paths = [r["metadata"]["rel_path"] for r in results]
-        src_idx = rel_paths.index("src/adapter.py")
-        if "README.md" in rel_paths:
-            readme_idx = rel_paths.index("README.md")
-            assert src_idx < readme_idx
-        if "docs/large_doc.md" in rel_paths:
-            large_idx = rel_paths.index("docs/large_doc.md")
-            assert src_idx < large_idx
+        assert "src/adapter.py" in rel_paths
+        assert "README.md" not in rel_paths
+        assert "docs/large_doc.md" not in rel_paths
 
     def test_source_search_unrelated_test_downranked(self, indexed_engine):
         res = indexed_engine.source.search("get_notebook", k=10)
         results = res["results"]
         rel_paths = [r["metadata"]["rel_path"] for r in results]
-        src_idx = rel_paths.index("src/adapter.py")
-        if "tests/test_unrelated.py" in rel_paths:
-            unrelated_idx = rel_paths.index("tests/test_unrelated.py")
-            assert src_idx < unrelated_idx
+        assert "src/adapter.py" in rel_paths
+        assert "tests/test_unrelated.py" not in rel_paths
 
     def test_source_search_relevant_test_can_rank_when_exact_identifier_matches(self, indexed_engine):
         res = indexed_engine.source.search("test get_notebook", k=10)
@@ -659,23 +642,22 @@ class TestIndexedSearchRanking:
         res = indexed_engine.source.search("get_notebook chat.ask", k=10)
         results = res["results"]
         rel_paths = [r["metadata"]["rel_path"] for r in results]
+        assert "src/adapter.py" in rel_paths
+        assert "src/generated/notebooklm_adapter.py" in rel_paths
         src_idx = rel_paths.index("src/adapter.py")
-        if "src/generated/notebooklm_adapter.py" in rel_paths:
-            gen_idx = rel_paths.index("src/generated/notebooklm_adapter.py")
-            assert src_idx < gen_idx
-            
-            # Check that generated file has penalty
-            gen_result = next(r for r in results if r["metadata"]["rel_path"] == "src/generated/notebooklm_adapter.py")
-            assert "generated_or_cache" in gen_result["metadata"]["source_diagnostics"]["ranking_penalties"]
+        gen_idx = rel_paths.index("src/generated/notebooklm_adapter.py")
+        assert src_idx < gen_idx
+        
+        # Check that generated file has penalty
+        gen_result = next(r for r in results if r["metadata"]["rel_path"] == "src/generated/notebooklm_adapter.py")
+        assert "generated_or_cache" in gen_result["metadata"]["source_diagnostics"]["ranking_penalties"]
 
     def test_source_search_large_doc_does_not_beat_exact_code_match(self, indexed_engine):
         res = indexed_engine.source.search("get_notebook", k=10)
         results = res["results"]
         rel_paths = [r["metadata"]["rel_path"] for r in results]
-        src_idx = rel_paths.index("src/adapter.py")
-        if "docs/large_doc.md" in rel_paths:
-            large_idx = rel_paths.index("docs/large_doc.md")
-            assert src_idx < large_idx
+        assert "src/adapter.py" in rel_paths
+        assert "docs/large_doc.md" not in rel_paths
 
     def test_source_search_ranking_diagnostics_present(self, indexed_engine):
         res = indexed_engine.source.search("get_notebook", k=10)
@@ -707,9 +689,7 @@ class TestIndexedSearchRanking:
     def test_agents_md_penalized_for_implementation_query(self, indexed_engine):
         res = indexed_engine.source.search("get_notebook", k=10)
         results = res["results"]
-        agents_res = [r for r in results if r["metadata"]["rel_path"] == "AGENTS.md"]
-        if agents_res:
-            assert "agent_instruction" in agents_res[0]["metadata"]["source_diagnostics"]["ranking_penalties"]
+        assert "AGENTS.md" not in [r["metadata"]["rel_path"] for r in results]
 
     def test_bm25_base_cannot_overpower_exact_code_identifier_cooccurrence(self, indexed_engine):
         res = indexed_engine.source.search("notebooklm get_notebook source_ids chat.ask", k=10)
@@ -717,10 +697,8 @@ class TestIndexedSearchRanking:
         # README.md has lots of NotebookLM matches (high BM25), but src/adapter.py has exact identifier matches.
         # src/adapter.py must rank above README.md.
         rel_paths = [r["metadata"]["rel_path"] for r in results]
-        src_idx = rel_paths.index("src/adapter.py")
-        if "README.md" in rel_paths:
-            readme_idx = rel_paths.index("README.md")
-            assert src_idx < readme_idx
+        assert "src/adapter.py" in rel_paths
+        assert "README.md" not in rel_paths
 
     def test_source_search_identifier_matching_is_boundary_safe(self, indexed_engine):
         res = indexed_engine.source.search("ask", k=10)
@@ -734,9 +712,7 @@ class TestIndexedSearchRanking:
     def test_source_search_generated_python_file_classified_as_generated_not_implementation(self, indexed_engine):
         res = indexed_engine.source.search("get_notebook", k=10)
         results = res["results"]
-        gen_res = [r for r in results if r["metadata"]["rel_path"] == "src/generated/notebooklm_adapter.py"]
-        if gen_res:
-            assert gen_res[0]["metadata"]["source_diagnostics"]["source_type"] == "generated_or_cache"
+        assert "src/generated/notebooklm_adapter.py" not in [r["metadata"]["rel_path"] for r in results]
 
     def test_source_search_impl_query_ranks_code_above_relevant_test(self, indexed_engine):
         res = indexed_engine.source.search("get_notebook", k=10)
@@ -761,10 +737,10 @@ class TestIndexedSearchRanking:
             assert "source_diagnostics" in r["metadata"]
 
     def test_source_search_tie_breakers_are_deterministic(self, indexed_engine):
-        res = indexed_engine.source.search("notebooklm", k=10)
-        results = res["results"]
-        # Sorting should be completely stable and deterministic
-        assert len(results) > 0
+        res1 = indexed_engine.source.search("notebooklm", k=10)
+        res2 = indexed_engine.source.search("notebooklm", k=10)
+        assert len(res1["results"]) > 0
+        assert [r["id"] for r in res1["results"]] == [r["id"] for r in res2["results"]]
 
     def test_source_search_symbol_definition_boosts_exact_function_definition(self, indexed_engine):
         # We search for "get_notebook".
