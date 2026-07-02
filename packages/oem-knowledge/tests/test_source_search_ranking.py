@@ -8,7 +8,6 @@ import pytest
 
 from oem_knowledge.services.source_corpus import (
     _classify_source_result,
-    _count_matched_identifiers,
     _detect_source_query_intent,
     _extract_source_identifiers,
     _has_boundary_identifier_match,
@@ -81,24 +80,24 @@ class TestBoundaryIdentifierMatch:
 
 class TestCountMatchedIdentifiers:
     def test_zero_when_no_identifiers_match(self):
-        assert _count_matched_identifiers(
+        assert len(_matched_source_identifiers(
             ["foo", "bar"], "nothing matches here"
-        ) == 0
+        )) == 0
 
     def test_counts_only_distinct_matching_identifiers(self):
-        assert _count_matched_identifiers(
+        assert len(_matched_source_identifiers(
             ["foo", "bar", "baz"],
             "foo is here and bar is also here foo again",
-        ) == 2
+        )) == 2
 
     def test_returns_minimum_of_identifiers_length_and_matches(self):
-        assert _count_matched_identifiers(
+        assert len(_matched_source_identifiers(
             ["getNotebook", "source_ids"],
             "getNotebook uses source_ids and source_ids again",
-        ) == 2
+        )) == 2
 
     def test_empty_identifiers_returns_zero(self):
-        assert _count_matched_identifiers([], "any doc") == 0
+        assert len(_matched_source_identifiers([], "any doc")) == 0
 
 
 class TestDetectSourceQueryIntent:
@@ -159,7 +158,7 @@ class TestClassifySourceResult:
     def test_python_implementation_classified(self):
         assert (
             _classify_source_result(
-                "src/module.py", "def my_function(): pass", ["my_function"]
+                "src/module.py", "def my_function(): pass", []
             )
             == "implementation_code"
         )
@@ -168,7 +167,7 @@ class TestClassifySourceResult:
         result = _classify_source_result(
             "adapters/slack/adapter.py",
             "class SlackAdapter: pass",
-            ["slack"],
+            [],
         )
         assert result == "adapter_code"
 
@@ -176,7 +175,7 @@ class TestClassifySourceResult:
         result = _classify_source_result(
             "services/llm/service.py",
             "class LLMService: pass",
-            ["llm"],
+            [],
         )
         assert result == "service_code"
 
@@ -184,7 +183,7 @@ class TestClassifySourceResult:
         result = _classify_source_result(
             "clients/github/client.py",
             "class GitHubClient: pass",
-            ["github"],
+            [],
         )
         assert result == "client_code"
 
@@ -200,7 +199,7 @@ class TestClassifySourceResult:
         result = _classify_source_result(
             "tests/test_other.py",
             "def test_other(): pass",
-            ["my_function"],
+            [],
         )
         assert result == "unrelated_test"
 
@@ -249,7 +248,7 @@ class TestClassifySourceResult:
         result = _classify_source_result(
             "AGENTS.md",
             "def some_function(): pass",
-            ["some_function"],
+            [],
         )
         assert result == "agent_instruction"
 
@@ -511,6 +510,38 @@ class TestSearchRankingIntegration:
                 f"doc containing only 'helper_ask' in a function name: {diag}"
             )
 
+    def test_source_search_symbol_definition_boosts_exact_function_definition(self, engine):
+        """Definition file ranks above prose-only mention; diagnostics show symbol_definition boost and reason."""
+        rows = self._make_mock_rows([
+            (
+                "docs/notebook.md",
+                "# Notebook\nget_notebook is a helper mentioned here in prose only.",
+                None,
+            ),
+            (
+                "src/notebook.py",
+                "def get_notebook(source_ids):\n    return chat.ask(source_ids)",
+                None,
+            ),
+        ])
+        # BM25 slightly favors prose doc; definition should still win via symbol boost
+        with patch.object(
+            engine.source, "_bm25_scores", return_value=[0.6, 0.5]
+        ):
+            with patch(
+                "oem_knowledge.services.source_corpus._SourceIndexStore",
+                return_value=_MockStore(rows),
+            ):
+                result = engine.source.search("get_notebook", k=2)
+        assert result["status"] == "success"
+        results = result["results"]
+        rel_paths = [r["metadata"]["rel_path"] for r in results]
+        # definition file ranks first
+        assert rel_paths[0] == "src/notebook.py"
+        diag = results[0]["metadata"]["source_diagnostics"]
+        assert any("symbol definition: get_notebook" in reason for reason in diag["ranking_reason"])
+        assert "symbol_definition" in diag.get("ranking_boosts", {})
+
     def test_empty_query_returns_no_results(self, engine):
         """Empty query should return success but empty results."""
         rows = self._make_mock_rows([
@@ -604,11 +635,11 @@ class TestIndexedSearchRanking:
         assert "src/adapter.py" in rel_paths
         assert "AGENTS.md" not in rel_paths
 
-    def test_source_search_identifier_cooccurrence_boosts_implementation_file(self, indexed_engine):
+    def test_source_search_identifier_multi_match_boosts_implementation_file(self, indexed_engine):
         res = indexed_engine.source.search("get_notebook chat.ask", k=10)
         results = res["results"]
         assert results[0]["metadata"]["rel_path"] == "src/adapter.py"
-        assert "identifier co-occurrence (2)" in results[0]["metadata"]["source_diagnostics"]["ranking_reason"]
+        assert "matched identifiers (2)" in results[0]["metadata"]["source_diagnostics"]["ranking_reason"]
 
     def test_source_search_adapter_file_beats_broad_docs(self, indexed_engine):
         res = indexed_engine.source.search("notebooklm get_notebook", k=10)
@@ -691,7 +722,7 @@ class TestIndexedSearchRanking:
         results = res["results"]
         assert "AGENTS.md" not in [r["metadata"]["rel_path"] for r in results]
 
-    def test_bm25_base_cannot_overpower_exact_code_identifier_cooccurrence(self, indexed_engine):
+    def test_bm25_base_cannot_overpower_exact_code_identifier_multi_match(self, indexed_engine):
         res = indexed_engine.source.search("notebooklm get_notebook source_ids chat.ask", k=10)
         results = res["results"]
         # README.md has lots of NotebookLM matches (high BM25), but src/adapter.py has exact identifier matches.

@@ -281,9 +281,9 @@ BOOST_CAMEL_IDENTIFIER = 3.0
 BOOST_SYMBOL_DEFINITION = 4.0
 BOOST_PATH_MATCH_MULTIPLIER = 2.0
 
-BOOST_COOCCURRENCE_1 = 2.0
-BOOST_COOCCURRENCE_2 = 4.0
-BOOST_COOCCURRENCE_3_PLUS = 6.0
+BOOST_IDENTIFIER_MULTI_MATCH_1 = 2.0
+BOOST_IDENTIFIER_MULTI_MATCH_2 = 4.0
+BOOST_IDENTIFIER_MULTI_MATCH_3_PLUS = 6.0
 
 BOOST_CODE_QUERY_ADAPTER = 6.0
 BOOST_CODE_QUERY_IMPLEMENTATION = 5.0
@@ -300,6 +300,17 @@ PENALTY_UNRELATED_TEST_INACTIVE = 10.0
 PENALTY_CONFIG_FILE = 5.0
 PENALTY_GENERATED_OR_CACHE = 15.0
 PENALTY_LARGE_LOW_DENSITY = 5.0
+
+# Explicit score literals used in ranking logic
+BOOST_EXACT_PATH_QUERY = 100.0
+PENALTY_METADATA_ONLY = 10.0
+MIN_POSITIVE_RESULT_SCORE = 0.0
+WEAK_RESULT_MIN_SCORE = 5.0
+SCORE_TIE_EPSILON = 1e-9
+
+# BM25 normalization parameters (used in _bm25_scores)
+BM25_K1 = 1.5
+BM25_B = 0.75
 
 LARGE_DOCUMENT_THRESHOLD_CHARS = 2000
 
@@ -385,10 +396,6 @@ def _matched_source_identifiers(identifiers: list[str], document: str) -> list[s
     return [ident for ident in identifiers if _has_boundary_identifier_match(ident, document)]
 
 
-def _count_matched_identifiers(identifiers: list[str], document: str) -> int:
-    return len(_matched_source_identifiers(identifiers, document))
-
-
 def _detect_source_query_intent(query: str) -> dict:
     q = query.strip()
     q_lower = q.lower()
@@ -433,7 +440,7 @@ def _detect_source_query_intent(query: str) -> dict:
     }
 
 
-def _classify_source_result(rel_path: str, document: str, identifiers: list[str]) -> str:
+def _classify_source_result(rel_path: str, document: str, matched_identifiers: list[str]) -> str:
     rel_lower = rel_path.lower()
     prefixed = f"/{rel_lower}"
     name = PurePosixPath(rel_lower).name
@@ -469,7 +476,7 @@ def _classify_source_result(rel_path: str, document: str, identifiers: list[str]
                    or name.endswith("_test.js")
                    or name.endswith("_test.tsx"))
         if is_test:
-            if identifiers and _matched_source_identifiers(identifiers, document):
+            if matched_identifiers:
                 return "relevant_test"
             return "unrelated_test"
 
@@ -1408,6 +1415,7 @@ class SourceCorpusService:
         }
 
     def _bm25_scores(self, query: str, documents: list[str]) -> list[float]:
+        # Returns normalized scores in [0.0, 1.0]
         query_terms = [term.lower() for term in re.findall(r"\w+", query) if len(term) > 1]
         if not query_terms or not documents:
             return [0.0] * len(documents)
@@ -1418,8 +1426,6 @@ class SourceCorpusService:
             for term in set(terms):
                 df[term] = df.get(term, 0) + 1
         avg_dl = sum(len(terms) for terms in tokenized) / max(doc_count, 1)
-        k1 = 1.5
-        b = 0.75
         scores = []
         for terms in tokenized:
             tf: dict[str, int] = {}
@@ -1433,7 +1439,7 @@ class SourceCorpusService:
                 freq = tf[query_term]
                 n = df.get(query_term, 0)
                 idf = math.log((doc_count - n + 0.5) / (n + 0.5) + 1.0)
-                score += idf * (freq * (k1 + 1)) / (freq + k1 * (1 - b + b * doc_len / max(avg_dl, 1)))
+                score += idf * (freq * (BM25_K1 + 1)) / (freq + BM25_K1 * (1 - BM25_B + BM25_B * doc_len / max(avg_dl, 1)))
             scores.append(score)
         max_score = max(scores) if scores else 0.0
         return [score / max_score if max_score > 0 else 0.0 for score in scores]
@@ -1508,8 +1514,8 @@ class SourceCorpusService:
                     "project_root": str(project_root),
                 }
 
-        # bm25_scores returns values that are already normalized between 0.0 and 1.0
-        normalized_bm25 = self._bm25_scores(query, [row["document"] for row in rows])
+        # _bm25_scores returns normalized scores in [0.0, 1.0]
+        normalized_base_scores = self._bm25_scores(query, [row["document"] for row in rows])
 
         intent = _detect_source_query_intent(query)
         identifiers = intent["identifiers"]
@@ -1523,12 +1529,12 @@ class SourceCorpusService:
         for idx, row in enumerate(rows):
             rel_path = row["rel_path"]
             document = row["document"]
-            normalized_base_score = normalized_bm25[idx]
-
-            source_type = _classify_source_result(rel_path, document, identifiers)
+            normalized_base_score = normalized_base_scores[idx]
 
             matched_identifiers = _matched_source_identifiers(identifiers, document)
             matched_identifier_count = len(matched_identifiers)
+
+            source_type = _classify_source_result(rel_path, document, matched_identifiers)
 
             rel_lower = f"/{rel_path.lower()}"
             path_matches = 0
@@ -1589,11 +1595,12 @@ class SourceCorpusService:
                 
                 # Exact path query boost
                 if is_exact_path_query and rel_path == potential_path:
-                    boosts["exact_path_query"] = 100.0
+                    boosts["exact_path_query"] = BOOST_EXACT_PATH_QUERY
                     reasons.append("exact path query match")
 
                 # Exact identifiers
                 exact_ident_boost = 0.0
+                symbol_definition_boost = 0.0
                 for ident in matched_identifiers:
                     if "." in ident:
                         exact_ident_boost += BOOST_DOTTED_IDENTIFIER
@@ -1606,21 +1613,23 @@ class SourceCorpusService:
                         reasons.append(f"exact identifier: {ident}")
                     
                     if _has_symbol_definition(ident, document):
-                        exact_ident_boost += BOOST_SYMBOL_DEFINITION
+                        symbol_definition_boost += BOOST_SYMBOL_DEFINITION
                         reasons.append(f"symbol definition: {ident}")
                 
                 if exact_ident_boost > 0.0:
                     boosts["exact_identifier"] = round(exact_ident_boost, 2)
+                if symbol_definition_boost > 0.0:
+                    boosts["symbol_definition"] = round(symbol_definition_boost, 2)
 
                 if matched_identifier_count >= 3:
-                    boosts["identifier_cooccurrence"] = BOOST_COOCCURRENCE_3_PLUS
-                    reasons.append("identifier co-occurrence (3+)")
+                    boosts["identifier_multi_match"] = BOOST_IDENTIFIER_MULTI_MATCH_3_PLUS
+                    reasons.append("matched identifiers (3+)")
                 elif matched_identifier_count == 2:
-                    boosts["identifier_cooccurrence"] = BOOST_COOCCURRENCE_2
-                    reasons.append("identifier co-occurrence (2)")
+                    boosts["identifier_multi_match"] = BOOST_IDENTIFIER_MULTI_MATCH_2
+                    reasons.append("matched identifiers (2)")
                 elif matched_identifier_count == 1:
-                    boosts["identifier_cooccurrence"] = BOOST_COOCCURRENCE_1
-                    reasons.append("identifier co-occurrence (1)")
+                    boosts["identifier_multi_match"] = BOOST_IDENTIFIER_MULTI_MATCH_1
+                    reasons.append("matched identifiers (1)")
 
                 if path_matches > 0:
                     boosts["path_match"] = round(BOOST_PATH_MATCH_MULTIPLIER * path_matches, 2)
@@ -1653,7 +1662,7 @@ class SourceCorpusService:
 
             # Penalties
             if is_metadata_only and not exact_metadata_match:
-                penalties["metadata_only"] = 10.0
+                penalties["metadata_only"] = PENALTY_METADATA_ONLY
                 reasons.append("metadata_only result")
                 reasons.append("implementation boost suppressed: no content evidence")
             else:
