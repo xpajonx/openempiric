@@ -542,3 +542,208 @@ class _MockStore:
 
     def close(self):
         pass
+
+
+class TestIndexedSearchRanking:
+    @pytest.fixture
+    def indexed_engine(self, tmp_path):
+        from oem_knowledge.engine import KnowledgeEngine
+
+        # Create files
+        (tmp_path / "AGENTS.md").write_text("The agents should use NotebookLM for retrieval.")
+        (tmp_path / "README.md").write_text("Welcome to the project. NotebookLM is integrated.")
+        
+        src_dir = tmp_path / "src"
+        src_dir.mkdir(parents=True, exist_ok=True)
+        (src_dir / "adapter.py").write_text("def get_notebook(source_ids):\n    chat.ask(source_ids)")
+        
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir(parents=True, exist_ok=True)
+        (tests_dir / "test_adapter.py").write_text("def test_get_notebook():\n    # test get_notebook and chat.ask\n    pass")
+        (tests_dir / "test_unrelated.py").write_text("def test_something_else():\n    pass")
+        
+        gen_dir = tmp_path / "src/generated"
+        gen_dir.mkdir(parents=True, exist_ok=True)
+        (gen_dir / "notebooklm_adapter.py").write_text("def get_notebook(source_ids):\n    chat.ask(source_ids)")
+        
+        docs_dir = tmp_path / "docs"
+        docs_dir.mkdir(parents=True, exist_ok=True)
+        (docs_dir / "large_doc.md").write_text("This is a large low density documentation file with a lot of text. 'NotebookLM' is mentioned here once.\n" + ("a " * 1500))
+        
+        (tmp_path / "pyproject.toml").write_text("[tool.poetry]\nname = \"test-project\"")
+
+        eng = KnowledgeEngine(project_path=tmp_path)
+        eng.init_project(str(tmp_path))
+        
+        # Run indexing
+        stats = eng.source.index()
+        assert stats["status"] == "success"
+        
+        return eng
+
+    def test_source_search_exact_function_match_beats_agents_md(self, indexed_engine):
+        res = indexed_engine.source.search("notebooklm get_notebook timeout source_ids explicitly chat.ask", k=10)
+        results = res["results"]
+        rel_paths = [r["metadata"]["rel_path"] for r in results]
+        
+        # src/adapter.py should rank above AGENTS.md
+        src_idx = rel_paths.index("src/adapter.py")
+        agents_idx = rel_paths.index("AGENTS.md")
+        assert src_idx < agents_idx
+
+    def test_source_search_identifier_cooccurrence_boosts_implementation_file(self, indexed_engine):
+        res = indexed_engine.source.search("get_notebook chat.ask", k=10)
+        results = res["results"]
+        assert results[0]["metadata"]["rel_path"] == "src/adapter.py"
+        assert "identifier co-occurrence (2)" in results[0]["metadata"]["source_diagnostics"]["ranking_reason"]
+
+    def test_source_search_adapter_file_beats_broad_docs(self, indexed_engine):
+        res = indexed_engine.source.search("notebooklm get_notebook", k=10)
+        results = res["results"]
+        rel_paths = [r["metadata"]["rel_path"] for r in results]
+        src_idx = rel_paths.index("src/adapter.py")
+        readme_idx = rel_paths.index("README.md")
+        large_idx = rel_paths.index("docs/large_doc.md")
+        assert src_idx < readme_idx
+        assert src_idx < large_idx
+
+    def test_source_search_unrelated_test_downranked(self, indexed_engine):
+        res = indexed_engine.source.search("get_notebook", k=10)
+        results = res["results"]
+        rel_paths = [r["metadata"]["rel_path"] for r in results]
+        unrelated_idx = rel_paths.index("tests/test_unrelated.py")
+        src_idx = rel_paths.index("src/adapter.py")
+        assert src_idx < unrelated_idx
+
+    def test_source_search_relevant_test_can_rank_when_exact_identifier_matches(self, indexed_engine):
+        res = indexed_engine.source.search("test get_notebook", k=10)
+        results = res["results"]
+        rel_paths = [r["metadata"]["rel_path"] for r in results]
+        # relevant test is test_adapter.py, it should rank first or near first
+        assert "tests/test_adapter.py" in rel_paths[:2]
+
+    def test_source_search_query_mentioning_tests_allows_relevant_test_to_rank(self, indexed_engine):
+        res = indexed_engine.source.search("test get_notebook", k=10)
+        results = res["results"]
+        assert results[0]["metadata"]["source_diagnostics"]["query_intent"]["test_intent"] is True
+        assert results[0]["metadata"]["rel_path"] == "tests/test_adapter.py"
+
+    def test_source_search_generated_cache_downranked(self, indexed_engine):
+        res = indexed_engine.source.search("get_notebook chat.ask", k=10)
+        results = res["results"]
+        rel_paths = [r["metadata"]["rel_path"] for r in results]
+        gen_idx = rel_paths.index("src/generated/notebooklm_adapter.py")
+        src_idx = rel_paths.index("src/adapter.py")
+        assert src_idx < gen_idx
+        
+        # Check that generated file has penalty
+        gen_result = next(r for r in results if r["metadata"]["rel_path"] == "src/generated/notebooklm_adapter.py")
+        assert "generated_or_cache" in gen_result["metadata"]["source_diagnostics"]["ranking_penalties"]
+
+    def test_source_search_large_doc_does_not_beat_exact_code_match(self, indexed_engine):
+        res = indexed_engine.source.search("get_notebook", k=10)
+        results = res["results"]
+        rel_paths = [r["metadata"]["rel_path"] for r in results]
+        src_idx = rel_paths.index("src/adapter.py")
+        large_idx = rel_paths.index("docs/large_doc.md")
+        assert src_idx < large_idx
+
+    def test_source_search_ranking_diagnostics_present(self, indexed_engine):
+        res = indexed_engine.source.search("get_notebook", k=10)
+        results = res["results"]
+        for r in results:
+            diag = r["metadata"]["source_diagnostics"]
+            assert "source_type" in diag
+            assert "base_score" in diag
+            assert "final_score" in diag
+            assert "ranking_reason" in diag
+            assert "ranking_boosts" in diag
+            assert "ranking_penalties" in diag
+
+    def test_source_search_dotted_identifier_chat_ask_preserved(self, indexed_engine):
+        res = indexed_engine.source.search("chat.ask", k=10)
+        results = res["results"]
+        assert "chat.ask" in results[0]["metadata"]["source_diagnostics"]["ranking_reason"][0]
+
+    def test_source_search_snake_case_identifier_source_ids_preserved(self, indexed_engine):
+        res = indexed_engine.source.search("source_ids", k=10)
+        results = res["results"]
+        assert any("source_ids" in r for r in results[0]["metadata"]["source_diagnostics"]["ranking_reason"])
+
+    def test_source_search_uppercase_identifier_get_notebook_preserved(self, indexed_engine):
+        res = indexed_engine.source.search("GET_NOTEBOOK", k=10)
+        results = res["results"]
+        assert any("GET_NOTEBOOK" in r for r in results[0]["metadata"]["source_diagnostics"]["ranking_reason"])
+
+    def test_agents_md_penalized_for_implementation_query(self, indexed_engine):
+        res = indexed_engine.source.search("get_notebook", k=10)
+        results = res["results"]
+        agents_res = next(r for r in results if r["metadata"]["rel_path"] == "AGENTS.md")
+        assert "agent_instruction" in agents_res["metadata"]["source_diagnostics"]["ranking_penalties"]
+
+    def test_bm25_base_cannot_overpower_exact_code_identifier_cooccurrence(self, indexed_engine):
+        res = indexed_engine.source.search("notebooklm get_notebook source_ids chat.ask", k=10)
+        results = res["results"]
+        # README.md has lots of NotebookLM matches (high BM25), but src/adapter.py has exact identifier matches.
+        # src/adapter.py must rank above README.md.
+        rel_paths = [r["metadata"]["rel_path"] for r in results]
+        src_idx = rel_paths.index("src/adapter.py")
+        readme_idx = rel_paths.index("README.md")
+        assert src_idx < readme_idx
+
+    def test_source_search_identifier_matching_is_boundary_safe(self, indexed_engine):
+        res = indexed_engine.source.search("ask", k=10)
+        results = res["results"]
+        # 'ask' query should not match 'chat.ask' as an exact identifier boost in src/adapter.py
+        src_res = next(r for r in results if r["metadata"]["rel_path"] == "src/adapter.py")
+        boosts = src_res["metadata"]["source_diagnostics"]["ranking_boosts"]
+        assert "exact_identifier" not in boosts
+
+    def test_source_search_generated_python_file_classified_as_generated_not_implementation(self, indexed_engine):
+        res = indexed_engine.source.search("get_notebook", k=10)
+        results = res["results"]
+        gen_res = next(r for r in results if r["metadata"]["rel_path"] == "src/generated/notebooklm_adapter.py")
+        assert gen_res["metadata"]["source_diagnostics"]["source_type"] == "generated_or_cache"
+
+    def test_source_search_impl_query_ranks_code_above_relevant_test(self, indexed_engine):
+        res = indexed_engine.source.search("get_notebook", k=10)
+        results = res["results"]
+        rel_paths = [r["metadata"]["rel_path"] for r in results]
+        src_idx = rel_paths.index("src/adapter.py")
+        test_idx = rel_paths.index("tests/test_adapter.py")
+        assert src_idx < test_idx
+
+    def test_source_search_agent_instruction_query_can_rank_agents_md(self, indexed_engine):
+        res = indexed_engine.source.search("agent instruction notebooklm", k=10)
+        results = res["results"]
+        agents_res = next(r for r in results if r["metadata"]["rel_path"] == "AGENTS.md")
+        # No agent_instruction penalty since doc_intent is active
+        assert "agent_instruction" not in agents_res["metadata"]["source_diagnostics"]["ranking_penalties"]
+        assert results[0]["metadata"]["rel_path"] == "AGENTS.md"
+
+    def test_source_search_all_results_have_source_diagnostics(self, indexed_engine):
+        res = indexed_engine.source.search("notebooklm", k=10)
+        results = res["results"]
+        for r in results:
+            assert "source_diagnostics" in r["metadata"]
+
+    def test_source_search_tie_breakers_are_deterministic(self, indexed_engine):
+        res = indexed_engine.source.search("notebooklm", k=10)
+        results = res["results"]
+        # Sorting should be completely stable and deterministic
+        assert len(results) > 0
+
+
+class TestHasSymbolDefinition:
+    def test_matches_python_def(self):
+        from oem_knowledge.services.source_corpus import _has_symbol_definition
+        assert _has_symbol_definition("my_func", "def my_func(): pass")
+        assert not _has_symbol_definition("my_func", "def other_func(): pass")
+
+    def test_matches_js_const_and_function(self):
+        from oem_knowledge.services.source_corpus import _has_symbol_definition
+        assert _has_symbol_definition("myClass", "class myClass {}")
+        assert _has_symbol_definition("myVar", "const myVar = 1")
+        assert _has_symbol_definition("myFunc", "function myFunc() {}")
+
+

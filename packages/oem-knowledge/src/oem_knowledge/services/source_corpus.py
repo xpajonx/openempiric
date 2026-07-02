@@ -265,9 +265,35 @@ def _guess_file_type(path: Path) -> str:
     return "text"
 
 
-# ============================================================================
-# Source search ranking — intent detection, classification, boosts, diagnostics
-# ============================================================================
+# Ranking Score Weights & Constants
+BOOST_DOTTED_IDENTIFIER = 4.0
+BOOST_SNAKE_IDENTIFIER = 3.0
+BOOST_UPPERCASE_IDENTIFIER = 3.0
+BOOST_CAMEL_IDENTIFIER = 3.0
+BOOST_SYMBOL_DEFINITION = 4.0
+BOOST_PATH_MATCH_MULTIPLIER = 2.0
+
+BOOST_COOCCURRENCE_1 = 2.0
+BOOST_COOCCURRENCE_2 = 4.0
+BOOST_COOCCURRENCE_3_PLUS = 6.0
+
+BOOST_CODE_QUERY_ADAPTER = 6.0
+BOOST_CODE_QUERY_IMPLEMENTATION = 5.0
+BOOST_CODE_QUERY_RELEVANT_TEST_ACTIVE = 12.0
+BOOST_CODE_QUERY_RELEVANT_TEST_INACTIVE = 2.0
+
+BOOST_DOC_QUERY_AGENT = 5.0
+BOOST_DOC_QUERY_DOC = 2.0
+
+PENALTY_AGENT_INSTRUCTION = 10.0
+PENALTY_BROAD_DOC = 8.0
+PENALTY_UNRELATED_TEST_ACTIVE = 6.0
+PENALTY_UNRELATED_TEST_INACTIVE = 10.0
+PENALTY_CONFIG_FILE = 5.0
+PENALTY_GENERATED_OR_CACHE = 15.0
+PENALTY_LARGE_LOW_DENSITY = 5.0
+
+LARGE_DOCUMENT_THRESHOLD_CHARS = 2000
 
 SOURCE_STOPWORDS = {
     "the", "a", "an", "of", "to", "in", "on", "for", "with", "from",
@@ -283,24 +309,37 @@ CODE_SUFFIXES = {".py", ".ts", ".js", ".tsx", ".jsx", ".rs", ".go", ".java", ".k
 
 
 def _extract_source_identifiers(query: str) -> list[str]:
-    dotted = re.findall(r'\b[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]+)+', query)
+    # Extract dotted identifiers (e.g., chat.ask)
+    dotted = re.findall(r'\b[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)+\b', query)
     dotted = [d for d in dotted if not any(
         d.lower().endswith(f".{ext}") for ext in
         ["md", "py", "ts", "js", "json", "yaml", "yml", "toml", "txt", "css", "html", "sh"])]
     dotted = [d for d in dotted if all(len(seg) >= 2 for seg in d.split("."))]
 
-    snake_case = re.findall(r'\b[a-z]+_[a-z]+\w*\b', query)
-    snake_case = [s for s in snake_case if len(s) >= 4]
+    # Extract snake_case identifiers (e.g. source_ids, get_notebook)
+    snake_case = re.findall(r'\b[a-zA-Z_][a-zA-Z0-9_]*_[a-zA-Z0-9_]+\b', query)
 
-    upper_case = re.findall(r'\b[A-Z][A-Z_0-9]{2,}(?:_[A-Z0-9]+)*\b', query)
+    # Extract uppercase constants (e.g., GET_NOTEBOOK)
+    upper_case = re.findall(r'\b[A-Z][A-Z_0-9]+\b', query)
     upper_case = [u for u in upper_case if u not in _UPPER_NOISE]
 
-    pascal_case = re.findall(r'\b[A-Z][a-z]+[A-Z][a-zA-Z]*\b', query)
-    lower_camel = re.findall(r'\b[a-z]+[A-Z][a-zA-Z]*[a-z]\b', query)
+    # Extract CamelCase/PascalCase (e.g. NotebookLM)
+    pascal_case = re.findall(r'\b[A-Z][a-z0-9]+[A-Z][a-zA-Z0-9]*\b', query)
+
+    # Extract camelCase (e.g. getNotebook)
+    lower_camel = re.findall(r'\b[a-z]+[A-Z][a-zA-Z0-9]*\b', query)
 
     all_idents = list(set(dotted + snake_case + upper_case + pascal_case + lower_camel))
-    all_idents = [i for i in all_idents if len(i) >= 3]
-    return all_idents
+    
+    cleaned = []
+    for i in all_idents:
+        if len(i) < 3:
+            continue
+        if i.lower() in SOURCE_STOPWORDS:
+            continue
+        cleaned.append(i)
+        
+    return sorted(cleaned)
 
 
 def _has_boundary_identifier_match(identifier: str, document: str) -> bool:
@@ -309,6 +348,28 @@ def _has_boundary_identifier_match(identifier: str, document: str) -> bool:
         return True
     if re.search(rf'(?<!\w)_{escaped}(?!\w)', document, re.IGNORECASE):
         return True
+    return False
+
+
+def _has_symbol_definition(identifier: str, document: str) -> bool:
+    name = identifier
+    if "." in identifier:
+        name = identifier.split(".")[-1]
+    
+    escaped = re.escape(name)
+    patterns = [
+        rf'\bdef\s+{escaped}\b',
+        rf'\bclass\s+{escaped}\b',
+        rf'\bfunction\s+{escaped}\b',
+        rf'\bconst\s+{escaped}\b',
+        rf'\blet\s+{escaped}\b',
+        rf'\bvar\s+{escaped}\b',
+        rf'\binterface\s+{escaped}\b',
+        rf'\btype\s+{escaped}\b',
+    ]
+    for pattern in patterns:
+        if re.search(pattern, document):
+            return True
     return False
 
 
@@ -347,9 +408,10 @@ def _detect_source_query_intent(query: str) -> dict:
     source_intent = has_identifiers or has_debug
     debug_intent = has_debug
     test_intent = has_test
+    
     doc_intent = any(w in words for w in
-                     ["agent", "instruction", "documentation", "docs", "readme", "help"])
-    config_intent = any(w in words for w in ["config", "configuration", "settings"])
+                     ["agent", "instruction", "instructions", "documentation", "docs", "readme", "help", "claude"])
+    config_intent = any(w in words for w in ["config", "configuration", "settings", "setup", "pyproject", "package"])
 
     return {
         "source_intent": source_intent,
@@ -368,30 +430,36 @@ def _classify_source_result(rel_path: str, document: str, identifiers: list[str]
     prefixed = f"/{rel_lower}"
     name = PurePosixPath(rel_lower).name
 
-    if name in ("agents.md", "claude.md") or "/.agents/" in prefixed:
-        return "agent_instruction"
-    if name == "readme.md":
-        return "readme_doc"
-    if name == "readme.txt":
-        return "readme_doc"
-
-    if "/docs/" in prefixed:
-        return "project_doc"
-
-    if any(p in rel_lower for p in ["/generated/", "/cache/", "/__pycache__/"]) or rel_lower.startswith("generated/"):
+    # Priority 1: generated_or_cache
+    gen_cache_patterns = ["/generated/", "generated/", "/cache/", "cache/", "/.cache/", ".cache/", "/__pycache__/", "__pycache__/", "/build/", "build/", "/dist/", "dist/"]
+    if any(p in prefixed or rel_lower.startswith(p) for p in gen_cache_patterns):
         return "generated_or_cache"
 
+    # Priority 2: agent_instruction
+    if name in ("agents.md", "claude.md") or "/.agents/" in prefixed or rel_lower.startswith(".agents/"):
+        return "agent_instruction"
+
+    # Priority 3: readme_doc / project_doc
+    if name in ("readme.md", "readme.txt") or name.startswith("readme."):
+        return "readme_doc"
+    if "/docs/" in prefixed or rel_lower.startswith("docs/"):
+        return "project_doc"
+
+    # Priority 4: config_file
     suffix = PurePosixPath(rel_lower).suffix
     if suffix in (".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf"):
         return "config_file"
 
+    # Priority 5: relevant_test / unrelated_test
+    # Priority 6: adapter_code / service_code / client_code
+    # Priority 7: implementation_code
     if suffix in CODE_SUFFIXES:
-        is_test = ("/tests/" in f"/{rel_lower}" or name.startswith("test_")
-                   or name.endswith("_test.py"))
-        is_adapter = "adapter" in rel_lower
-        is_service = "service" in rel_lower
-        is_client = "client" in rel_lower
-
+        is_test = ("/tests/" in prefixed or rel_lower.startswith("tests/")
+                   or name.startswith("test_")
+                   or name.endswith("_test.py")
+                   or name.endswith("_test.ts")
+                   or name.endswith("_test.js")
+                   or name.endswith("_test.tsx"))
         if is_test:
             if identifiers and any(
                 _has_boundary_identifier_match(i, document) for i in identifiers
@@ -399,13 +467,15 @@ def _classify_source_result(rel_path: str, document: str, identifiers: list[str]
                 return "relevant_test"
             return "unrelated_test"
 
+        is_adapter = "/adapter" in prefixed or rel_lower.startswith("adapter")
+        is_service = "/service" in prefixed or rel_lower.startswith("service")
+        is_client = "/client" in prefixed or rel_lower.startswith("client")
         if is_adapter:
             return "adapter_code"
         if is_service:
             return "service_code"
         if is_client:
             return "client_code"
-
         return "implementation_code"
 
     return "unknown"
@@ -1358,9 +1428,8 @@ class SourceCorpusService:
             rows = store.iter_chunks()
         finally:
             store.close()
-        bm25_raw = self._bm25_scores(query, [row["document"] for row in rows])
-        max_bm25 = max(bm25_raw) if bm25_raw else 1.0
-        normalized_bm25 = [s / max_bm25 if max_bm25 > 0 else 0.0 for s in bm25_raw]
+        # bm25_scores returns values that are already normalized between 0.0 and 1.0
+        normalized_bm25 = self._bm25_scores(query, [row["document"] for row in rows])
 
         intent = _detect_source_query_intent(query)
         identifiers = intent["identifiers"]
@@ -1383,7 +1452,7 @@ class SourceCorpusService:
                 if _has_boundary_identifier_match(i, document)
             ]
             num_exact = len(matching_idents)
-            cooccurrence = _count_identifier_cooccurrence(identifiers, document)
+            cooccurrence = num_exact
 
             rel_lower = f"/{rel_path.lower()}"
             path_matches = 0
@@ -1397,93 +1466,100 @@ class SourceCorpusService:
             boosts = {}
             reasons = []
 
-            if num_exact > 0:
-                boosts["exact_identifier"] = round(3.0 * num_exact, 2)
+            # Exact identifiers
+            exact_ident_boost = 0.0
+            for ident in identifiers:
+                if _has_boundary_identifier_match(ident, document):
+                    if "." in ident:
+                        exact_ident_boost += BOOST_DOTTED_IDENTIFIER
+                        reasons.append(f"dotted identifier: {ident}")
+                    elif "_" in ident:
+                        exact_ident_boost += BOOST_SNAKE_IDENTIFIER
+                        reasons.append(f"exact identifier: {ident}")
+                    else:
+                        exact_ident_boost += BOOST_CAMEL_IDENTIFIER
+                        reasons.append(f"exact identifier: {ident}")
+                    
+                    if _has_symbol_definition(ident, document):
+                        exact_ident_boost += BOOST_SYMBOL_DEFINITION
+                        reasons.append(f"symbol definition: {ident}")
+            
+            if exact_ident_boost > 0.0:
+                boosts["exact_identifier"] = round(exact_ident_boost, 2)
 
             if cooccurrence >= 3:
-                boosts["identifier_cooccurrence"] = 6.0
+                boosts["identifier_cooccurrence"] = BOOST_COOCCURRENCE_3_PLUS
+                reasons.append("identifier co-occurrence (3+)")
             elif cooccurrence == 2:
-                boosts["identifier_cooccurrence"] = 4.0
+                boosts["identifier_cooccurrence"] = BOOST_COOCCURRENCE_2
+                reasons.append("identifier co-occurrence (2)")
             elif cooccurrence == 1:
-                boosts["identifier_cooccurrence"] = 2.0
+                boosts["identifier_cooccurrence"] = BOOST_COOCCURRENCE_1
+                reasons.append("identifier co-occurrence (1)")
 
             if path_matches > 0:
-                boosts["path_match"] = round(1.5 * path_matches, 2)
+                boosts["path_match"] = round(BOOST_PATH_MATCH_MULTIPLIER * path_matches, 2)
+                reasons.append(f"path match ({path_matches})")
 
             if source_intent or debug_intent or test_intent:
                 if source_type in ("adapter_code", "service_code", "client_code"):
-                    boosts[source_type] = 3.0
-                elif source_type == "implementation_code" and num_exact > 0:
-                    boosts["implementation_code"] = 2.0
+                    boosts[source_type] = BOOST_CODE_QUERY_ADAPTER
+                    reasons.append(f"{source_type.replace('_code', '')} path match")
+                    reasons.append("implementation code file")
+                elif source_type == "implementation_code":
+                    boosts["implementation_code"] = BOOST_CODE_QUERY_IMPLEMENTATION
+                    reasons.append("implementation code file")
                 elif source_type == "relevant_test":
-                    boosts["relevant_test"] = 4.0 if test_intent else 2.0
+                    if test_intent:
+                        boosts["relevant_test"] = BOOST_CODE_QUERY_RELEVANT_TEST_ACTIVE
+                        reasons.append("relevant test")
+                    else:
+                        boosts["relevant_test"] = BOOST_CODE_QUERY_RELEVANT_TEST_INACTIVE
+                        reasons.append("relevant test")
+
+            if doc_intent:
+                if source_type == "agent_instruction":
+                    boosts["agent_instruction"] = BOOST_DOC_QUERY_AGENT
+                    reasons.append("agent instruction query boost")
+                elif source_type in ("readme_doc", "project_doc"):
+                    boosts[source_type] = BOOST_DOC_QUERY_DOC
+                    reasons.append("doc query boost")
 
             penalties = {}
 
             if source_type == "agent_instruction" and not doc_intent:
-                penalties["agent_instruction"] = -5.0
-            elif source_type == "readme_doc" and not doc_intent:
-                penalties["readme_doc"] = -4.0
-            elif source_type == "project_doc" and not doc_intent:
-                penalties["project_doc"] = -3.0
-
+                penalties["agent_instruction"] = PENALTY_AGENT_INSTRUCTION
+                reasons.append("agent_instruction penalty")
+                reasons.append("broad doc / non-implementation penalty")
+            elif source_type == "agent_instruction" and doc_intent:
+                pass
+            elif source_type in ("readme_doc", "project_doc") and not doc_intent:
+                penalties[source_type] = PENALTY_BROAD_DOC
+                reasons.append("broad doc penalty")
+            
             if source_type == "unrelated_test":
                 if not test_intent:
-                    penalties["unrelated_test"] = -3.0
-                elif num_exact == 0:
-                    penalties["unrelated_test"] = -2.0
+                    penalties["unrelated_test"] = PENALTY_UNRELATED_TEST_INACTIVE
+                    reasons.append("unrelated test penalty")
+                else:
+                    penalties["unrelated_test"] = PENALTY_UNRELATED_TEST_ACTIVE
+                    reasons.append("unrelated test penalty")
 
             if source_type == "config_file" and not config_intent:
-                penalties["config_file"] = -2.0
+                penalties["config_file"] = PENALTY_CONFIG_FILE
+                reasons.append("config file penalty")
 
             if source_type == "generated_or_cache":
-                penalties["generated_or_cache"] = -8.0
-
-            if len(document) > 2000 and num_exact == 0:
-                penalties["large_low_density"] = -3.0
-
-            total_boost = round(sum(boosts.values()), 2)
-            total_penalty = round(sum(penalties.values()), 2)
-            final_score = round(base_score + total_boost + total_penalty, 4)
-
-            matching_sorted = sorted(matching_idents, key=lambda x: (x.count("."), x.count("_"), x))
-            for ident in matching_sorted:
-                if "." in ident:
-                    reasons.append(f"dotted identifier: {ident}")
-                elif "_" in ident:
-                    reasons.append(f"identifier: {ident}")
-                else:
-                    reasons.append(f"identifier: {ident}")
-
-            if cooccurrence >= 3:
-                reasons.append("identifier co-occurrence (3+)")
-            elif cooccurrence == 2:
-                reasons.append("identifier co-occurrence (2)")
-            elif cooccurrence == 1:
-                reasons.append("identifier co-occurrence (1)")
-
-            if path_matches > 0:
-                reasons.append(f"path match ({path_matches})")
-
-            if source_type in ("adapter_code", "service_code", "client_code"):
-                reasons.append(f"{source_type.replace('_code', '')} code file")
-            elif source_type == "implementation_code" and num_exact > 0:
-                reasons.append("implementation code file")
-            if source_type == "relevant_test":
-                reasons.append("relevant test")
-
-            if "agent_instruction" in penalties:
-                reasons.append("agent instruction penalty")
-            if "readme_doc" in penalties or "project_doc" in penalties:
-                reasons.append("broad doc penalty")
-            if "unrelated_test" in penalties:
-                reasons.append("unrelated test penalty")
-            if "generated_or_cache" in penalties:
+                penalties["generated_or_cache"] = PENALTY_GENERATED_OR_CACHE
                 reasons.append("generated/cache penalty")
-            if "config_file" in penalties:
-                reasons.append("config file penalty")
-            if "large_low_density" in penalties:
+
+            if len(document) > LARGE_DOCUMENT_THRESHOLD_CHARS and num_exact == 0:
+                penalties["large_low_density"] = PENALTY_LARGE_LOW_DENSITY
                 reasons.append("large low density penalty")
+
+            total_boost = sum(boosts.values())
+            total_penalty = sum(penalties.values())
+            final_score = round(base_score + total_boost - total_penalty, 4)
 
             metadata = dict(row["metadata"])
             metadata["source_type"] = source_type
@@ -1494,6 +1570,12 @@ class SourceCorpusService:
                 "ranking_reason": reasons,
                 "ranking_boosts": boosts,
                 "ranking_penalties": penalties,
+                "exact_identifier_count": num_exact,
+                "query_intent": {
+                    "source_intent": source_intent,
+                    "debug_intent": debug_intent,
+                    "test_intent": test_intent,
+                }
             }
             metadata["rel_path"] = rel_path
             metadata["start_line"] = row["start_line"]
@@ -1509,7 +1591,51 @@ class SourceCorpusService:
                 "score": final_score,
             })
 
-        ranked.sort(key=lambda item: item["score"], reverse=True)
+        TYPE_PRIORITY = {
+            "adapter_code": 10,
+            "service_code": 10,
+            "client_code": 10,
+            "implementation_code": 9,
+            "relevant_test": 8,
+            "config_file": 7,
+            "project_doc": 6,
+            "readme_doc": 5,
+            "agent_instruction": 4,
+            "unrelated_test": 3,
+            "generated_or_cache": 2,
+            "unknown": 1,
+        }
+
+        from functools import cmp_to_key
+
+        def compare_results(a, b):
+            score_diff = a["score"] - b["score"]
+            if abs(score_diff) > 1e-9:
+                return 1 if score_diff > 0 else -1
+                
+            p_a = TYPE_PRIORITY.get(a["metadata"]["source_type"], 0)
+            p_b = TYPE_PRIORITY.get(b["metadata"]["source_type"], 0)
+            if p_a != p_b:
+                return 1 if p_a > p_b else -1
+                
+            c_a = a["metadata"]["source_diagnostics"].get("exact_identifier_count", 0)
+            c_b = b["metadata"]["source_diagnostics"].get("exact_identifier_count", 0)
+            if c_a != c_b:
+                return 1 if c_a > c_b else -1
+                
+            path_a = a["metadata"]["rel_path"]
+            path_b = b["metadata"]["rel_path"]
+            if path_a != path_b:
+                return 1 if path_a < path_b else -1
+                
+            id_a = str(a["id"])
+            id_b = str(b["id"])
+            if id_a != id_b:
+                return 1 if id_a < id_b else -1
+                
+            return 0
+
+        ranked.sort(key=cmp_to_key(compare_results), reverse=True)
         return {
             "status": "success",
             "results": ranked[: max(1, int(k))],
