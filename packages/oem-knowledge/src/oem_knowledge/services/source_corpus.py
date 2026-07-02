@@ -899,7 +899,21 @@ class SourceCorpusService:
                 size_bytes=resolved.stat().st_size
             )
 
-        # 4. Lockfile/large file/binary check (checked before includes/excludes)
+        # 4. Exclude configuration check (before lockfile/large so explicit exclude wins)
+        if config.exclude:
+            exclude_matcher = _IgnoreMatcher(config.exclude)
+            if exclude_matcher.matches(rel_path, is_dir=False):
+                return SourceFileClassification(
+                    path=resolved,
+                    rel_path=rel_path,
+                    eligible=False,
+                    reason="excluded",
+                    file_type="unknown",
+                    language="unknown",
+                    size_bytes=resolved.stat().st_size
+                )
+
+        # 5. Lockfile/large file/binary check
         size_bytes = resolved.stat().st_size
         file_type = _guess_file_type(resolved)
         language = _guess_language(resolved)
@@ -939,20 +953,7 @@ class SourceCorpusService:
                 size_bytes=size_bytes
             )
 
-        # 5. Include/Exclude configuration check
-        if config.exclude:
-            exclude_matcher = _IgnoreMatcher(config.exclude)
-            if exclude_matcher.matches(rel_path, is_dir=False):
-                return SourceFileClassification(
-                    path=resolved,
-                    rel_path=rel_path,
-                    eligible=False,
-                    reason="excluded",
-                    file_type="unknown",
-                    language="unknown",
-                    size_bytes=resolved.stat().st_size
-                )
-
+        # 6. Include configuration check (after lockfile so lockfiles are always metadata-indexed)
         if config.include:
             include_matcher = _IgnoreMatcher(config.include)
             if not include_matcher.matches(rel_path, is_dir=False):

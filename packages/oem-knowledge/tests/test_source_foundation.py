@@ -366,6 +366,27 @@ def test_source_config_exclude_globs_is_loaded_and_applied(temp_project):
     assert real_cls.eligible is True, f"real.py should be eligible: {real_cls.reason}"
     assert gen_cls.eligible is False, f"generated/file.py should be excluded via exclude_globs: {gen_cls.reason}"
 
+def test_source_config_exclude_prevents_lockfile_metadata_only_indexing(temp_project):
+    """Explicit exclude should block lockfiles from metadata-only indexing."""
+    oem_dir = temp_project / ".oem"
+    oem_dir.mkdir(parents=True, exist_ok=True)
+    (oem_dir / "source_index_config.yml").write_text(yaml.safe_dump({
+        "include": ["**/*"],
+        "exclude": ["**/package-lock.json"],
+    }), encoding="utf-8")
+
+    (temp_project / "package-lock.json").write_text('{"lockfileVersion":3}')
+    (temp_project / "main.py").write_text("print('hello')")
+
+    service = SourceCorpusService(temp_project)
+
+    lock_cls = service.classify_file(temp_project / "package-lock.json")
+    main_cls = service.classify_file(temp_project / "main.py")
+
+    assert lock_cls.eligible is False
+    assert lock_cls.reason == "excluded"
+    assert main_cls.eligible is True
+
 def test_source_config_exclude_and_exclude_globs_both_applied(temp_project):
     """Both exclude and exclude_globs should be applied during classification, each in its own slot."""
     oem_dir = temp_project / ".oem"
@@ -396,6 +417,9 @@ def test_source_config_exclude_and_exclude_globs_both_applied(temp_project):
     tmp_cls = service.classify_file(tmp_dir / "file.py")
     gen_cls = service.classify_file(gen_dir / "file.py")
 
-    assert real_cls.eligible is True, f"real.py should be eligible: {real_cls.reason}"
-    assert tmp_cls.eligible is False, f"tmp/file.py should be excluded via exclude: {tmp_cls.reason}"
-    assert gen_cls.eligible is False, f"generated/file.py should be excluded via exclude_globs: {gen_cls.reason}"
+    assert real_cls.eligible is True
+    assert real_cls.reason == "eligible"
+    assert tmp_cls.eligible is False
+    assert tmp_cls.reason == "excluded"
+    assert gen_cls.eligible is False
+    assert gen_cls.reason == "gitignored"
