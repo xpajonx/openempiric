@@ -1034,7 +1034,28 @@ def test_preflight_result_json_serializable(preflight_project: Path):
     assert "active_project" in payload
     assert "matched_memory_summary" in payload
     assert "supporting_reasons" in payload
+    assert "rejected_memory_count" in payload
+    assert "rejection_reasons" in payload
     json.dumps(payload)  # must not raise
+
+
+def test_build_audit_event_includes_rejection_telemetry(preflight_project: Path):
+    from oem_knowledge.preflight.audit import build_audit_event
+    db_path = preflight_project / ".oem" / ".local_vector_db" / "vectors.db"
+    content = "Some random notes about split memory warning."
+    _add_memory_rows(db_path, [
+        ("mem_weak_id", content, {"source": "notes.md", "title": "Random Notes"}),
+    ])
+    result = run_preflight(
+        "Check split memory warning",
+        project=str(preflight_project),
+        write_audit=False,
+    )
+    
+    event = build_audit_event(result)
+    assert event.get("rejected_memory_count", 0) >= 1
+    assert "weak_topic_only" in event.get("rejection_reasons", {})
+    assert event["rejection_reasons"]["weak_topic_only"] >= 1
 
 
 def test_preflight_retrieves_indonesian_essay_workflow_rule_before_acting(preflight_project: Path):

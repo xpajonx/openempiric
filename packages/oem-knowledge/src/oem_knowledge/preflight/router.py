@@ -31,6 +31,15 @@ OPERATION = "run_preflight"
 MEMORY_ROW_LIMIT = 200
 PARAGRAPH_CHAR_LIMIT = 220
 WEAK_TOPIC_ONLY_MEMORY_THRESHOLD = 1.5
+_STRONG_TYPES = {"decision", "failure", "outcome", "technical_handoff", "workaround", "debug_note"}
+_PRESERVE_BOOSTS = {
+    "exact_path_match",
+    "exact_filename_match",
+    "exact_phrase",
+    "workflow_rule",
+    "identifier_cooccurrence",
+    "active_work_signal",
+}
 
 
 def _ensure_tuple(value: Any) -> tuple[str, ...]:
@@ -403,6 +412,16 @@ def _is_query_active_work_aligned(document: str, task_targets: dict) -> bool:
 
 
 def _is_topic_only_memory_match(rm: dict, task_targets: dict) -> bool:
+    """
+    Evaluates whether a memory match is a weak, low-confidence topic-only match.
+    
+    A match is rejected as weak topic-only if:
+    1. Its adjusted score (excluding non-query-aligned active-work/workflow boosts)
+       is <= WEAK_TOPIC_ONLY_MEMORY_THRESHOLD (1.5).
+    2. It does not target a concept or wiki page directly by matching the title.
+    3. It contains no query-aligned exact path/file/phrase/workflow/technical/type-boost evidence.
+    4. It contains topic-match evidence.
+    """
     final_score = rm.get("final_score", rm.get("score", 0.0))
     boosts = rm.get("ranking_boosts", {})
     reasons = rm.get("ranking_reason", [])
@@ -424,7 +443,7 @@ def _is_topic_only_memory_match(rm: dict, task_targets: dict) -> bool:
         if "rule_phrase" in boosts:
             adjusted_score -= boosts["rule_phrase"]
 
-    if adjusted_score > 1.5:
+    if adjusted_score > WEAK_TOPIC_ONLY_MEMORY_THRESHOLD:
         return False
 
     # Title check to rescue concept/wiki files targeted by name
@@ -516,20 +535,10 @@ def is_weak_memory_match(rm: dict, task_targets: dict) -> tuple[bool, str]:
     if not any(b in boosts for b in query_specific_boosts):
         return True, "no_overlap"
         
-    strong_types = {"decision", "failure", "outcome", "technical_handoff", "workaround", "debug_note"}
-    if mem_type in strong_types:
+    if mem_type in _STRONG_TYPES:
         return False, ""
 
-        
-    preserve_boosts = {
-        "exact_path_match",
-        "exact_filename_match",
-        "exact_phrase",
-        "workflow_rule",
-        "identifier_cooccurrence",
-        "active_work_signal"
-    }
-    if any(b in boosts for b in preserve_boosts):
+    if any(b in boosts for b in _PRESERVE_BOOSTS):
         return False, ""
         
     has_semantic = bool(task_targets.get("semantic_terms"))
@@ -566,21 +575,11 @@ def is_only_weak_memory_matches(matched_memory: list, task_targets: dict) -> boo
     if not has_semantic and not has_files and not has_paths and not has_identifiers:
         return True
         
-    strong_types = {"decision", "failure", "outcome", "technical_handoff", "workaround", "debug_note"}
-    preserve_boosts = {
-        "exact_path_match",
-        "exact_filename_match",
-        "exact_phrase",
-        "workflow_rule",
-        "identifier_cooccurrence",
-        "active_work_signal"
-    }
-    
     for mem in matched_memory:
         meta = mem.metadata or {}
         mem_type = meta.get("memory_type")
         boosts = meta.get("ranking_boosts", {})
-        if mem_type in strong_types or any(b in boosts for b in preserve_boosts):
+        if mem_type in _STRONG_TYPES or any(b in boosts for b in _PRESERVE_BOOSTS):
             return False
             
         topic_boost = boosts.get("topic_match", 0.0)

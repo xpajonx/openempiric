@@ -129,6 +129,8 @@ def normalize_preflight_result(
         "selected_workflow": result.selected_workflow,
         "context": result.context,
         "warnings": warnings,
+        "rejected_memory_count": getattr(result, "rejected_memory_count", 0),
+        "rejection_reasons": getattr(result, "rejection_reasons", {}),
     }
 
     if result.active_project:

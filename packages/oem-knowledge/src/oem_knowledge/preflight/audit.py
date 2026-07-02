@@ -21,6 +21,8 @@ def build_audit_event(result: PreflightResult) -> dict[str, object]:
         "matched_skill_ids": [match.id for match in result.matched_skills if match.id],
         "matched_concept_ids": [match.id for match in result.matched_concepts if match.id],
         "project_root": result.project_root,
+        "rejected_memory_count": result.rejected_memory_count,
+        "rejection_reasons": result.rejection_reasons,
     }
 
 
