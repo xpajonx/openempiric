@@ -74,6 +74,8 @@ DEFAULT_SOURCE_CONFIG: dict[str, Any] = {
         "packages/**",
         "tests/**",
         "docs/**",
+        "execution/**",
+        "agent/**",
         "README.md",
         "AGENTS.md",
         "pyproject.toml",
@@ -404,14 +406,14 @@ def _detect_source_query_intent(query: str) -> dict:
     test_signals = {"test", "regression", "pytest", "unittest", "failing"}
     has_test = any(w in words for w in test_signals)
 
-    has_identifiers = len(identifiers) > 0
-    source_intent = has_identifiers or has_debug
-    debug_intent = has_debug
-    test_intent = has_test
-    
     doc_intent = any(w in words for w in
                      ["agent", "instruction", "instructions", "documentation", "docs", "readme", "help", "claude"])
     config_intent = any(w in words for w in ["config", "configuration", "settings", "setup", "pyproject", "package"])
+
+    has_identifiers = len(identifiers) > 0
+    source_intent = (not doc_intent and not config_intent) and (has_identifiers or bool(words))
+    debug_intent = has_debug
+    test_intent = has_test
 
     return {
         "source_intent": source_intent,
@@ -431,7 +433,7 @@ def _classify_source_result(rel_path: str, document: str, identifiers: list[str]
     name = PurePosixPath(rel_lower).name
 
     # Priority 1: generated_or_cache
-    gen_cache_patterns = ["/generated/", "generated/", "/cache/", "cache/", "/.cache/", ".cache/", "/__pycache__/", "__pycache__/", "/build/", "build/", "/dist/", "dist/"]
+    gen_cache_patterns = ["/generated/", "generated/", "/cache/", "cache/", "/.cache/", ".cache/", "/__pycache__/", "__pycache__/", "/build/", "build/", "/dist/", "dist/", "/.obsidian/", ".obsidian/"]
     if any(p in prefixed or rel_lower.startswith(p) for p in gen_cache_patterns):
         return "generated_or_cache"
 
@@ -780,11 +782,22 @@ class SourceCorpusService:
     def load_config(self) -> SourceIndexConfig:
         config_dict = self._load_config()
         include = config_dict.get("include")
-        if include is None:
-            include = list(DEFAULT_SOURCE_CONFIG["include"])
         exclude = config_dict.get("exclude")
         if exclude is None:
             exclude = list(DEFAULT_SOURCE_CONFIG["exclude"])
+        else:
+            exclude = list(exclude)
+
+        if include is None:
+            include = list(DEFAULT_SOURCE_CONFIG["include"])
+        else:
+            include = list(include)
+            old_defaults_1 = {"src/**", "tests/**"}
+            old_defaults_2 = {"src/**", "packages/**", "tests/**", "docs/**", "README.md", "AGENTS.md", "pyproject.toml", "package.json"}
+            has_custom_fields = any(k in config_dict for k in ("max_file_size_bytes", "chunk_lines", "chunk_overlap_lines", "max_read_lines", "max_read_characters"))
+            is_old_defaults = (set(include) == old_defaults_1 or set(include) == old_defaults_2) and not has_custom_fields
+            if is_old_defaults:
+                include = list(DEFAULT_SOURCE_CONFIG["include"])
             
         return SourceIndexConfig(
             include=[str(i) for i in include],
@@ -1009,6 +1022,14 @@ class SourceCorpusService:
         warnings = []
         if not self._config_path().exists():
             warnings.append("config_missing_using_defaults")
+        
+        # Check if execution/ or agent/ is explicitly excluded or skipped by config
+        config = self.load_config()
+        exclude_matcher = _IgnoreMatcher(config.exclude)
+        include_matcher = _IgnoreMatcher(config.include)
+        for path_check in ("execution/test.py", "agent/test.py"):
+            if not include_matcher.matches(path_check, is_dir=False) or exclude_matcher.matches(path_check, is_dir=False):
+                warnings.append(f"implementation_directory_skipped:{path_check.split('/')[0]}")
             
         return SourceDiscoveryResult(
             project_root=str(project_root),
@@ -1412,6 +1433,28 @@ class SourceCorpusService:
 
     def search(self, query: str, k: int = 5) -> dict[str, Any]:
         project_root = self._project_root()
+        query_cleaned = query.strip().strip("'\"")
+        
+        # Path safety/traversal check
+        if "/" in query_cleaned or "\\" in query_cleaned or ".." in query_cleaned:
+            try:
+                test_path = Path(project_root / query_cleaned).resolve()
+                test_path.relative_to(project_root.resolve())
+            except (ValueError, RuntimeError):
+                return {
+                    "status": "no_relevant_source_results",
+                    "results": [],
+                    "warnings": [],
+                    "project_root": str(project_root),
+                }
+
+        if not query.strip():
+            return {
+                "status": "success",
+                "results": [],
+                "warnings": [],
+                "project_root": str(project_root),
+            }
         manifest = self._load_manifest()
         if not self._db_path().exists() or not self._manifest_path().exists():
             return {
@@ -1426,6 +1469,39 @@ class SourceCorpusService:
             rows = store.iter_chunks()
         finally:
             store.close()
+
+        # Check if the query is an exact path query
+        is_exact_path_query = False
+        potential_path = None
+        query_cleaned = query.strip().strip("'\"")
+        
+        try:
+            test_path = Path(project_root / query_cleaned).resolve()
+            if test_path.is_file() and test_path.relative_to(project_root.resolve()):
+                is_exact_path_query = True
+                potential_path = str(test_path.relative_to(project_root.resolve()))
+        except Exception:
+            pass
+
+        if not is_exact_path_query:
+            try:
+                test_path = Path(query_cleaned).resolve()
+                if test_path.is_file() and test_path.relative_to(project_root.resolve()):
+                    is_exact_path_query = True
+                    potential_path = str(test_path.relative_to(project_root.resolve()))
+            except Exception:
+                pass
+
+        if is_exact_path_query:
+            has_indexed_row = any(row["rel_path"] == potential_path for row in rows)
+            if not has_indexed_row:
+                return {
+                    "status": "not_indexed",
+                    "results": [],
+                    "warnings": [f"File {potential_path} exists but is not indexed."],
+                    "project_root": str(project_root),
+                }
+
         # bm25_scores returns values that are already normalized between 0.0 and 1.0
         normalized_bm25 = self._bm25_scores(query, [row["document"] for row in rows])
 
@@ -1459,102 +1535,156 @@ class SourceCorpusService:
 
             boosts = {}
             reasons = []
-
-            # Exact identifiers
-            exact_ident_boost = 0.0
-            for ident in matched_identifiers:
-                if "." in ident:
-                    exact_ident_boost += BOOST_DOTTED_IDENTIFIER
-                    reasons.append(f"dotted identifier: {ident}")
-                elif "_" in ident:
-                    exact_ident_boost += BOOST_SNAKE_IDENTIFIER
-                    reasons.append(f"exact identifier: {ident}")
-                else:
-                    exact_ident_boost += BOOST_CAMEL_IDENTIFIER
-                    reasons.append(f"exact identifier: {ident}")
-                
-                if _has_symbol_definition(ident, document):
-                    exact_ident_boost += BOOST_SYMBOL_DEFINITION
-                    reasons.append(f"symbol definition: {ident}")
-            
-            if exact_ident_boost > 0.0:
-                boosts["exact_identifier"] = round(exact_ident_boost, 2)
-
-            if matched_identifier_count >= 3:
-                boosts["identifier_cooccurrence"] = BOOST_COOCCURRENCE_3_PLUS
-                reasons.append("identifier co-occurrence (3+)")
-            elif matched_identifier_count == 2:
-                boosts["identifier_cooccurrence"] = BOOST_COOCCURRENCE_2
-                reasons.append("identifier co-occurrence (2)")
-            elif matched_identifier_count == 1:
-                boosts["identifier_cooccurrence"] = BOOST_COOCCURRENCE_1
-                reasons.append("identifier co-occurrence (1)")
-
-            if path_matches > 0:
-                boosts["path_match"] = round(BOOST_PATH_MATCH_MULTIPLIER * path_matches, 2)
-                reasons.append(f"path match ({path_matches})")
-
-            if source_intent or debug_intent or test_intent:
-                if source_type in ("adapter_code", "service_code", "client_code"):
-                    boosts[source_type] = BOOST_CODE_QUERY_ADAPTER
-                    reasons.append(f"{source_type.replace('_code', '')} path match")
-                    reasons.append("implementation code file")
-                elif source_type == "implementation_code":
-                    boosts["implementation_code"] = BOOST_CODE_QUERY_IMPLEMENTATION
-                    reasons.append("implementation code file")
-                elif source_type == "relevant_test":
-                    if test_intent:
-                        boosts["relevant_test"] = BOOST_CODE_QUERY_RELEVANT_TEST_ACTIVE
-                        reasons.append("relevant test")
-                    else:
-                        boosts["relevant_test"] = BOOST_CODE_QUERY_RELEVANT_TEST_INACTIVE
-                        reasons.append("relevant test")
-
-            if doc_intent:
-                if source_type == "agent_instruction":
-                    boosts["agent_instruction"] = BOOST_DOC_QUERY_AGENT
-                    reasons.append("agent instruction query boost")
-                elif source_type in ("readme_doc", "project_doc"):
-                    boosts[source_type] = BOOST_DOC_QUERY_DOC
-                    reasons.append("doc query boost")
-
             penalties = {}
 
-            if source_type == "agent_instruction" and not doc_intent:
-                penalties["agent_instruction"] = PENALTY_AGENT_INSTRUCTION
-                reasons.append("agent_instruction penalty")
-                reasons.append("broad doc / non-implementation penalty")
-            elif source_type == "agent_instruction" and doc_intent:
-                pass
-            elif source_type in ("readme_doc", "project_doc") and not doc_intent:
-                penalties[source_type] = PENALTY_BROAD_DOC
-                reasons.append("broad doc penalty")
+            # 1. Metadata-Only detection & demotion before normal boosts
+            metadata = dict(row["metadata"])
+            indexing_mode = metadata.get("indexing_mode")
+            is_metadata_only = (indexing_mode == "metadata_only")
             
-            if source_type == "unrelated_test":
-                if not test_intent:
-                    penalties["unrelated_test"] = PENALTY_UNRELATED_TEST_INACTIVE
-                    reasons.append("unrelated test penalty")
-                else:
-                    penalties["unrelated_test"] = PENALTY_UNRELATED_TEST_ACTIVE
-                    reasons.append("unrelated test penalty")
+            exact_metadata_match = False
+            if is_metadata_only:
+                # check if query exactly matches path or filename
+                exact_metadata_match = (
+                    query_cleaned.lower() == rel_path.lower() or
+                    query_cleaned.lower() == PurePosixPath(rel_path).name.lower()
+                )
 
-            if source_type == "config_file" and not config_intent:
-                penalties["config_file"] = PENALTY_CONFIG_FILE
-                reasons.append("config file penalty")
+            # Symbol definition match
+            has_symbol_def = False
+            for ident in matched_identifiers:
+                if _has_symbol_definition(ident, document):
+                    has_symbol_def = True
+            for word in re.findall(r'\b[a-zA-Z_][a-zA-Z0-9_]*\b', query_cleaned):
+                if _has_symbol_definition(word, document):
+                    has_symbol_def = True
 
-            if source_type == "generated_or_cache":
-                penalties["generated_or_cache"] = PENALTY_GENERATED_OR_CACHE
-                reasons.append("generated/cache penalty")
+            # Positive evidence gating
+            name = PurePosixPath(rel_path).name
+            name_no_ext = PurePosixPath(rel_path).stem
+            query_lower = query_cleaned.lower()
+            exact_path_or_filename_match = (
+                query_lower == rel_path.lower() or 
+                query_lower == name.lower() or 
+                query_lower == name_no_ext.lower() or
+                name_no_ext.lower() in query_lower
+            )
+            
+            has_boost_evidence = (
+                normalized_base_score > 0.0
+                or matched_identifier_count > 0
+                or has_symbol_def
+                or (is_exact_path_query and rel_path == potential_path)
+                or exact_path_or_filename_match
+            )
 
-            if len(document) > LARGE_DOCUMENT_THRESHOLD_CHARS and matched_identifier_count == 0:
-                penalties["large_low_density"] = PENALTY_LARGE_LOW_DENSITY
-                reasons.append("large low density penalty")
+            # Apply boosts if not metadata-only, or if metadata-only is rescued by exact match
+            if not is_metadata_only or exact_metadata_match:
+                
+                # Exact path query boost
+                if is_exact_path_query and rel_path == potential_path:
+                    boosts["exact_path_query"] = 100.0
+                    reasons.append("exact path query match")
+
+                # Exact identifiers
+                exact_ident_boost = 0.0
+                for ident in matched_identifiers:
+                    if "." in ident:
+                        exact_ident_boost += BOOST_DOTTED_IDENTIFIER
+                        reasons.append(f"dotted identifier: {ident}")
+                    elif "_" in ident:
+                        exact_ident_boost += BOOST_SNAKE_IDENTIFIER
+                        reasons.append(f"exact identifier: {ident}")
+                    else:
+                        exact_ident_boost += BOOST_CAMEL_IDENTIFIER
+                        reasons.append(f"exact identifier: {ident}")
+                    
+                    if _has_symbol_definition(ident, document):
+                        exact_ident_boost += BOOST_SYMBOL_DEFINITION
+                        reasons.append(f"symbol definition: {ident}")
+                
+                if exact_ident_boost > 0.0:
+                    boosts["exact_identifier"] = round(exact_ident_boost, 2)
+
+                if matched_identifier_count >= 3:
+                    boosts["identifier_cooccurrence"] = BOOST_COOCCURRENCE_3_PLUS
+                    reasons.append("identifier co-occurrence (3+)")
+                elif matched_identifier_count == 2:
+                    boosts["identifier_cooccurrence"] = BOOST_COOCCURRENCE_2
+                    reasons.append("identifier co-occurrence (2)")
+                elif matched_identifier_count == 1:
+                    boosts["identifier_cooccurrence"] = BOOST_COOCCURRENCE_1
+                    reasons.append("identifier co-occurrence (1)")
+
+                if path_matches > 0:
+                    boosts["path_match"] = round(BOOST_PATH_MATCH_MULTIPLIER * path_matches, 2)
+                    reasons.append(f"path match ({path_matches})")
+
+                if source_intent or debug_intent or test_intent:
+                    if has_boost_evidence:
+                        if source_type in ("adapter_code", "service_code", "client_code"):
+                            boosts[source_type] = BOOST_CODE_QUERY_ADAPTER
+                            reasons.append(f"{source_type.replace('_code', '')} path match")
+                            reasons.append("implementation code file")
+                        elif source_type == "implementation_code":
+                            boosts["implementation_code"] = BOOST_CODE_QUERY_IMPLEMENTATION
+                            reasons.append("implementation code file")
+                        elif source_type == "relevant_test":
+                            if test_intent:
+                                boosts["relevant_test"] = BOOST_CODE_QUERY_RELEVANT_TEST_ACTIVE
+                                reasons.append("relevant test")
+                            else:
+                                boosts["relevant_test"] = BOOST_CODE_QUERY_RELEVANT_TEST_INACTIVE
+                                reasons.append("relevant test")
+
+                if doc_intent:
+                    if source_type == "agent_instruction":
+                        boosts["agent_instruction"] = BOOST_DOC_QUERY_AGENT
+                        reasons.append("agent instruction query boost")
+                    elif source_type in ("readme_doc", "project_doc"):
+                        boosts[source_type] = BOOST_DOC_QUERY_DOC
+                        reasons.append("doc query boost")
+
+            # Penalties
+            if is_metadata_only and not exact_metadata_match:
+                penalties["metadata_only"] = 10.0
+                reasons.append("metadata_only result")
+                reasons.append("implementation boost suppressed: no content evidence")
+            else:
+                if source_type == "agent_instruction" and not doc_intent:
+                    penalties["agent_instruction"] = PENALTY_AGENT_INSTRUCTION
+                    reasons.append("agent_instruction penalty")
+                    reasons.append("broad doc / non-implementation penalty")
+                elif source_type == "agent_instruction" and doc_intent:
+                    pass
+                elif source_type in ("readme_doc", "project_doc") and not doc_intent:
+                    penalties[source_type] = PENALTY_BROAD_DOC
+                    reasons.append("broad doc penalty")
+                
+                if source_type == "unrelated_test":
+                    if not test_intent:
+                        penalties["unrelated_test"] = PENALTY_UNRELATED_TEST_INACTIVE
+                        reasons.append("unrelated test penalty")
+                    else:
+                        penalties["unrelated_test"] = PENALTY_UNRELATED_TEST_ACTIVE
+                        reasons.append("unrelated test penalty")
+
+                if source_type == "config_file" and not config_intent:
+                    penalties["config_file"] = PENALTY_CONFIG_FILE
+                    reasons.append("config file penalty")
+
+                if source_type == "generated_or_cache":
+                    penalties["generated_or_cache"] = PENALTY_GENERATED_OR_CACHE
+                    reasons.append("generated/cache penalty")
+
+                if len(document) > LARGE_DOCUMENT_THRESHOLD_CHARS and matched_identifier_count == 0:
+                    penalties["large_low_density"] = PENALTY_LARGE_LOW_DENSITY
+                    reasons.append("large low density penalty")
 
             total_boost = sum(boosts.values())
             total_penalty = sum(penalties.values())
             final_score = round(normalized_base_score + total_boost - total_penalty, 4)
 
-            metadata = dict(row["metadata"])
             metadata["source_type"] = source_type
             metadata["source_diagnostics"] = {
                 "source_type": source_type,
@@ -1564,6 +1694,7 @@ class SourceCorpusService:
                 "ranking_boosts": boosts,
                 "ranking_penalties": penalties,
                 "exact_identifier_count": matched_identifier_count,
+                "exact_path_query": (is_exact_path_query and rel_path == potential_path),
                 "query_intent": {
                     "source_intent": source_intent,
                     "debug_intent": debug_intent,
@@ -1629,9 +1760,50 @@ class SourceCorpusService:
             return 0
 
         ranked.sort(key=cmp_to_key(compare_results), reverse=True)
+
+        filtered_ranked = []
+        for r in ranked:
+            score = r["score"]
+            diag = r["metadata"]["source_diagnostics"]
+            source_type = r["metadata"]["source_type"]
+            
+            # Check if it has positive evidence
+            has_positive_evidence = (
+                diag["exact_identifier_count"] > 0
+                or any("symbol definition" in reason for reason in diag["ranking_reason"])
+                or any("path match" in reason for reason in diag["ranking_reason"])
+                or diag.get("exact_path_query", False)
+            )
+
+            # Exclude zero or negative scores
+            if score <= 0.0:
+                continue
+
+            # Skip demotion filtering for legitimate doc/config queries
+            is_legit_doc_config_query = (
+                (doc_intent and source_type in ("agent_instruction", "readme_doc", "project_doc"))
+                or (config_intent and source_type == "config_file")
+            )
+
+            # For very weak topic-only results:
+            if not has_positive_evidence and not is_legit_doc_config_query:
+                # Exclude if score is low, unless it's a single-word query
+                if score < 5.0 and len(query_cleaned.split()) > 1:
+                    continue
+
+            filtered_ranked.append(r)
+
+        if not filtered_ranked:
+            return {
+                "status": "no_relevant_source_results",
+                "results": [],
+                "warnings": [],
+                "project_root": str(project_root),
+            }
+
         return {
             "status": "success",
-            "results": ranked[: max(1, int(k))],
+            "results": filtered_ranked[: max(1, int(k))],
             "warnings": [],
             "project_root": str(project_root),
         }
