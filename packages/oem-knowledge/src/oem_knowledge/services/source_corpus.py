@@ -101,6 +101,11 @@ DEFAULT_SOURCE_CONFIG: dict[str, Any] = {
     "exclude_globs": [],
 }
 
+# Historical migration sentinel: old default max_read_lines value.
+# Used to detect projects that manually customized max_read_lines while still using
+# old include patterns that need upgrading to new defaults (adds execution/** and agent/**).
+_OLD_DEFAULT_MAX_READ_LINES = 200
+
 MANDATORY_EXCLUDED_DIRS = {
     ".git",
     ".oem",
@@ -794,7 +799,7 @@ class SourceCorpusService:
             include = list(include)
             old_defaults_1 = {"src/**", "tests/**"}
             old_defaults_2 = {"src/**", "packages/**", "tests/**", "docs/**", "README.md", "AGENTS.md", "pyproject.toml", "package.json"}
-            is_old_defaults = (set(include) == old_defaults_1 or set(include) == old_defaults_2) and config_dict.get("max_read_lines") != 200
+            is_old_defaults = (set(include) == old_defaults_1 or set(include) == old_defaults_2) and config_dict.get("max_read_lines") != _OLD_DEFAULT_MAX_READ_LINES
             if is_old_defaults:
                 include = list(DEFAULT_SOURCE_CONFIG["include"])
             

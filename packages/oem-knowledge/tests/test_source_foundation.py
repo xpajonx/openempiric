@@ -289,3 +289,51 @@ def test_source_discovery_rejects_absolute_path_outside_project(temp_project):
     classification = service.classify_file(abs_path)
     assert classification.eligible is False
     assert classification.reason == "outside_project_symlink"
+
+def test_source_config_old_defaults_upgrade_triggers_with_custom_max_read_lines(temp_project):
+    """Old include patterns should be upgraded to new defaults when max_read_lines differs from sentinel."""
+    oem_dir = temp_project / ".oem"
+    oem_dir.mkdir(parents=True, exist_ok=True)
+    (oem_dir / "source_index_config.yml").write_text(yaml.safe_dump({
+        "include": ["src/**", "tests/**"],
+        "max_read_lines": 300,  # Different from sentinel 200, triggers upgrade
+    }), encoding="utf-8")
+
+    service = SourceCorpusService(temp_project)
+    config = service.load_config()
+
+    # Should include the new defaults (execution/**, agent/**)
+    assert "execution/**" in config.include
+    assert "agent/**" in config.include
+
+def test_source_config_old_defaults_upgrade_skipped_with_sentinel_max_read_lines(temp_project):
+    """Old include patterns should NOT be upgraded when max_read_lines matches sentinel 200."""
+    oem_dir = temp_project / ".oem"
+    oem_dir.mkdir(parents=True, exist_ok=True)
+    (oem_dir / "source_index_config.yml").write_text(yaml.safe_dump({
+        "include": ["src/**", "tests/**"],
+        "max_read_lines": 200,  # Sentinel value, skips upgrade
+    }), encoding="utf-8")
+
+    service = SourceCorpusService(temp_project)
+    config = service.load_config()
+
+    # Should NOT be upgraded - kept original include
+    assert "execution/**" not in config.include
+    assert "agent/**" not in config.include
+    assert config.include == ["src/**", "tests/**"]
+
+def test_source_config_old_defaults_upgrade_triggers_with_missing_max_read_lines(temp_project):
+    """Old include patterns should be upgraded when max_read_lines key is absent (default used)."""
+    oem_dir = temp_project / ".oem"
+    oem_dir.mkdir(parents=True, exist_ok=True)
+    (oem_dir / "source_index_config.yml").write_text(yaml.safe_dump({
+        "include": ["src/**", "tests/**"],
+    }), encoding="utf-8")
+
+    service = SourceCorpusService(temp_project)
+    config = service.load_config()
+
+    # Default max_read_lines is 400, so upgrade should trigger
+    assert "execution/**" in config.include
+    assert "agent/**" in config.include
