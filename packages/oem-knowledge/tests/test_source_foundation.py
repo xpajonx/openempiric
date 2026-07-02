@@ -425,3 +425,59 @@ def test_source_config_exclude_and_exclude_globs_both_applied(temp_project):
     assert tmp_cls.reason == "excluded"
     assert gen_cls.eligible is False
     assert gen_cls.reason == "gitignored"
+
+def test_exclude_globs_fnmatch_fallback_star_star(temp_project, monkeypatch):
+    """exclude_globs with ** should work in fallback mode when pathspec is unavailable."""
+    import oem_knowledge.services.source_corpus as source_corpus
+
+    monkeypatch.setattr(source_corpus, "pathspec", None)
+
+    oem_dir = temp_project / ".oem"
+    oem_dir.mkdir(parents=True, exist_ok=True)
+    (oem_dir / "source_index_config.yml").write_text(yaml.safe_dump({
+        "include": ["src/**"],
+        "exclude_globs": ["src/gen/**"],
+    }), encoding="utf-8")
+
+    src_dir = temp_project / "src"
+    src_dir.mkdir(parents=True, exist_ok=True)
+    (src_dir / "real.py").write_text("print('real')")
+    gen_dir = src_dir / "gen" / "deep"
+    gen_dir.mkdir(parents=True, exist_ok=True)
+    (gen_dir / "file.py").write_text("print('generated')")
+
+    service = SourceCorpusService(temp_project)
+
+    real_cls = service.classify_file(src_dir / "real.py")
+    gen_cls = service.classify_file(gen_dir / "file.py")
+
+    assert real_cls.eligible is True
+    assert gen_cls.eligible is False
+    assert gen_cls.reason == "gitignored"
+
+def test_implementation_directory_gitignored_warning(temp_project):
+    """discover_files warns when gitignore blocks execution/ or agent/."""
+    oem_dir = temp_project / ".oem"
+    oem_dir.mkdir(parents=True, exist_ok=True)
+    (oem_dir / "source_index_config.yml").write_text(yaml.safe_dump({
+        "include": ["execution/**", "agent/**", "src/**"],
+    }), encoding="utf-8")
+
+    (temp_project / ".gitignore").write_text("execution/**\nagent/**\n", encoding="utf-8")
+
+    execution_dir = temp_project / "execution"
+    execution_dir.mkdir(parents=True, exist_ok=True)
+    (execution_dir / "main.py").write_text("def run(): pass")
+    agent_dir = temp_project / "agent"
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    (agent_dir / "helper.py").write_text("def help(): pass")
+
+    service = SourceCorpusService(temp_project)
+    res = service.discover_files()
+
+    assert any("implementation_directory_gitignored:execution" in w for w in res.warnings), (
+        f"Expected gitignored:execution warning in {res.warnings}"
+    )
+    assert any("implementation_directory_gitignored:agent" in w for w in res.warnings), (
+        f"Expected gitignored:agent warning in {res.warnings}"
+    )

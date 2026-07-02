@@ -532,6 +532,35 @@ class _IgnoreMatcher:
                 matched = normalized == base or normalized.startswith(base + "/")
             elif "/" not in pat:
                 matched = fnmatch.fnmatch(basename, pat) or fnmatch.fnmatch(normalized, pat)
+            elif "**" in pat:
+                segments = pat.split("/")
+                regex_parts = []
+                for idx, segment in enumerate(segments):
+                    if segment == "**":
+                        if idx == 0:
+                            regex_parts.append("(?:|.*/)")
+                        elif idx == len(segments) - 1:
+                            regex_parts.append("(?:/.*)?")
+                        else:
+                            regex_parts.append("(?:/[^/]*(?:/[^/]*)*)?")
+                    else:
+                        seg_regex = ""
+                        i = 0
+                        while i < len(segment):
+                            c = segment[i]
+                            if c == "*":
+                                seg_regex += "[^/]*"
+                                i += 1
+                            elif c == "?":
+                                seg_regex += "[^/]"
+                                i += 1
+                            else:
+                                seg_regex += re.escape(c)
+                                i += 1
+                        if idx > 0 and segments[idx - 1] != "**":
+                            regex_parts.append("/")
+                        regex_parts.append(seg_regex)
+                matched = re.match("^" + "".join(regex_parts) + "$", normalized) is not None
             else:
                 matched = fnmatch.fnmatch(normalized, pat)
             if matched:
@@ -1046,6 +1075,14 @@ class SourceCorpusService:
         for path_check in ("execution/test.py", "agent/test.py"):
             if not include_matcher.matches(path_check, is_dir=False) or exclude_matcher.matches(path_check, is_dir=False):
                 warnings.append(f"implementation_directory_skipped:{path_check.split('/')[0]}")
+
+        # Also check if gitignore/oemignore patterns would block these dirs
+        ignore_matcher = self._build_ignore_matcher({
+            "exclude_globs": config.exclude_globs
+        })
+        for path_check in ("execution/test.py", "agent/test.py"):
+            if ignore_matcher.matches(path_check, is_dir=False):
+                warnings.append(f"implementation_directory_gitignored:{path_check.split('/')[0]}")
             
         return SourceDiscoveryResult(
             project_root=str(project_root),
