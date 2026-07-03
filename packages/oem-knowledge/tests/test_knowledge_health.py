@@ -905,3 +905,54 @@ def test_health_summary_message_distinguishes_legacy_vs_unavailable(engine, tmp_
     console_out = "\n".join(printed_lines)
     assert "Stale reference checking is unavailable" in console_out
     assert "likely legacy concepts from before reference tracking" not in console_out
+
+
+def test_health_summary_message_splits_legacy_and_never_referenced(engine, tmp_path):
+    from oem_knowledge.cli.commands.knowledge import run_knowledge_command
+    from unittest.mock import MagicMock
+    
+    args = MagicMock()
+    args.command = "health"
+    args.project = str(tmp_path)
+    args.stale_sessions = 5
+    args.similarity_threshold = 0.85
+    args.json = False
+    
+    printed_lines = []
+    def mock_print(val):
+        printed_lines.append(val)
+        
+    stale_mock = [
+        {
+            "concept_id": "concept_009",
+            "canonical_name": "Legacy Concept",
+            "stale_status": "legacy_no_reference_metadata",
+            "sessions_since_reference": None,
+            "last_referenced_session": "",
+            "reference_confidence": "unknown",
+            "severity": "info",
+        },
+        {
+            "concept_id": "concept_010",
+            "canonical_name": "Never Ref Concept",
+            "stale_status": "never_referenced_since_tracking_enabled",
+            "sessions_since_reference": None,
+            "last_referenced_session": "",
+            "reference_confidence": "unknown",
+            "severity": "info",
+        }
+    ]
+    
+    lines_captured = []
+    def mock_render(title, lines, status="ok"):
+        lines_captured.extend(lines)
+        return "mocked panel"
+    
+    with patch("oem_knowledge.services.state.StateService.detect_stale_concepts", return_value=stale_mock):
+        with patch("oem_knowledge.cli.commands.knowledge.render_panel", mock_render):
+            with patch("builtins.print", mock_print):
+                run_knowledge_command(args)
+            
+    console_out = "\n".join(lines_captured)
+    assert "likely legacy concepts from before reference tracking" in console_out
+    assert "were created after tracking was enabled but have never been referenced" in console_out
