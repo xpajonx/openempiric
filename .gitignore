@@ -86,6 +86,7 @@ scratch/
 # Agent scaffolding
 AGENTS.md
 CLAUDE.md
+oem_code_review_spec.md
 init.sh
 
 # Local build-in-public drafts
