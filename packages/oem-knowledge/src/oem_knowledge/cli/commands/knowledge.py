@@ -549,8 +549,9 @@ def _run_knowledge_command_impl(args):
 
         # Stale concepts section
         lines.append("Stale Concepts:")
-        history_unavailable = sum(1 for s in stale if s.get("stale_status") == "reference_history_unavailable")
-        other_unknown = unknown_ref - history_unavailable
+        history_unavailable = stale_ref_summary["reference_history_unavailable"]
+        legacy_or_never = stale_ref_summary["legacy_no_reference_metadata"] + stale_ref_summary["never_referenced_since_tracking_enabled"]
+        missing_or_mismatched = stale_ref_summary["reference_metadata_missing"] + stale_ref_summary["reference_session_missing"]
 
         if history_unavailable > 0:
             lines.append(
@@ -558,10 +559,17 @@ def _run_knowledge_command_impl(args):
             )
             lines.append("")
 
-        if other_unknown > 0:
+        if legacy_or_never > 0:
             lines.append(
-                f"  Stale reference metadata: {other_unknown} concepts have unknown reference history, "
+                f"  Stale reference metadata: {legacy_or_never} concepts have unknown reference history, "
                 "likely legacy concepts from before reference tracking. This is informational and not a release blocker."
+            )
+            lines.append("")
+
+        if missing_or_mismatched > 0:
+            lines.append(
+                f"  Stale reference metadata: {missing_or_mismatched} concepts have missing or mismatched reference session/metadata. "
+                "This is informational and not a release blocker."
             )
             lines.append("")
 
