@@ -35,6 +35,15 @@ def _preflight_next_steps(payload: dict) -> list[str]:
     return steps[:2]
 
 
+UNKNOWN_REFERENCE_STATUSES = (
+    "legacy_no_reference_metadata",
+    "never_referenced_since_tracking_enabled",
+    "reference_metadata_missing",
+    "reference_session_missing",
+    "reference_history_unavailable",
+)
+
+
 def run_knowledge_command(args):
     import sys
     from oem_knowledge.fs import LockTimeoutError
@@ -492,18 +501,11 @@ def _run_knowledge_command_impl(args):
         registry = eng.state._load_registry(project)
         total_concepts = len(registry)
 
-        confirmed_stale = sum(1 for s in stale if s.get("stale_status") == "stale")
-        unknown_ref = sum(1 for s in stale if s.get("stale_status") in (
-            "legacy_no_reference_metadata", "reference_metadata_missing",
-            "reference_session_missing", "reference_history_unavailable",
-            "never_referenced_since_tracking_enabled"
-        ))
+        from collections import Counter
+        status_counts = Counter(s.get("stale_status") for s in stale)
 
-        legacy_no_ref = sum(1 for s in stale if s.get("stale_status") == "legacy_no_reference_metadata")
-        never_ref = sum(1 for s in stale if s.get("stale_status") == "never_referenced_since_tracking_enabled")
-        metadata_missing = sum(1 for s in stale if s.get("stale_status") == "reference_metadata_missing")
-        session_missing = sum(1 for s in stale if s.get("stale_status") == "reference_session_missing")
-        history_unavailable = sum(1 for s in stale if s.get("stale_status") == "reference_history_unavailable")
+        confirmed_stale = status_counts["stale"]
+        unknown_ref = sum(status_counts[status] for status in UNKNOWN_REFERENCE_STATUSES)
 
         known_recent = total_concepts - confirmed_stale - unknown_ref
         stale_ref_summary = {
@@ -511,11 +513,11 @@ def _run_knowledge_command_impl(args):
             "active_stale": confirmed_stale,  # preserve compatibility
             "unknown_reference": unknown_ref,
             "known_recent": max(0, known_recent),
-            "legacy_no_reference_metadata": legacy_no_ref,
-            "never_referenced_since_tracking_enabled": never_ref,
-            "reference_metadata_missing": metadata_missing,
-            "reference_session_missing": session_missing,
-            "reference_history_unavailable": history_unavailable,
+            "legacy_no_reference_metadata": status_counts["legacy_no_reference_metadata"],
+            "never_referenced_since_tracking_enabled": status_counts["never_referenced_since_tracking_enabled"],
+            "reference_metadata_missing": status_counts["reference_metadata_missing"],
+            "reference_session_missing": status_counts["reference_session_missing"],
+            "reference_history_unavailable": status_counts["reference_history_unavailable"],
         }
 
         health_res["stale_reference_summary"] = stale_ref_summary
