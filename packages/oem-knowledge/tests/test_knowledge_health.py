@@ -831,7 +831,15 @@ def test_health_json_output_preserves_existing_keys(engine, tmp_path):
     # Verify new keys are present
     assert "stale_reference_summary" in report
     assert "stale_concepts" in report
-    assert report["stale_reference_summary"]["unknown_reference"] == 1
+    summary = report["stale_reference_summary"]
+    assert "confirmed_stale" in summary
+    assert "unknown_reference" in summary
+    assert "legacy_no_reference_metadata" in summary
+    assert "reference_session_missing" in summary
+    assert "reference_history_unavailable" in summary
+    assert "never_referenced_since_tracking_enabled" in summary
+    assert "reference_metadata_missing" in summary
+    assert summary["unknown_reference"] == 1
 
 
 def test_health_supports_iso8601_creation_timestamp_watermark_check(engine, tmp_path):

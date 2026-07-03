@@ -492,29 +492,30 @@ def _run_knowledge_command_impl(args):
         registry = eng.state._load_registry(project)
         total_concepts = len(registry)
 
-        active_stale = sum(1 for s in stale if s.get("stale_status") == "stale")
+        confirmed_stale = sum(1 for s in stale if s.get("stale_status") == "stale")
         unknown_ref = sum(1 for s in stale if s.get("stale_status") in (
             "legacy_no_reference_metadata", "reference_metadata_missing",
             "reference_session_missing", "reference_history_unavailable",
             "never_referenced_since_tracking_enabled"
         ))
 
-        unknown_breakdown = {}
-        for status in (
-            "legacy_no_reference_metadata", "reference_metadata_missing",
-            "reference_session_missing", "reference_history_unavailable",
-            "never_referenced_since_tracking_enabled"
-        ):
-            count = sum(1 for s in stale if s.get("stale_status") == status)
-            if count > 0:
-                unknown_breakdown[status] = count
+        legacy_no_ref = sum(1 for s in stale if s.get("stale_status") == "legacy_no_reference_metadata")
+        never_ref = sum(1 for s in stale if s.get("stale_status") == "never_referenced_since_tracking_enabled")
+        metadata_missing = sum(1 for s in stale if s.get("stale_status") == "reference_metadata_missing")
+        session_missing = sum(1 for s in stale if s.get("stale_status") == "reference_session_missing")
+        history_unavailable = sum(1 for s in stale if s.get("stale_status") == "reference_history_unavailable")
 
-        known_recent = total_concepts - active_stale - unknown_ref
+        known_recent = total_concepts - confirmed_stale - unknown_ref
         stale_ref_summary = {
-            "active_stale": active_stale,
+            "confirmed_stale": confirmed_stale,
+            "active_stale": confirmed_stale,  # preserve compatibility
             "unknown_reference": unknown_ref,
             "known_recent": max(0, known_recent),
-            **unknown_breakdown
+            "legacy_no_reference_metadata": legacy_no_ref,
+            "never_referenced_since_tracking_enabled": never_ref,
+            "reference_metadata_missing": metadata_missing,
+            "reference_session_missing": session_missing,
+            "reference_history_unavailable": history_unavailable,
         }
 
         health_res["stale_reference_summary"] = stale_ref_summary
