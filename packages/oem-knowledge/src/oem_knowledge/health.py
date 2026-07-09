@@ -357,14 +357,21 @@ def build_health_report(
                 age = max(0.0, (now_dt - updated_dt).total_seconds())
             except Exception:
                 pass
-        working_set_report = {
-            "exists": True,
-            "updated_at": ws.updated_at,
-            "age": age,
-            "active_work_item": ws.active_work_item,
-            "active_files_count": len(ws.active_files),
-            "active_concepts_count": len(ws.active_concepts),
-        }
+    from oem_knowledge.runtime.working_set import get_resume_status
+    status_info = get_resume_status(project)
+    
+    working_set_report = {
+        "exists": status_info["exists"],
+        "updated_at": ws.updated_at if ws else None,
+        "age": status_info["working_set_age"],
+        "active_work_item": ws.active_work_item if ws else None,
+        "active_files_count": len(ws.active_files) if ws else 0,
+        "active_concepts_count": len(ws.active_concepts) if ws else 0,
+        "working_set_source": status_info["working_set_source"],
+        "working_set_age": status_info["working_set_age"],
+        "resume_source": status_info["resume_source"],
+        "resume_reason": status_info["resume_reason"],
+    }
 
     report = {
         **legacy,
@@ -379,6 +386,10 @@ def build_health_report(
         "active_work": active_work,
         "concept_integrity": legacy.get("concept_integrity", {}),
         "working_set": working_set_report,
+        "working_set_source": status_info["working_set_source"],
+        "working_set_age": status_info["working_set_age"],
+        "resume_source": status_info["resume_source"],
+        "resume_reason": status_info["resume_reason"],
     }
     return report
 

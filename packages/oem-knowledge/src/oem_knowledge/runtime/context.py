@@ -24,6 +24,11 @@ def _compile_oem_context(eng: KnowledgeEngine) -> dict:
                 stem = Path(f).stem
                 if stem.startswith("concept_") and stem in registry:
                     rec_ids.add(stem)
+            
+            # Boost active concepts directly
+            for cid in session_state.get("active_concepts", []):
+                if cid in registry:
+                    rec_ids.add(cid)
         except Exception:
             pass
 

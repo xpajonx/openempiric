@@ -274,3 +274,168 @@ def test_no_write_when_unchanged(engine, tmp_path):
     # Verify mtime and updated_at did not change
     assert ws_path.stat().st_mtime == first_mtime
     assert load_working_set(project=str(tmp_path)).updated_at == first_updated_at
+
+
+def test_resume_prefers_newer_working_set(engine, tmp_path):
+    # Set handoff timestamp (old)
+    handoff_path = engine._resolve_harness(str(tmp_path)) / "session-handoff.json"
+    handoff_path.parent.mkdir(parents=True, exist_ok=True)
+    handoff_path.write_text(json.dumps({
+        "schema_version": "1.0.0",
+        "active_work_item": "handoff-work",
+        "updated_at": "2026-07-09T09:00:00Z"
+    }), encoding="utf-8")
+    
+    # Set working set timestamp (new)
+    ws_path = engine.layout(str(tmp_path)).working_set_path
+    ws_path.parent.mkdir(parents=True, exist_ok=True)
+    ws_path.write_text(json.dumps({
+        "schema_version": 1,
+        "updated_at": "2026-07-09T10:00:00Z",
+        "workspace_root": str(tmp_path.resolve()),
+        "active_work_item": "ws-work",
+        "active_topic": "ws-topic",
+        "active_task": "ws-task",
+        "active_files": ["src/helper.py"],
+        "active_concepts": ["concept-1"]
+    }), encoding="utf-8")
+    
+    # Call restore_session_state
+    state = engine.restore_session_state(str(tmp_path))
+    assert state["resume_source"] == "working_set"
+    assert state["active_work_item"] == "ws-work"
+    assert state["active_topic"] == "ws-topic"
+    assert state["active_task"] == "ws-task"
+    assert "src/helper.py" in state["recommended_files"]
+    assert "concept-1" in state["active_concepts"]
+
+
+def test_resume_falls_back_to_handoff(engine, tmp_path):
+    # Set handoff timestamp (new)
+    handoff_path = engine._resolve_harness(str(tmp_path)) / "session-handoff.json"
+    handoff_path.parent.mkdir(parents=True, exist_ok=True)
+    handoff_path.write_text(json.dumps({
+        "schema_version": "1.0.0",
+        "active_work_item": "handoff-work",
+        "active_topic": "handoff-topic",
+        "active_task": "handoff-task",
+        "updated_at": "2026-07-09T11:00:00Z"
+    }), encoding="utf-8")
+    
+    # Set working set timestamp (old)
+    ws_path = engine.layout(str(tmp_path)).working_set_path
+    ws_path.parent.mkdir(parents=True, exist_ok=True)
+    ws_path.write_text(json.dumps({
+        "schema_version": 1,
+        "updated_at": "2026-07-09T10:00:00Z",
+        "workspace_root": str(tmp_path.resolve()),
+        "active_work_item": "ws-work"
+    }), encoding="utf-8")
+    
+    # Call restore_session_state
+    state = engine.restore_session_state(str(tmp_path))
+    assert state["resume_source"] == "session_handoff"
+    assert state["active_work_item"] == "handoff-work"
+    assert state["active_topic"] == "handoff-topic"
+    assert state["active_task"] == "handoff-task"
+    assert "active_concepts" not in state
+
+
+def test_missing_working_set(engine, tmp_path):
+    # No working set exists, but handoff does
+    handoff_path = engine._resolve_harness(str(tmp_path)) / "session-handoff.json"
+    handoff_path.parent.mkdir(parents=True, exist_ok=True)
+    handoff_path.write_text(json.dumps({
+        "schema_version": "1.0.0",
+        "active_work_item": "handoff-only-work",
+        "updated_at": "2026-07-09T11:00:00Z"
+    }), encoding="utf-8")
+    
+    state = engine.restore_session_state(str(tmp_path))
+    assert state["resume_source"] == "session_handoff"
+    assert state["active_work_item"] == "handoff-only-work"
+
+
+def test_corrupt_working_set(engine, tmp_path):
+    # Set handoff
+    handoff_path = engine._resolve_harness(str(tmp_path)) / "session-handoff.json"
+    handoff_path.parent.mkdir(parents=True, exist_ok=True)
+    handoff_path.write_text(json.dumps({
+        "schema_version": "1.0.0",
+        "active_work_item": "handoff-work",
+        "updated_at": "2026-07-09T11:00:00Z"
+    }), encoding="utf-8")
+    
+    # Write corrupt working set
+    ws_path = engine.layout(str(tmp_path)).working_set_path
+    ws_path.parent.mkdir(parents=True, exist_ok=True)
+    ws_path.write_text("{corrupt_json", encoding="utf-8")
+    
+    # Call restore_session_state (should fall back to handoff due to corruption)
+    state = engine.restore_session_state(str(tmp_path))
+    assert state["resume_source"] == "session_handoff"
+    assert state["active_work_item"] == "handoff-work"
+    assert "resume_reason" in state
+    assert "corrupt" in state["resume_reason"]
+
+
+def test_health_reports_resume_source(engine, tmp_path):
+    # Write working set (newer)
+    ws_path = engine.layout(str(tmp_path)).working_set_path
+    ws_path.parent.mkdir(parents=True, exist_ok=True)
+    ws_path.write_text(json.dumps({
+        "schema_version": 1,
+        "updated_at": "2026-07-09T12:00:00Z",
+        "workspace_root": str(tmp_path.resolve()),
+        "active_work_item": "health-ws"
+    }), encoding="utf-8")
+    
+    # Write handoff (older)
+    handoff_path = engine._resolve_harness(str(tmp_path)) / "session-handoff.json"
+    handoff_path.parent.mkdir(parents=True, exist_ok=True)
+    handoff_path.write_text(json.dumps({
+        "schema_version": "1.0.0",
+        "active_work_item": "health-handoff",
+        "updated_at": "2026-07-09T11:00:00Z"
+    }), encoding="utf-8")
+    
+    report = build_health_report(str(tmp_path), include_daemon_runtime=False)
+    assert report["resume_source"] == "working_set"
+    assert "working_set_source" in report
+    assert report["working_set"]["resume_source"] == "working_set"
+    assert report["working_set"]["resume_reason"] == "working_set is newer than session-handoff"
+
+
+def test_resume_is_read_only_regression(engine, tmp_path):
+    # Set newer working set
+    ws_path = engine.layout(str(tmp_path)).working_set_path
+    ws_path.parent.mkdir(parents=True, exist_ok=True)
+    ws_path.write_text(json.dumps({
+        "schema_version": 1,
+        "updated_at": "2026-07-09T12:00:00Z",
+        "workspace_root": str(tmp_path.resolve()),
+        "active_work_item": "ws-ro"
+    }), encoding="utf-8")
+    
+    # Set older handoff
+    handoff_path = engine._resolve_harness(str(tmp_path)) / "session-handoff.json"
+    handoff_path.parent.mkdir(parents=True, exist_ok=True)
+    handoff_content = json.dumps({
+        "schema_version": "1.0.0",
+        "active_work_item": "handoff-ro",
+        "updated_at": "2026-07-09T11:00:00Z"
+    })
+    handoff_path.write_text(handoff_content, encoding="utf-8")
+    
+    # Get initial mtimes
+    ws_mtime = ws_path.stat().st_mtime
+    handoff_mtime = handoff_path.stat().st_mtime
+    
+    # Call restore_session_state
+    state = engine.restore_session_state(str(tmp_path))
+    
+    # Verify no files were mutated (read-only regression check)
+    assert ws_path.stat().st_mtime == ws_mtime
+    assert handoff_path.stat().st_mtime == handoff_mtime
+    assert handoff_path.read_text(encoding="utf-8") == handoff_content
+

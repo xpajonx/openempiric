@@ -4,6 +4,14 @@ import json
 from oem_knowledge.ui import render_panel
 
 def run_working_set_command(args) -> None:
+    action = getattr(args, "working_set_action", "show")
+    if action == "status":
+        run_status(args)
+    else:
+        run_show(args)
+
+
+def run_show(args) -> None:
     project = getattr(args, "project", None)
     if project == ".":
         project = None
@@ -39,3 +47,32 @@ def run_working_set_command(args) -> None:
         f"confidence:       {ws.confidence}",
     ]
     print(render_panel("OEM Working Set", lines, status="ok"))
+
+
+def run_status(args) -> None:
+    project = getattr(args, "project", None)
+    if project == ".":
+        project = None
+
+    from oem_knowledge.runtime.working_set import get_resume_status
+    status_info = get_resume_status(project)
+    
+    if getattr(args, "json", False):
+        data = {
+            "resume_source": status_info["resume_source"],
+            "freshness": status_info["freshness"],
+            "age": status_info["working_set_age"],
+        }
+        print(json.dumps(data, indent=2))
+        return
+        
+    age_str = "None"
+    if status_info["working_set_age"] is not None:
+        age_str = f"{status_info['working_set_age']:.1f}s"
+        
+    lines = [
+        f"Resume source: {status_info['resume_source']}",
+        f"Freshness:     {status_info['freshness']}",
+        f"Age:           {age_str}",
+    ]
+    print(render_panel("Working Set Status", lines, status="ok"))

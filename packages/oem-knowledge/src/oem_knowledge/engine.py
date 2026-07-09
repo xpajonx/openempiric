@@ -501,7 +501,60 @@ class KnowledgeEngine:
 
         global_concepts = []
 
-        return {
+        from oem_knowledge.runtime.working_set import get_resume_status, load_working_set
+        
+        status_info = get_resume_status(project or self.project_path)
+        ws_active_concepts = []
+        resume_source = status_info["resume_source"]
+        
+        active_work_item = None
+        active_topic = None
+        active_task = None
+        
+        if resume_source == "working_set":
+            ws = load_working_set(project or self.project_path)
+            if ws:
+                active_work_item = ws.active_work_item
+                active_topic = ws.active_topic
+                active_task = ws.active_task
+                
+                # Restore goal and open questions to active_goals
+                if ws.goal:
+                    if ws.goal not in active_goals:
+                        active_goals.insert(0, ws.goal)
+                if ws.open_questions:
+                    for q in ws.open_questions:
+                        if q not in active_goals:
+                            active_goals.append(q)
+                
+                # Restore blockers
+                if ws.blocked_by:
+                    for b in ws.blocked_by:
+                        if b not in blockers:
+                            blockers.append(b)
+                
+                # Prepend active_files to recommended_files (filter duplicates)
+                if ws.active_files:
+                    seen = set(rec_files)
+                    for f in reversed(ws.active_files):
+                        if f not in seen:
+                            rec_files.insert(0, f)
+                            seen.add(f)
+                            
+                # Restore active_concepts
+                if ws.active_concepts:
+                    ws_active_concepts = list(ws.active_concepts)
+        else:
+            from oem_knowledge.runtime.active_work import resolve_active_work_identity
+            try:
+                ident = resolve_active_work_identity(h)
+                active_work_item = ident.active_work_item
+                active_topic = ident.active_topic
+                active_task = ident.active_task
+            except Exception:
+                pass
+                
+        res = {
             "status": "success",
             "active_goals": active_goals[:5],
             "blockers": blockers[:5],
@@ -509,7 +562,16 @@ class KnowledgeEngine:
             "recommended_files": rec_files,
             "query_context": keywords[:60],
             "global_concepts": global_concepts,
+            "active_work_item": active_work_item,
+            "active_topic": active_topic,
+            "active_task": active_task,
+            "resume_source": resume_source,
+            "resume_reason": status_info["resume_reason"],
         }
+        if ws_active_concepts:
+            res["active_concepts"] = ws_active_concepts
+            
+        return res
 
 
 

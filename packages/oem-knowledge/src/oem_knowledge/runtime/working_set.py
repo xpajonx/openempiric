@@ -176,3 +176,109 @@ def merge_working_set(project: str | Path | None = None, **kwargs) -> WorkingSet
     engine = KnowledgeEngine(project)
     service = WorkingSetService(engine)
     return service.merge(**kwargs)
+
+
+def get_resume_status(project: str | Path | None = None) -> dict:
+    from oem_knowledge.engine import KnowledgeEngine
+    from datetime import datetime, timezone
+    
+    engine = KnowledgeEngine(project)
+    harness = engine._resolve_harness(project)
+    ws_path = harness / "state" / "working_set.json"
+    
+    ws_exists = ws_path.exists()
+    ws_corrupt = False
+    ws = None
+    
+    if ws_exists:
+        try:
+            ws = load_working_set(project)
+            if ws is None:
+                ws_corrupt = True
+        except Exception:
+            ws_corrupt = True
+            
+    # Timestamps
+    ws_ts = 0.0
+    ws_age = None
+    if ws is not None and not ws_corrupt:
+        if ws.updated_at:
+            try:
+                iso_str = ws.updated_at
+                if iso_str.endswith("Z"):
+                    iso_str = iso_str[:-1] + "+00:00"
+                dt = datetime.fromisoformat(iso_str)
+                ws_ts = dt.timestamp()
+                now_dt = datetime.now(timezone.utc)
+                ws_age = max(0.0, (now_dt - dt).total_seconds())
+            except Exception:
+                pass
+        if ws_ts == 0.0:
+            try:
+                ws_ts = ws_path.stat().st_mtime
+                ws_age = max(0.0, time.time() - ws_ts)
+            except Exception:
+                pass
+
+    # Determine handoff timestamp
+    handoff_ts = 0.0
+    has_handoff_ts = False
+    
+    # 1. session-handoff.json
+    hj = harness / "session-handoff.json"
+    if hj.exists():
+        try:
+            content = hj.read_text(encoding="utf-8")
+            data = json.loads(content)
+            updated_at = data.get("updated_at")
+            if updated_at:
+                if updated_at.endswith("Z"):
+                    updated_at = updated_at[:-1] + "+00:00"
+                handoff_ts = datetime.fromisoformat(updated_at).timestamp()
+                has_handoff_ts = True
+        except Exception:
+            pass
+        if not has_handoff_ts:
+            try:
+                handoff_ts = hj.stat().st_mtime
+                has_handoff_ts = True
+            except Exception:
+                pass
+
+    # 2. session-handoff.md files (only fallback if json didn't provide a timestamp)
+    if not has_handoff_ts:
+        for md_file in [harness / "session-handoff.md", harness / "state" / "session-handoff.md"]:
+            if md_file.exists():
+                try:
+                    handoff_ts = max(handoff_ts, md_file.stat().st_mtime)
+                except Exception:
+                    pass
+
+    if not ws_exists:
+        resume_source = "session_handoff"
+        freshness = "handoff is newer"
+        resume_reason = "working set missing"
+    elif ws_corrupt:
+        resume_source = "session_handoff"
+        freshness = "handoff is newer"
+        resume_reason = "working set corrupt"
+    else:
+        if ws_ts > handoff_ts:
+            resume_source = "working_set"
+            freshness = "working_set is newer"
+            resume_reason = "working_set is newer than session-handoff"
+        else:
+            resume_source = "session_handoff"
+            freshness = "handoff is newer"
+            resume_reason = "session-handoff is newer or equal"
+
+    return {
+        "working_set_source": str(ws_path),
+        "working_set_age": ws_age,
+        "resume_source": resume_source,
+        "freshness": freshness,
+        "resume_reason": resume_reason,
+        "exists": ws_exists and not ws_corrupt,
+        "corrupt": ws_corrupt,
+    }
+

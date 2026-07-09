@@ -567,6 +567,10 @@ def _setup_parser() -> argparse.ArgumentParser:
     working_set_show_p.add_argument("--project", type=str, default="")
     working_set_show_p.add_argument("--json", action="store_true", help="Output in raw JSON format")
 
+    working_set_status_p = working_set_sub.add_parser("status", help="Show working set status (resume source, freshness, age)")
+    working_set_status_p.add_argument("--project", type=str, default="")
+    working_set_status_p.add_argument("--json", action="store_true", help="Output in raw JSON format")
+
     sub._choices_actions = [
         a for a in sub._choices_actions if a.help is not argparse.SUPPRESS
     ]
