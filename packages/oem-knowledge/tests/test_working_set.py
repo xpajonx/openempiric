@@ -509,3 +509,64 @@ def test_checkpoint_pruning_limit(engine, tmp_path):
     assert cps[0]["checkpoint_reason"] == "step_2"
 
 
+def test_working_set_compaction_pruning(engine, tmp_path):
+    from oem_knowledge.runtime.working_set import compact_working_set, load_working_set
+    
+    large_files = [f"file_{i}.py" for i in range(30)]
+    large_concepts = [f"concept_{i}" for i in range(40)]
+    large_memory_ids = [f"mem_{i}" for i in range(60)]
+    large_blocked_by = [f"blocker_{i}" for i in range(15)]
+    large_open_questions = [f"question_{i}" for i in range(15)]
+    
+    ws_path = engine.layout(str(tmp_path)).working_set_path
+    ws_path.parent.mkdir(parents=True, exist_ok=True)
+    ws_path.write_text(json.dumps({
+        "schema_version": 1,
+        "workspace_root": str(tmp_path.resolve()),
+        "active_files": large_files,
+        "active_concepts": large_concepts,
+        "active_memory_ids": large_memory_ids,
+        "blocked_by": large_blocked_by,
+        "open_questions": large_open_questions,
+    }), encoding="utf-8")
+    
+    ws = load_working_set(project=str(tmp_path))
+    assert len(ws.active_files) == 30
+    assert len(ws.blocked_by) == 15
+    assert len(ws.open_questions) == 15
+    
+    success = compact_working_set(project=str(tmp_path))
+    assert success is True
+    
+    ws_after = load_working_set(project=str(tmp_path))
+    assert len(ws_after.active_files) == 20
+    assert len(ws_after.active_concepts) == 30
+    assert len(ws_after.active_memory_ids) == 50
+    assert len(ws_after.blocked_by) == 10
+    assert len(ws_after.open_questions) == 10
+    
+    assert ws_after.active_files[-1] == "file_29.py"
+    assert ws_after.active_files[0] == "file_10.py"
+    assert ws_after.blocked_by[-1] == "blocker_14"
+    assert ws_after.blocked_by[0] == "blocker_5"
+
+
+def test_working_set_compaction_preserves_text(engine, tmp_path):
+    from oem_knowledge.runtime.working_set import compact_working_set, load_working_set, update_working_set
+    
+    goal_text = "This is a long goal " * 50
+    update_working_set(
+        project=str(tmp_path),
+        goal=goal_text,
+        current_problem="Problem description",
+    )
+    
+    success = compact_working_set(project=str(tmp_path))
+    assert success is True
+    
+    ws = load_working_set(project=str(tmp_path))
+    assert ws.goal == goal_text
+    assert ws.current_problem == "Problem description"
+
+
+

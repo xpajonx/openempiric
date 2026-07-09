@@ -7,6 +7,8 @@ def run_working_set_command(args) -> None:
     action = getattr(args, "working_set_action", "show")
     if action == "status":
         run_status(args)
+    elif action == "compact":
+        run_compact(args)
     else:
         run_show(args)
 
@@ -76,3 +78,22 @@ def run_status(args) -> None:
         f"Age:           {age_str}",
     ]
     print(render_panel("Working Set Status", lines, status="ok"))
+
+
+def run_compact(args) -> None:
+    project = getattr(args, "project", None)
+    if project == ".":
+        project = None
+
+    from oem_knowledge.runtime.working_set import compact_working_set
+    success = compact_working_set(project)
+
+    if getattr(args, "json", False):
+        print(json.dumps({"success": success}, indent=2))
+        return
+
+    if success:
+        print("Successfully compacted working set (pruned active lists to defined caps).")
+    else:
+        print("Error: Failed to compact working set.", file=sys.stderr)
+        sys.exit(1)

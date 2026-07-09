@@ -430,3 +430,28 @@ def list_checkpoints(project: str | Path | None = None) -> list[dict]:
     except Exception:
         return []
 
+
+def compact_working_set(project: str | Path | None = None) -> bool:
+    from oem_knowledge.runtime.working_set import load_working_set, save_working_set
+    try:
+        ws = load_working_set(project)
+        if ws is None:
+            return False
+
+        if len(ws.active_files) > 20:
+            ws.active_files = ws.active_files[-20:]
+        if len(ws.active_concepts) > 30:
+            ws.active_concepts = ws.active_concepts[-30:]
+        if len(ws.active_memory_ids) > 50:
+            ws.active_memory_ids = ws.active_memory_ids[-50:]
+        if len(ws.blocked_by) > 10:
+            ws.blocked_by = ws.blocked_by[-10:]
+        if len(ws.open_questions) > 10:
+            ws.open_questions = ws.open_questions[-10:]
+
+        save_working_set(ws, project)
+        return True
+    except Exception as e:
+        logger.warning("Failed to compact working set: %s", e)
+        return False
+

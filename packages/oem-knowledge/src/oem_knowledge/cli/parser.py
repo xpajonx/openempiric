@@ -571,6 +571,10 @@ def _setup_parser() -> argparse.ArgumentParser:
     working_set_status_p.add_argument("--project", type=str, default="")
     working_set_status_p.add_argument("--json", action="store_true", help="Output in raw JSON format")
 
+    working_set_compact_p = working_set_sub.add_parser("compact", help="Deterministically prune/compact working set lists to their capped bounds")
+    working_set_compact_p.add_argument("--project", type=str, default="")
+    working_set_compact_p.add_argument("--json", action="store_true", help="Output result in raw JSON format")
+
     checkpoint_p = sub.add_parser("checkpoint", help="[User] Manage working set checkpoints")
     checkpoint_sub = checkpoint_p.add_subparsers(dest="checkpoint_action", required=True)
     
