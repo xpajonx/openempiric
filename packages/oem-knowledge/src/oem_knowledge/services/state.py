@@ -810,6 +810,14 @@ class StateService:
         with open(outcomes_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(log_entry) + "\n")
 
+        # Create checkpoint on successful implementation milestones
+        if outcome in ("success", "success_with_warnings"):
+            from oem_knowledge.runtime.working_set import create_checkpoint
+            try:
+                create_checkpoint(reason="implementation_success", project=project)
+            except Exception as e:
+                logger.warning("Failed to create implementation_success checkpoint: %s", e)
+
         # Conditional structured handoff update — only for explicit project-level outcomes
         if project and isinstance(project, str) and outcome in ("success", "failure", "partial"):
             try:

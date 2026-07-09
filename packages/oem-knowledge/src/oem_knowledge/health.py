@@ -357,8 +357,34 @@ def build_health_report(
                 age = max(0.0, (now_dt - updated_dt).total_seconds())
             except Exception:
                 pass
-    from oem_knowledge.runtime.working_set import get_resume_status
+    from oem_knowledge.runtime.working_set import get_resume_status, list_checkpoints
     status_info = get_resume_status(project)
+    checkpoints = list_checkpoints(project)
+    
+    checkpoint_count = len(checkpoints)
+    latest_checkpoint_name = checkpoints[-1]["name"] if checkpoints else None
+    latest_checkpoint_age = None
+    if checkpoints:
+        latest_cp = checkpoints[-1]
+        if latest_cp.get("updated_at"):
+            try:
+                from datetime import datetime, timezone
+                iso_str = latest_cp["updated_at"]
+                if iso_str.endswith("Z"):
+                    iso_str = iso_str[:-1] + "+00:00"
+                dt = datetime.fromisoformat(iso_str)
+                latest_checkpoint_age = max(0.0, (datetime.now(timezone.utc) - dt).total_seconds())
+            except Exception:
+                pass
+        if latest_checkpoint_age is None:
+            try:
+                latest_checkpoint_age = max(0.0, time.time() - Path(latest_cp["path"]).stat().st_mtime)
+            except Exception:
+                pass
+                
+    checkpoints_freshness = "ok"
+    if latest_checkpoint_age is not None and latest_checkpoint_age > 86400.0:
+        checkpoints_freshness = "stale"
     
     working_set_report = {
         "exists": status_info["exists"],
@@ -371,6 +397,10 @@ def build_health_report(
         "working_set_age": status_info["working_set_age"],
         "resume_source": status_info["resume_source"],
         "resume_reason": status_info["resume_reason"],
+        "checkpoint_count": checkpoint_count,
+        "latest_checkpoint_name": latest_checkpoint_name,
+        "latest_checkpoint_age": latest_checkpoint_age,
+        "checkpoints_freshness": checkpoints_freshness,
     }
 
     report = {
@@ -390,6 +420,10 @@ def build_health_report(
         "working_set_age": status_info["working_set_age"],
         "resume_source": status_info["resume_source"],
         "resume_reason": status_info["resume_reason"],
+        "checkpoint_count": checkpoint_count,
+        "latest_checkpoint_name": latest_checkpoint_name,
+        "latest_checkpoint_age": latest_checkpoint_age,
+        "checkpoints_freshness": checkpoints_freshness,
     }
     return report
 

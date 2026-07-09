@@ -73,3 +73,6 @@ def main():
     elif args.command == "working-set":
         from .commands.working_set import run_working_set_command
         run_working_set_command(args)
+    elif args.command == "checkpoint":
+        from .commands.checkpoint import run_checkpoint_command
+        run_checkpoint_command(args)

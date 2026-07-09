@@ -30,6 +30,7 @@ class WorkingSet(BaseModel):
     open_questions: List[str] = Field(default_factory=list)
 
     confidence: str = "unknown"
+    checkpoint_reason: Optional[str] = None
 
 
 class WorkingSetService:
@@ -281,4 +282,151 @@ def get_resume_status(project: str | Path | None = None) -> dict:
         "exists": ws_exists and not ws_corrupt,
         "corrupt": ws_corrupt,
     }
+
+
+def create_checkpoint(reason: str, project: str | Path | None = None) -> Path | None:
+    from oem_knowledge.engine import KnowledgeEngine
+    import json
+    from datetime import datetime, timezone
+
+    try:
+        engine = KnowledgeEngine(project)
+        harness = engine._resolve_harness(project)
+        ws_path = harness / "state" / "working_set.json"
+
+        if ws_path.exists():
+            try:
+                data = json.loads(ws_path.read_text(encoding="utf-8"))
+            except Exception:
+                data = {}
+        else:
+            data = {}
+
+        if "workspace_root" not in data:
+            data["workspace_root"] = str(engine.layout().root.parent.resolve())
+        data["checkpoint_reason"] = reason
+        data["updated_at"] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+        ws = WorkingSet(**data)
+        content = json.dumps(ws.model_dump() if hasattr(ws, "model_dump") else ws.dict(), indent=2) + "\n"
+
+        checkpoints_dir = harness / "state" / "checkpoints"
+        checkpoints_dir.mkdir(parents=True, exist_ok=True)
+
+        ts_str = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S_%f')
+        cp_name = f"checkpoint_{ts_str}.json"
+        cp_path = checkpoints_dir / cp_name
+
+        cp_path.write_text(content, encoding="utf-8")
+        prune_checkpoints(checkpoints_dir)
+        return cp_path
+    except Exception as e:
+        logger.warning("Failed to create checkpoint: %s", e)
+        return None
+
+
+def prune_checkpoints(checkpoints_dir: Path) -> None:
+    existing_files = list(checkpoints_dir.glob("checkpoint_*.json"))
+    existing_files.sort(key=lambda x: x.name)
+    if len(existing_files) > 20:
+        to_delete = existing_files[:-20]
+        for f in to_delete:
+            try:
+                f.unlink()
+            except Exception:
+                pass
+
+
+def restore_checkpoint(target: str, project: str | Path | None = None) -> bool:
+    from oem_knowledge.engine import KnowledgeEngine
+    try:
+        engine = KnowledgeEngine(project)
+        harness = engine._resolve_harness(project)
+        checkpoints_dir = harness / "state" / "checkpoints"
+        ws_path = harness / "state" / "working_set.json"
+
+        if not checkpoints_dir.exists():
+            return False
+
+        target_str = str(target).strip()
+        cp_path = None
+
+        if target_str.endswith(".json"):
+            p = checkpoints_dir / target_str
+            if p.exists():
+                cp_path = p
+        else:
+            p = checkpoints_dir / f"{target_str}.json"
+            if p.exists():
+                cp_path = p
+            else:
+                p = checkpoints_dir / f"checkpoint_{target_str}.json"
+                if p.exists():
+                    cp_path = p
+
+        if cp_path is None:
+            candidates = []
+            for f in checkpoints_dir.glob("checkpoint_*.json"):
+                if target_str in f.name:
+                    candidates.append(f)
+            if len(candidates) == 1:
+                cp_path = candidates[0]
+
+        if cp_path is None or not cp_path.exists():
+            return False
+
+        content = cp_path.read_text(encoding="utf-8")
+        data = json.loads(content)
+        WorkingSet(**data)
+
+        ws_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = ws_path.with_name(f".working_set.json.{int(time.time() * 1000000)}.tmp")
+        tmp.write_text(content, encoding="utf-8")
+        tmp.replace(ws_path)
+        return True
+    except Exception as e:
+        logger.warning("Failed to restore checkpoint: %s", e)
+        return False
+
+
+def list_checkpoints(project: str | Path | None = None) -> list[dict]:
+    from oem_knowledge.engine import KnowledgeEngine
+    try:
+        engine = KnowledgeEngine(project)
+        harness = engine._resolve_harness(project)
+        checkpoints_dir = harness / "state" / "checkpoints"
+        if not checkpoints_dir.exists():
+            return []
+
+        files = list(checkpoints_dir.glob("checkpoint_*.json"))
+        files.sort(key=lambda x: x.name)
+
+        out = []
+        for f in files:
+            updated_at = None
+            checkpoint_reason = None
+            active_work_item = None
+            goal = None
+            try:
+                data = json.loads(f.read_text(encoding="utf-8"))
+                updated_at = data.get("updated_at")
+                checkpoint_reason = data.get("checkpoint_reason")
+                active_work_item = data.get("active_work_item")
+                goal = data.get("goal")
+            except Exception:
+                pass
+            
+            name_id = f.stem[11:] if len(f.stem) > 11 else f.stem
+            out.append({
+                "name": f.name,
+                "name_id": name_id,
+                "path": str(f),
+                "updated_at": updated_at,
+                "checkpoint_reason": checkpoint_reason,
+                "active_work_item": active_work_item,
+                "goal": goal,
+            })
+        return out
+    except Exception:
+        return []
 

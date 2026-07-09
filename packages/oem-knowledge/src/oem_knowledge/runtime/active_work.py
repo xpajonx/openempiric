@@ -1263,4 +1263,10 @@ def repair_active_work(
 
     report["changes_applied"] = changes
     report["status"] = "repaired" if changes else "ok"
+    if apply and changes:
+        from oem_knowledge.runtime.working_set import create_checkpoint
+        try:
+            create_checkpoint(reason="health_repair", project=str(memory_root))
+        except Exception:
+            pass
     return report

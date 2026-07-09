@@ -485,6 +485,13 @@ def recover_reflection(
 
         status = "success"
 
+    if apply and changed_files:
+        from oem_knowledge.runtime.working_set import create_checkpoint
+        try:
+            create_checkpoint(reason="health_repair", project=project)
+        except Exception:
+            pass
+
     from oem_knowledge.runtime.result import make_result
     return make_result(
         status=status,
@@ -882,6 +889,13 @@ def recover_registry(
                 except Exception:
                     pass
             raise RuntimeError(f"Registry recovery apply failed: {err}")
+
+    if apply and repairs:
+        from oem_knowledge.runtime.working_set import create_checkpoint
+        try:
+            create_checkpoint(reason="health_repair", project=project)
+        except Exception:
+            pass
 
     from oem_knowledge.runtime.result import make_result
     return make_result(

@@ -571,6 +571,22 @@ def _setup_parser() -> argparse.ArgumentParser:
     working_set_status_p.add_argument("--project", type=str, default="")
     working_set_status_p.add_argument("--json", action="store_true", help="Output in raw JSON format")
 
+    checkpoint_p = sub.add_parser("checkpoint", help="[User] Manage working set checkpoints")
+    checkpoint_sub = checkpoint_p.add_subparsers(dest="checkpoint_action", required=True)
+    
+    checkpoint_list_p = checkpoint_sub.add_parser("list", help="List all checkpoints")
+    checkpoint_list_p.add_argument("--project", type=str, default="")
+    checkpoint_list_p.add_argument("--json", action="store_true", help="Output in raw JSON format")
+    
+    checkpoint_restore_p = checkpoint_sub.add_parser("restore", help="Restore working set to a checkpoint")
+    checkpoint_restore_p.add_argument("target", type=str, help="Checkpoint index or filename")
+    checkpoint_restore_p.add_argument("--project", type=str, default="")
+    checkpoint_restore_p.add_argument("--json", action="store_true", help="Output result in raw JSON format")
+    
+    checkpoint_create_p = checkpoint_sub.add_parser("create", help="Create a manual working set checkpoint")
+    checkpoint_create_p.add_argument("--project", type=str, default="")
+    checkpoint_create_p.add_argument("--json", action="store_true", help="Output result in raw JSON format")
+
     sub._choices_actions = [
         a for a in sub._choices_actions if a.help is not argparse.SUPPRESS
     ]

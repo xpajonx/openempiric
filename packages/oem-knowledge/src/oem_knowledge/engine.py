@@ -1521,6 +1521,11 @@ project: {project or "default"}
                         project=resolved_project_arg,
                         active_memory_ids=memory_ids,
                     )
+            
+            # Create checkpoint if preflight decision is required
+            if result.decision == "required":
+                from oem_knowledge.runtime.working_set import create_checkpoint
+                create_checkpoint(reason="preflight_required", project=resolved_project_arg)
         except Exception as ws_update_err:
             logger.warning("Failed to update working set in preflight: %s", ws_update_err)
 

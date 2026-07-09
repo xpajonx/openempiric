@@ -439,3 +439,73 @@ def test_resume_is_read_only_regression(engine, tmp_path):
     assert handoff_path.stat().st_mtime == handoff_mtime
     assert handoff_path.read_text(encoding="utf-8") == handoff_content
 
+
+def test_checkpoint_creation_milestones(engine, tmp_path):
+    from oem_knowledge.runtime.working_set import create_checkpoint, list_checkpoints, update_working_set
+    
+    update_working_set(project=str(tmp_path), active_work_item="milestone-test")
+    
+    cp = create_checkpoint(reason="manual", project=str(tmp_path))
+    assert cp is not None
+    assert cp.exists()
+    
+    cps = list_checkpoints(project=str(tmp_path))
+    assert len(cps) == 1
+    assert cps[0]["checkpoint_reason"] == "manual"
+    assert cps[0]["active_work_item"] == "milestone-test"
+
+
+def test_checkpoint_restore_validation(engine, tmp_path):
+    from oem_knowledge.runtime.working_set import create_checkpoint, restore_checkpoint, load_working_set, update_working_set
+    
+    update_working_set(project=str(tmp_path), active_work_item="initial-state")
+    cp_path = create_checkpoint(reason="manual", project=str(tmp_path))
+    
+    update_working_set(project=str(tmp_path), active_work_item="modified-state")
+    assert load_working_set(project=str(tmp_path)).active_work_item == "modified-state"
+    
+    success = restore_checkpoint(cp_path.name, project=str(tmp_path))
+    assert success is True
+    assert load_working_set(project=str(tmp_path)).active_work_item == "initial-state"
+
+
+def test_checkpoint_restore_corruption_regression(engine, tmp_path):
+    from oem_knowledge.runtime.working_set import create_checkpoint, restore_checkpoint, load_working_set, update_working_set
+    from pathlib import Path
+    
+    update_working_set(project=str(tmp_path), active_work_item="clean-state")
+    
+    harness = engine._resolve_harness(str(tmp_path))
+    checkpoints_dir = harness / "state" / "checkpoints"
+    checkpoints_dir.mkdir(parents=True, exist_ok=True)
+    
+    corrupt_path = checkpoints_dir / "checkpoint_20260709_120000_111111.json"
+    corrupt_path.write_text("{invalid_json", encoding="utf-8")
+    
+    invalid_schema_path = checkpoints_dir / "checkpoint_20260709_130000_222222.json"
+    invalid_schema_path.write_text(json.dumps({"schema_version": 1, "missing_root": "value"}), encoding="utf-8")
+    
+    success = restore_checkpoint(corrupt_path.name, project=str(tmp_path))
+    assert success is False
+    assert load_working_set(project=str(tmp_path)).active_work_item == "clean-state"
+    
+    success2 = restore_checkpoint(invalid_schema_path.name, project=str(tmp_path))
+    assert success2 is False
+    assert load_working_set(project=str(tmp_path)).active_work_item == "clean-state"
+
+
+def test_checkpoint_pruning_limit(engine, tmp_path):
+    from oem_knowledge.runtime.working_set import create_checkpoint, list_checkpoints, update_working_set
+    import time
+    
+    update_working_set(project=str(tmp_path), active_work_item="prune-test")
+    
+    for i in range(22):
+        create_checkpoint(reason=f"step_{i}", project=str(tmp_path))
+        time.sleep(0.005)
+        
+    cps = list_checkpoints(project=str(tmp_path))
+    assert len(cps) == 20
+    assert cps[0]["checkpoint_reason"] == "step_2"
+
+
