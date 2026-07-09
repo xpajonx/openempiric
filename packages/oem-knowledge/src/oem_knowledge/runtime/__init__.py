@@ -15,4 +15,13 @@ def __getattr__(name: str):
     elif name == "SessionState":
         from .session import SessionState
         return SessionState
+    elif name in ("load_working_set", "save_working_set", "update_working_set", "merge_working_set"):
+        from .working_set import load_working_set, save_working_set, update_working_set, merge_working_set
+        locals_map = {
+            "load_working_set": load_working_set,
+            "save_working_set": save_working_set,
+            "update_working_set": update_working_set,
+            "merge_working_set": merge_working_set,
+        }
+        return locals_map[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

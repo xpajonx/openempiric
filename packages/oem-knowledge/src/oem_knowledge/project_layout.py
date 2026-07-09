@@ -64,6 +64,10 @@ class ProjectLayout:
         return self.root / "state"
 
     @property
+    def working_set_path(self) -> Path:
+        return self.state_dir / "working_set.json"
+
+    @property
     def graph_dir(self) -> Path:
         return self.root / "graph"
 

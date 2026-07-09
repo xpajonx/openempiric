@@ -70,3 +70,6 @@ def main():
     elif args.command == "instructions":
         from .commands.instructions import run_instructions_command
         run_instructions_command(args)
+    elif args.command == "working-set":
+        from .commands.working_set import run_working_set_command
+        run_working_set_command(args)

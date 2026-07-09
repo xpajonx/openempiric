@@ -561,6 +561,12 @@ def _setup_parser() -> argparse.ArgumentParser:
     inst_candidates = instructions_sub.add_parser("candidates", help="List instruction update candidates")
     inst_candidates.add_argument("--project", type=str, default="")
 
+    working_set_p = sub.add_parser("working-set", help="[User] Inspect runtime working set state")
+    working_set_sub = working_set_p.add_subparsers(dest="working_set_action", required=True)
+    working_set_show_p = working_set_sub.add_parser("show", help="Show current working set state")
+    working_set_show_p.add_argument("--project", type=str, default="")
+    working_set_show_p.add_argument("--json", action="store_true", help="Output in raw JSON format")
+
     sub._choices_actions = [
         a for a in sub._choices_actions if a.help is not argparse.SUPPRESS
     ]

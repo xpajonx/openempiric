@@ -329,6 +329,29 @@ def build_health_report(
         if status == "ok":
             status = "warn"
 
+    from oem_knowledge.runtime.working_set import load_working_set
+    ws = None
+    try:
+        ws = load_working_set(project)
+    except Exception:
+        pass
+
+    working_set_report = {
+        "exists": False,
+        "updated_at": None,
+        "active_work_item": None,
+        "active_files_count": 0,
+        "active_concepts_count": 0,
+    }
+    if ws is not None:
+        working_set_report = {
+            "exists": True,
+            "updated_at": ws.updated_at,
+            "active_work_item": ws.active_work_item,
+            "active_files_count": len(ws.active_files),
+            "active_concepts_count": len(ws.active_concepts),
+        }
+
     report = {
         **legacy,
         "status": status,
@@ -341,6 +364,7 @@ def build_health_report(
         "active_project": active_project,
         "active_work": active_work,
         "concept_integrity": legacy.get("concept_integrity", {}),
+        "working_set": working_set_report,
     }
     return report
 
