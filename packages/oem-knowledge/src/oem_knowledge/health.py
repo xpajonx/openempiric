@@ -339,14 +339,28 @@ def build_health_report(
     working_set_report = {
         "exists": False,
         "updated_at": None,
+        "age": None,
         "active_work_item": None,
         "active_files_count": 0,
         "active_concepts_count": 0,
     }
     if ws is not None:
+        age = None
+        if ws.updated_at:
+            try:
+                from datetime import datetime, timezone
+                iso_str = ws.updated_at
+                if iso_str.endswith("Z"):
+                    iso_str = iso_str[:-1] + "+00:00"
+                updated_dt = datetime.fromisoformat(iso_str)
+                now_dt = datetime.now(timezone.utc)
+                age = max(0.0, (now_dt - updated_dt).total_seconds())
+            except Exception:
+                pass
         working_set_report = {
             "exists": True,
             "updated_at": ws.updated_at,
+            "age": age,
             "active_work_item": ws.active_work_item,
             "active_files_count": len(ws.active_files),
             "active_concepts_count": len(ws.active_concepts),

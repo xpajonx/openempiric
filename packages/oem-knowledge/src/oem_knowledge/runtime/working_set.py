@@ -65,6 +65,20 @@ class WorkingSetService:
         path = self._get_path()
         lock_path = path.with_suffix(".lock")
         
+        # Conditional write: only save if contents changed (excluding updated_at)
+        existing = self.load()
+        if existing is not None:
+            fields = ws.__class__.model_fields.keys() if hasattr(ws.__class__, "model_fields") else ws.__fields__.keys()
+            changed = False
+            for f in fields:
+                if f == "updated_at":
+                    continue
+                if getattr(ws, f) != getattr(existing, f):
+                    changed = True
+                    break
+            if not changed:
+                return
+
         path.parent.mkdir(parents=True, exist_ok=True)
         ws.updated_at = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
         
@@ -90,7 +104,14 @@ class WorkingSetService:
             
         for k, v in kwargs.items():
             if hasattr(ws, k):
-                setattr(ws, k, v)
+                val = v
+                if k == "active_files" and isinstance(v, list):
+                    val = v[:20]
+                elif k == "active_concepts" and isinstance(v, list):
+                    val = v[:30]
+                elif k == "active_memory_ids" and isinstance(v, list):
+                    val = v[:50]
+                setattr(ws, k, val)
         self.save(ws)
         return ws
 
@@ -112,6 +133,15 @@ class WorkingSetService:
                     for item in new_list:
                         if item not in merged:
                             merged.append(item)
+                    
+                    # Apply limits
+                    if k == "active_files":
+                        merged = merged[:20]
+                    elif k == "active_concepts":
+                        merged = merged[:30]
+                    elif k == "active_memory_ids":
+                        merged = merged[:50]
+                        
                     setattr(ws, k, merged)
             else:
                 if v is not None:

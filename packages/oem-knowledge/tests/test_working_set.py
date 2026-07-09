@@ -157,3 +157,120 @@ def test_working_set_merge(engine, tmp_path):
     )
     assert merged.goal == "merged goal"
     assert merged.active_files == ["a.py", "b.py"]
+
+def test_preflight_updates_working_set(engine, tmp_path):
+    # Setup mock active work identity in layout.root (.oem/)
+    layout = engine.layout()
+    oem_dir = layout.root
+    oem_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Create mock session-handoff.json
+    handoff_path = oem_dir / "session-handoff.json"
+    handoff_path.write_text(json.dumps({
+        "active_work_item": "task-abc",
+        "active_topic": "topic-123",
+        "active_task": "subtask-xyz"
+    }), encoding="utf-8")
+    
+    # Run preflight
+    engine.preflight(task="Resolve bug", project=str(tmp_path))
+    
+    # Verify working set got updated
+    ws = load_working_set(project=str(tmp_path))
+    assert ws is not None
+    assert ws.active_work_item == "task-abc"
+    assert ws.active_topic == "topic-123"
+    assert ws.active_task == "subtask-xyz"
+
+def test_source_search_updates_active_files(engine, tmp_path):
+    # Mock run_preflight results to contain source suggestions
+    from oem_knowledge.preflight.models import PreflightResult, PreflightMatch
+    
+    mock_result = PreflightResult(
+        status="success",
+        operation="run_preflight",
+        project_root=str(tmp_path),
+        memory_root=str(engine.layout().root),
+        task="run search",
+        decision="noop",
+        reason="",
+        source_suggestions=[
+            PreflightMatch(
+                kind="source",
+                id="1",
+                title="src/client.py",
+                score=5.0,
+                reason="match",
+                source_path="src/client.py",
+                metadata={"source_type": "client_code"}
+            ),
+            PreflightMatch(
+                kind="source",
+                id="2",
+                title="tests/test_client.py",
+                score=4.0,
+                reason="match",
+                source_path="tests/test_client.py",
+                metadata={"source_type": "relevant_test"}
+            )
+        ]
+    )
+    
+    with patch("oem_knowledge.preflight.run_preflight", return_value=mock_result):
+        engine.preflight(task="run search", project=str(tmp_path))
+        
+    ws = load_working_set(project=str(tmp_path))
+    assert ws is not None
+    # Only src/client.py should be added, tests/test_client.py is ignored (not implementation code)
+    assert "src/client.py" in ws.active_files
+    assert "tests/test_client.py" not in ws.active_files
+
+def test_memory_updates_active_concepts(engine, tmp_path):
+    # Mock run_preflight results to contain matched concepts
+    from oem_knowledge.preflight.models import PreflightResult, PreflightMatch
+    
+    mock_result = PreflightResult(
+        status="success",
+        operation="run_preflight",
+        project_root=str(tmp_path),
+        memory_root=str(engine.layout().root),
+        task="find concepts",
+        decision="noop",
+        reason="",
+        matched_concepts=[
+            PreflightMatch(
+                kind="concept",
+                id="concept-99",
+                title="Concept 99",
+                score=9.0,
+                reason="match"
+            )
+        ]
+    )
+    
+    with patch("oem_knowledge.preflight.run_preflight", return_value=mock_result):
+        with patch.object(engine.state, "concept_ids_from_retrieval_results", return_value=["concept-99"]):
+            engine.preflight(task="find concepts", project=str(tmp_path))
+            
+    ws = load_working_set(project=str(tmp_path))
+    assert ws is not None
+    assert "concept-99" in ws.active_concepts
+
+def test_no_write_when_unchanged(engine, tmp_path):
+    # Set initial working set
+    update_working_set(project=str(tmp_path), goal="unchanged goal")
+    ws_path = engine.layout().working_set_path
+    
+    # Record current mtime
+    first_mtime = ws_path.stat().st_mtime
+    first_updated_at = load_working_set(project=str(tmp_path)).updated_at
+    
+    # Wait a brief moment to ensure time moves
+    time.sleep(0.01)
+    
+    # Update with the exact same goal
+    update_working_set(project=str(tmp_path), goal="unchanged goal")
+    
+    # Verify mtime and updated_at did not change
+    assert ws_path.stat().st_mtime == first_mtime
+    assert load_working_set(project=str(tmp_path)).updated_at == first_updated_at

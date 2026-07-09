@@ -631,6 +631,20 @@ def _run_knowledge_command_impl(args):
         else:
             lines.append("  None")
              
+        # Working Set section
+        lines.append("")
+        lines.append("Working Set:")
+        ws_report = health_res.get("working_set", {})
+        if ws_report.get("exists"):
+            lines.append(f"  Last Update:     {ws_report.get('updated_at')}")
+            age = ws_report.get("age")
+            age_str = f"{int(age)}s" if age is not None else "unknown"
+            lines.append(f"  Working Set Age: {age_str}")
+            lines.append(f"  File Count:      {ws_report.get('active_files_count')}")
+            lines.append(f"  Concept Count:   {ws_report.get('active_concepts_count')}")
+        else:
+            lines.append("  None (does not exist)")
+             
         print(render_panel("Knowledge Health Scan", lines, status="stats"))
 
 

@@ -1391,9 +1391,9 @@ project: {project or "default"}
             write_audit=write_audit,
             budget=budget,
         )
+        concept_ids: list[str] = []
         try:
             surfaced_matches = list(result.matched_concepts[:clamped_limit]) + list(result.matched_memory[:clamped_limit])
-            concept_ids: list[str] = []
             for match in surfaced_matches:
                 candidates = []
                 if match.id:
@@ -1411,6 +1411,57 @@ project: {project or "default"}
             )
         except Exception as ref_err:
             logger.warning("Failed to record concept references for preflight results: %s", ref_err)
+
+        try:
+            from oem_knowledge.runtime.working_set import update_working_set, merge_working_set
+            from oem_knowledge.runtime.active_work import resolve_active_work_identity
+            from pathlib import Path
+            
+            # 1. Active Work updates
+            try:
+                ident = resolve_active_work_identity(Path(resolved_project_arg) / ".oem")
+                if ident and (ident.active_work_item or ident.active_topic or ident.active_task):
+                    update_working_set(
+                        project=resolved_project_arg,
+                        active_work_item=ident.active_work_item,
+                        active_topic=ident.active_topic,
+                        active_task=ident.active_task,
+                    )
+            except Exception as aw_err:
+                logger.warning("Failed to resolve active work identity for working set: %s", aw_err)
+                
+            # 2. Active Concepts updates
+            if concept_ids:
+                merge_working_set(
+                    project=resolved_project_arg,
+                    active_concepts=concept_ids,
+                )
+                
+            # 3. Active Files updates (from source suggestions in preflight)
+            if result.source_suggestions:
+                top_files = []
+                for match in result.source_suggestions:
+                    if match.source_path:
+                        stype = match.metadata.get("source_type", "unknown")
+                        if stype in {"adapter_code", "service_code", "client_code", "implementation_code"}:
+                            top_files.append(match.source_path)
+                if top_files:
+                    merge_working_set(
+                        project=resolved_project_arg,
+                        active_files=top_files,
+                    )
+                    
+            # 4. Matched Memory IDs updates
+            if result.decision in {"required", "suggest"} and result.matched_memory:
+                memory_ids = [m.id for m in result.matched_memory if m.id]
+                if memory_ids:
+                    merge_working_set(
+                        project=resolved_project_arg,
+                        active_memory_ids=memory_ids,
+                    )
+        except Exception as ws_update_err:
+            logger.warning("Failed to update working set in preflight: %s", ws_update_err)
+
         return normalize_preflight_result(
             result,
             operation="knowledge_preflight",
