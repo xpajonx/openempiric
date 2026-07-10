@@ -1107,14 +1107,29 @@ def repair_active_work(
     ws = ident.workspace_root
     target_active_work_item = None
     for source in ident.sources:
-        if source.source != SOURCE_RUNTIME_CONTEXT:
-            continue
-        field = source.get("active_work_item")
-        if field and field.value:
-            target_active_work_item = field.value
-            break
+        if source.source == SOURCE_RUNTIME_CONTEXT:
+            field = source.get("active_work_item")
+            if field and field.value:
+                target_active_work_item = field.value
+                break
+    if not target_active_work_item:
+        target_active_work_item = ident.active_work_item
+
     target_active_topic = None
+    for source in ident.sources:
+        if source.source == SOURCE_RUNTIME_CONTEXT:
+            field = source.get("active_topic")
+            if field and field.value:
+                target_active_topic = field.value
+                break
+
     target_active_task = None
+    for source in ident.sources:
+        if source.source == SOURCE_RUNTIME_CONTEXT:
+            field = source.get("active_task")
+            if field and field.value:
+                target_active_task = field.value
+                break
 
     report: dict = {
         "status": "noop",

@@ -29,6 +29,9 @@ class WorkingSet(BaseModel):
     blocked_by: List[str] = Field(default_factory=list)
     open_questions: List[str] = Field(default_factory=list)
 
+    completed_items: List[str] = Field(default_factory=list)
+    decisions: List[str] = Field(default_factory=list)
+
     confidence: str = "unknown"
     checkpoint_reason: Optional[str] = None
 
@@ -306,6 +309,28 @@ def create_checkpoint(reason: str, project: str | Path | None = None) -> Path | 
             data["workspace_root"] = str(engine.layout().root.parent.resolve())
         data["checkpoint_reason"] = reason
         data["updated_at"] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+        # Load session-handoff.json and merge it if it exists
+        handoff_path = harness / "session-handoff.json"
+        if handoff_path.exists():
+            try:
+                handoff_data = json.loads(handoff_path.read_text(encoding="utf-8"))
+                mapping = {
+                    "primary_objective": "goal",
+                    "next_action": "next_action",
+                    "active_work_item": "active_work_item",
+                    "active_topic": "active_topic",
+                    "active_task": "active_task",
+                    "blocked_by": "blocked_by",
+                    "open_questions": "open_questions",
+                    "completed": "completed_items",
+                    "key_decisions": "decisions",
+                }
+                for handoff_field, cp_field in mapping.items():
+                    if handoff_field in handoff_data and handoff_data[handoff_field] is not None:
+                        data[cp_field] = handoff_data[handoff_field]
+            except Exception as e:
+                logger.warning("Failed to merge session-handoff.json into checkpoint: %s", e)
 
         ws = WorkingSet(**data)
         content = json.dumps(ws.model_dump() if hasattr(ws, "model_dump") else ws.dict(), indent=2) + "\n"

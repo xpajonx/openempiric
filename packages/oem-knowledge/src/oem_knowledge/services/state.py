@@ -907,6 +907,11 @@ class StateService:
         # Remove nulls for cleanliness (consistent with spec: do not invent)
         payload = {k: v for k, v in payload.items() if v is not None or k in ("active_work_item", "active_topic", "active_task")}
 
+        # Preserve other fields from current session-handoff.json
+        for k, v in current.items():
+            if k not in payload and k not in ("project", "project_root"):
+                payload[k] = v
+
         handoff_json.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
     def detect_stale_concepts(self, n_sessions: int = 5, project: str | None = None) -> list[dict]:

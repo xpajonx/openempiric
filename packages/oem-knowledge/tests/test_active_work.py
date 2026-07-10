@@ -1030,3 +1030,23 @@ def test_workspace_root_not_treated_as_active_work_item(tmp_path: Path):
     assert ident.active_work_item == "2_Essay/expertise-debt/Essay_ID.md"
     # no conflict between ws and awi
     assert all(c.semantic_field not in ("active_work_item", "active_topic") or c.severity != "error" for c in ident.conflicts)
+
+
+def test_repair_active_work_fallback(tmp_path: Path):
+    harness = tmp_path / ".oem"
+    harness.mkdir(parents=True, exist_ok=True)
+    j = harness / "session-handoff.json"
+    j.write_text(json.dumps({
+        "schema_version": "1.0.0",
+        "workspace_root": str(tmp_path),
+        "active_work_item": "src/module.py",
+        "active_topic": "Topic A",
+        "active_task": "Task A"
+    }), encoding="utf-8")
+
+    # .runtime/context.md is completely empty/missing. Without fallback this returns unsupported_repair_case
+    from oem_knowledge.runtime.active_work import repair_active_work
+    res = repair_active_work(harness, dry_run=False, apply=True, backup=False)
+    assert res["status"] != "unsupported_repair_case"
+    assert res["status"] == "repaired" or res["status"] == "noop"
+

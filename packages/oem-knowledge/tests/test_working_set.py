@@ -569,4 +569,66 @@ def test_working_set_compaction_preserves_text(engine, tmp_path):
     assert ws.current_problem == "Problem description"
 
 
+def test_create_checkpoint_merges_handoff_json(engine, tmp_path):
+    from oem_knowledge.runtime.working_set import create_checkpoint, list_checkpoints
+    
+    # Create handoff json
+    handoff_path = engine._resolve_harness(str(tmp_path)) / "session-handoff.json"
+    handoff_path.parent.mkdir(parents=True, exist_ok=True)
+    handoff_path.write_text(json.dumps({
+        "schema_version": "1.0.0",
+        "primary_objective": "Test primary objective",
+        "next_action": "Test next action",
+        "active_work_item": "src/active.py",
+        "active_topic": "Test active topic",
+        "active_task": "Test active task",
+        "completed": ["Completed item 1", "Completed item 2"],
+        "key_decisions": ["Decision 1"],
+    }), encoding="utf-8")
+
+    cp_path = create_checkpoint(reason="manual", project=str(tmp_path))
+    assert cp_path is not None
+    assert cp_path.exists()
+
+    # Load checkpoint data
+    cp_data = json.loads(cp_path.read_text(encoding="utf-8"))
+    assert cp_data["goal"] == "Test primary objective"
+    assert cp_data["next_action"] == "Test next action"
+    assert cp_data["active_work_item"] == "src/active.py"
+    assert cp_data["active_topic"] == "Test active topic"
+    assert cp_data["active_task"] == "Test active task"
+    assert cp_data["completed_items"] == ["Completed item 1", "Completed item 2"]
+    assert cp_data["decisions"] == ["Decision 1"]
+
+
+def test_update_structured_handoff_preserves_custom_fields(engine, tmp_path):
+    # Setup outcomes trigger and active handoff json
+    harness = engine._resolve_harness(str(tmp_path))
+    handoff_path = harness / "session-handoff.json"
+    handoff_path.parent.mkdir(parents=True, exist_ok=True)
+    handoff_path.write_text(json.dumps({
+        "schema_version": "1.0.0",
+        "workspace_root": str(tmp_path),
+        "primary_objective": "Original Objective",
+        "completed": ["Wrote code", "Ran tests"],
+        "key_decisions": ["Used sqlite"],
+        "artifacts": ["main.py"]
+    }), encoding="utf-8")
+
+    engine.state.record_outcome(
+        outcome="success",
+        project=str(tmp_path),
+        session_id="session_123",
+        reason="test preservation"
+    )
+
+    # Read back handoff JSON and verify completed, key_decisions, artifacts are preserved
+    assert handoff_path.exists()
+    data = json.loads(handoff_path.read_text(encoding="utf-8"))
+    assert data["completed"] == ["Wrote code", "Ran tests"]
+    assert data["key_decisions"] == ["Used sqlite"]
+    assert data["artifacts"] == ["main.py"]
+
+
+
 
