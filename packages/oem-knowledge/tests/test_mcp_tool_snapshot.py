@@ -17,6 +17,11 @@ def test_mcp_tool_names_snapshot():
         "oem_todo_write",
         "oem_todo_read",
         "oem_todo_advance",
+
+        # Checkpoints (from oem_knowledge.tools.checkpoint)
+        "oem_checkpoint_list",
+        "oem_checkpoint_create",
+        "oem_checkpoint_restore",
         
         # Telemetry (from oem_knowledge.tools.metrics)
         "knowledge_usage_report",
@@ -56,4 +61,4 @@ def test_mcp_tool_names_snapshot():
     }
 
     assert registered_tools == expected_tools
-    assert len(registered_tools) == 27
+    assert len(registered_tools) == 30
