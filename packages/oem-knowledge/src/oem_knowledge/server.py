@@ -21,7 +21,7 @@ def mount_tools(mcp: object) -> None:
     if not isinstance(mcp, FastMCP):
         return
 
-    from oem_knowledge.tools import todos, metrics, lifecycle, concepts, skills, source, diagnostics
+    from oem_knowledge.tools import todos, metrics, lifecycle, concepts, skills, source, diagnostics, checkpoint
     todos.register(mcp)
     metrics.register(mcp)
     lifecycle.register(mcp)
@@ -29,6 +29,7 @@ def mount_tools(mcp: object) -> None:
     skills.register(mcp)
     source.register(mcp)
     diagnostics.register(mcp)
+    checkpoint.register(mcp)
 
 
 def main() -> None:
