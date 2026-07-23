@@ -400,6 +400,197 @@ def test_debug_ranking_does_not_update_reference_metadata(temp_project):
     record_refs.assert_not_called()
 
 
+# ---------------------------------------------------------------------------
+# Event indexing tests
+# ---------------------------------------------------------------------------
+
+
+def test_index_concept_events_creates_chunks(temp_project):
+    engine = KnowledgeEngine(temp_project)
+
+    # Write events for a concept into events.jsonl
+    events_path = engine._events_path(str(temp_project))
+    sfs = engine._sfs(str(temp_project))
+    events = [
+        {
+            "event_id": "ev_001",
+            "timestamp": "2026-06-10T00:00:00Z",
+            "project": "test_project",
+            "session_id": "sess_1",
+            "event_type": "observation",
+            "concept_candidates": ["concept_001"],
+            "summary": "First observation for concept one",
+            "evidence": "Detailed evidence for concept one",
+            "source": "test",
+            "schema_version": 1,
+        },
+        {
+            "event_id": "ev_002",
+            "timestamp": "2026-06-10T01:00:00Z",
+            "project": "test_project",
+            "session_id": "sess_1",
+            "event_type": "decision",
+            "concept_candidates": ["concept_001"],
+            "summary": "Decision made for concept one",
+            "evidence": "Rationale for decision",
+            "source": "test",
+            "schema_version": 1,
+        },
+    ]
+    content = "\n".join(json.dumps(e) for e in events) + "\n"
+    sfs.write_text(events_path, content, force_allow_truncation=True)
+
+    # Ensure concept_001 exists in the registry
+    registry = engine.state._load_registry(str(temp_project))
+    registry["concept_001"] = {"canonical_name": "Concept One", "status": "validated"}
+    engine.state._save_registry(registry, str(temp_project))
+
+    # Index events for this concept
+    count = engine.search.index_concept_events("concept_001", str(temp_project))
+    assert count == 2
+
+    # Verify chunks exist in vector store
+    chunks = engine.search.vector_store.all_chunks()
+    event_chunks = [c for c in chunks if c["metadata"].get("source") == "events.jsonl"]
+    assert len(event_chunks) == 2
+
+    chunk_ids = {c["id"] for c in event_chunks}
+    assert "concept_001#event_ev_001" in chunk_ids
+    assert "concept_001#event_ev_002" in chunk_ids
+
+    # Verify chunk content
+    for c in event_chunks:
+        meta = c["metadata"]
+        assert meta["concept_id"] == "concept_001"
+        assert meta["importance"] == "medium"
+        assert "concept_001" in c["document"]
+
+
+def test_index_all_events_creates_chunks_for_all_concepts(temp_project):
+    engine = KnowledgeEngine(temp_project)
+
+    # Write events for multiple concepts
+    events_path = engine._events_path(str(temp_project))
+    sfs = engine._sfs(str(temp_project))
+    events = [
+        {
+            "event_id": "ev_010",
+            "timestamp": "2026-06-10T00:00:00Z",
+            "project": "test_project",
+            "session_id": "sess_1",
+            "event_type": "observation",
+            "concept_candidates": ["concept_001"],
+            "summary": "Event for concept one",
+            "evidence": "Evidence one",
+            "source": "test",
+            "schema_version": 1,
+        },
+        {
+            "event_id": "ev_011",
+            "timestamp": "2026-06-10T01:00:00Z",
+            "project": "test_project",
+            "session_id": "sess_1",
+            "event_type": "decision",
+            "concept_candidates": ["concept_001"],
+            "summary": "Another event for concept one",
+            "evidence": "Evidence two",
+            "source": "test",
+            "schema_version": 1,
+        },
+        {
+            "event_id": "ev_020",
+            "timestamp": "2026-06-10T02:00:00Z",
+            "project": "test_project",
+            "session_id": "sess_1",
+            "event_type": "observation",
+            "concept_candidates": ["concept_002"],
+            "summary": "Event for concept two",
+            "evidence": "Evidence three",
+            "source": "test",
+            "schema_version": 1,
+        },
+    ]
+    content = "\n".join(json.dumps(e) for e in events) + "\n"
+    sfs.write_text(events_path, content, force_allow_truncation=True)
+
+    # Set up registry with both concepts
+    registry = engine.state._load_registry(str(temp_project))
+    registry["concept_001"] = {"canonical_name": "Concept One", "status": "validated"}
+    registry["concept_002"] = {"canonical_name": "Concept Two", "status": "validated"}
+    engine.state._save_registry(registry, str(temp_project))
+
+    # Index all events
+    result = engine.search.index_all_events(str(temp_project))
+    assert result["total"] == 3
+    assert result["per_concept"]["concept_001"] == 2
+    assert result["per_concept"]["concept_002"] == 1
+
+    # Verify all event chunks in vector store
+    chunks = engine.search.vector_store.all_chunks()
+    event_chunks = [c for c in chunks if c["metadata"].get("source") == "events.jsonl"]
+    assert len(event_chunks) == 3
+
+
+def test_index_concept_events_empty_concept(temp_project):
+    engine = KnowledgeEngine(temp_project)
+
+    # No events written at all
+    count = engine.search.index_concept_events("nonexistent_concept", str(temp_project))
+    assert count == 0
+
+    # Also test with a concept that exists but has no events
+    registry = engine.state._load_registry(str(temp_project))
+    registry["empty_concept"] = {"canonical_name": "Empty Concept", "status": "candidate"}
+    engine.state._save_registry(registry, str(temp_project))
+
+    count = engine.search.index_concept_events("empty_concept", str(temp_project))
+    assert count == 0
+
+
+def test_index_concept_events_idempotent(temp_project):
+    engine = KnowledgeEngine(temp_project)
+
+    # Write events for a concept
+    events_path = engine._events_path(str(temp_project))
+    sfs = engine._sfs(str(temp_project))
+    events = [
+        {
+            "event_id": "ev_030",
+            "timestamp": "2026-06-10T00:00:00Z",
+            "project": "test_project",
+            "session_id": "sess_1",
+            "event_type": "observation",
+            "concept_candidates": ["concept_001"],
+            "summary": "Idempotent test event",
+            "evidence": "Same event indexed twice",
+            "source": "test",
+            "schema_version": 1,
+        },
+    ]
+    content = "\n".join(json.dumps(e) for e in events) + "\n"
+    sfs.write_text(events_path, content, force_allow_truncation=True)
+
+    registry = engine.state._load_registry(str(temp_project))
+    registry["concept_001"] = {"canonical_name": "Concept One", "status": "validated"}
+    engine.state._save_registry(registry, str(temp_project))
+
+    # First call
+    count1 = engine.search.index_concept_events("concept_001", str(temp_project))
+    assert count1 == 1
+
+    chunks_after_first = engine.search.vector_store.all_chunks()
+    event_chunks_1 = [c for c in chunks_after_first if c["metadata"].get("source") == "events.jsonl"]
+    assert len(event_chunks_1) == 1
+
+    # Second call — UPSERT should not create duplicate chunks
+    count2 = engine.search.index_concept_events("concept_001", str(temp_project))
+    assert count2 == 1
+
+    chunks_after_second = engine.search.vector_store.all_chunks()
+    event_chunks_2 = [c for c in chunks_after_second if c["metadata"].get("source") == "events.jsonl"]
+    assert len(event_chunks_2) == 1  # Still only 1 chunk, not 2
+
+
 def test_record_concept_references_never_raises_to_search(temp_project):
     engine = KnowledgeEngine(temp_project)
     candidates = [

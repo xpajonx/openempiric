@@ -154,6 +154,8 @@ def _setup_parser() -> argparse.ArgumentParser:
 
     index_p = sub.add_parser("index", help="[Advanced] Rebuild derived search index for the project")
     index_p.add_argument("--project", type=str, default="")
+    index_p.add_argument("--reindex-events", action="store_true",
+                         help="Backfill vector store with all existing events from events.jsonl")
 
     rebuild_p = sub.add_parser(
         "rebuild",

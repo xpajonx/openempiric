@@ -525,6 +525,54 @@ class SearchService:
 
         return stats
 
+    def index_concept_events(self, concept_id: str, project: str | None = None) -> int:
+        """Index all events for a concept as individual searchable chunks.
+        Returns count of events indexed."""
+        import time
+        events = self.engine.state.get_events(project=project, concept=concept_id)
+        if not events:
+            return 0
+        store = self.vector_store
+        chunks_to_upsert = []
+        for event in events:
+            event_id = event.get("event_id") or event.get("id", "")
+            chunk_id = f"{concept_id}#event_{event_id}"
+            document = (
+                f"Concept: {concept_id}\n"
+                f"Event: {event.get('summary', event.get('evidence', ''))}\n"
+                f"Type: {event.get('event_type', event.get('type', 'observation'))}\n"
+                f"Source: {event.get('source', 'unknown')}"
+            )
+            meta = {
+                "source": "events.jsonl",
+                "concept_id": concept_id,
+                "event_id": event_id,
+                "event_type": event.get("event_type", event.get("type", "observation")),
+                "importance": "medium",
+                "created_at": str(event.get("timestamp", event.get("created_at", time.time()))),
+            }
+            chunks_to_upsert.append((chunk_id, document, meta))
+        if chunks_to_upsert:
+            texts = [c[1] for c in chunks_to_upsert]
+            if self.resolve_retrieval_mode() == "hybrid":
+                embeddings = self.embed(texts)
+            else:
+                embeddings = [None] * len(texts)
+            batch = [(cid, doc, meta, emb) for (cid, doc, meta), emb in zip(chunks_to_upsert, embeddings)]
+            store.upsert_batch(batch)
+        return len(chunks_to_upsert)
+
+    def index_all_events(self, project: str | None = None) -> dict:
+        """Index all events across all concepts. Returns {per_concept: {cid: count}, total: int}."""
+        registry = self.engine.state._load_registry(project)
+        results = {}
+        total = 0
+        for cid in registry:
+            count = self.index_concept_events(cid, project)
+            results[cid] = count
+            total += count
+        return {"per_concept": results, "total": total}
+
     def _collect_raw_candidates(self, query: str, hybrid: bool = True) -> list[dict]:
         """Collect raw candidates from vector search with retrieval scores (no ranking applied)."""
         store = self.vector_store

@@ -249,20 +249,30 @@ def _run_knowledge_command_impl(args):
         )
 
     elif args.command == "index":
-        res = eng.search.index_all(force=True)
-        if res.get("status") == "error":
-            print(render_panel(
-                "Indexing Failure",
-                [res.get("error", "Unknown error")],
-                status="error"
-            ))
-            sys.exit(1)
+        if getattr(args, "reindex_events", False):
+            res = eng.search.index_all_events(getattr(args, "project", None))
+            total = res.get("total", 0)
+            per_concept = res.get("per_concept", {})
+            lines = [f"Total events indexed: {total}"]
+            for cid, cnt in per_concept.items():
+                if cnt > 0:
+                    lines.append(f"  {cid}: {cnt}")
+            print(render_panel("Event Reindex Complete", lines, status="ok"))
         else:
-            print(render_panel(
-                "Indexing Complete",
-                ["Search index rebuilt successfully."],
-                status="ok"
-            ))
+            res = eng.search.index_all(force=True)
+            if res.get("status") == "error":
+                print(render_panel(
+                    "Indexing Failure",
+                    [res.get("error", "Unknown error")],
+                    status="error"
+                ))
+                sys.exit(1)
+            else:
+                print(render_panel(
+                    "Indexing Complete",
+                    ["Search index rebuilt successfully."],
+                    status="ok"
+                ))
 
     elif args.command == "events":
         events_action = getattr(args, "events_action", None)
