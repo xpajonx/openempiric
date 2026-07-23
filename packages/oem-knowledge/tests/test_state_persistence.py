@@ -1,11 +1,14 @@
+import builtins
 import pytest
 import shutil
 import json
 import logging
+import sys
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 from oem_knowledge.engine import KnowledgeEngine
 from oem_knowledge.services.state import StateCorruptionError, StateService
+from oem_knowledge.models import KnowledgeEvent
 
 @pytest.fixture
 def temp_project(tmp_path):
@@ -150,3 +153,84 @@ def test_caller_propagation_bubbles_corruption_error(temp_project):
         
     with pytest.raises(StateCorruptionError):
         engine.state.explain_concept(str(temp_project), "concept_001")
+
+def test_get_events_filter_normalizes_candidates(temp_project):
+    engine = KnowledgeEngine(temp_project)
+    event = {
+        "event_id": "ev_filter_001",
+        "timestamp": "2026-07-23T00:00:00Z",
+        "project": "test_project",
+        "session_id": "sess_filter",
+        "event_type": "observation",
+        "concept_candidates": ["general learning"],
+        "summary": "Filter normalization test",
+        "evidence": "Test evidence",
+        "source": "test",
+        "schema_version": 1,
+        "confidence": 1,
+    }
+    engine.state.append_event(event, str(temp_project))
+    results = engine.state.get_events(str(temp_project), concept="general learning")
+    assert len(results) == 1
+    assert results[0]["event_id"] == "ev_filter_001"
+
+def test_get_events_concept_id_lookup(temp_project):
+    engine = KnowledgeEngine(temp_project)
+    # Create a concept in the registry with canonical_name "general-learning"
+    registry = engine.state._load_registry(str(temp_project), lock=True)
+    cdata = {
+        "concept_id": "concept_001",
+        "canonical_name": "general-learning",
+        "aliases": ["general learning"],
+        "confidence": 1,
+        "status": "validated",
+        "evidence_count": 0,
+        "session_count": 1,
+        "source_event_ids": [],
+    }
+    registry["concept_001"] = cdata
+    engine.state._save_registry(registry, str(temp_project), lock=True)
+    # Write an event referencing the concept by its natural name
+    event = {
+        "event_id": "ev_cid_001",
+        "timestamp": "2026-07-23T00:00:00Z",
+        "project": "test_project",
+        "session_id": "sess_cid",
+        "event_type": "observation",
+        "concept_candidates": ["general learning"],
+        "summary": "Concept ID resolution test",
+        "evidence": "Test evidence",
+        "source": "test",
+        "schema_version": 1,
+        "confidence": 1,
+    }
+    engine.state.append_event(event, str(temp_project))
+    # Query by concept_id "concept_001" — should resolve to canonical_name "general-learning"
+    # which normalizes to "general-learning" and matches "general learning" in candidates
+    results = engine.state.get_events(str(temp_project), concept="concept_001")
+    assert len(results) == 1
+    assert results[0]["event_id"] == "ev_cid_001"
+
+def test_resolve_auto_mode_hybrid_when_fastembed_available(temp_project):
+    engine = KnowledgeEngine(temp_project)
+    fake_fastembed = MagicMock()
+    fake_fastembed.TextEmbedding = MagicMock()
+    with patch.dict("sys.modules", {"fastembed": fake_fastembed}):
+        result = engine.search.resolve_retrieval_mode()
+        assert result == "hybrid"
+
+def test_resolve_auto_mode_bm25_without_fastembed(temp_project):
+    engine = KnowledgeEngine(temp_project)
+    saved = sys.modules.pop("fastembed", None)
+    try:
+        original_import = builtins.__import__
+        def mock_import(name, *args, **kwargs):
+            if name == "fastembed":
+                raise ImportError("No module named fastembed")
+            return original_import(name, *args, **kwargs)
+        with patch("builtins.__import__", side_effect=mock_import):
+            result = engine.search.resolve_retrieval_mode()
+            assert result == "bm25"
+    finally:
+        if saved is not None:
+            sys.modules["fastembed"] = saved

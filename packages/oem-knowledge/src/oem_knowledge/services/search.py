@@ -119,7 +119,11 @@ class SearchService:
     def resolve_retrieval_mode(self) -> str:
         configured = self.get_retrieval_mode()
         if configured == "auto":
-            return "bm25"
+            try:
+                from fastembed import TextEmbedding  # noqa: F401
+                return "hybrid"
+            except ImportError:
+                return "bm25"
         return configured
 
     def embed(self, texts: list[str]) -> list[list[float]]:

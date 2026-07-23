@@ -1078,8 +1078,15 @@ class StateService:
         filtered = []
         for ev in events:
             if concept:
-                c_clean = concept.strip().replace(" ", "-").lower()
-                if c_clean not in [c.lower() for c in ev.get("concept_candidates", [])]:
+                match_values = set()
+                if concept.startswith("concept_"):
+                    reg = self._load_registry(project)
+                    cdata = reg.get(concept, {})
+                    canon = cdata.get("canonical_name", concept)
+                    match_values.add(canon.strip().replace(" ", "-").lower())
+                match_values.add(concept.strip().replace(" ", "-").lower())
+                candidates_clean = [c.strip().replace(" ", "-").lower() for c in ev.get("concept_candidates", [])]
+                if not match_values.intersection(candidates_clean):
                     continue
             if event_type and ev.get("event_type", "").lower() != event_type.lower():
                 continue
