@@ -265,17 +265,51 @@ def _run_knowledge_command_impl(args):
             ))
 
     elif args.command == "events":
-        events = eng.state.get_events(
-            project,
-            concept=args.concept,
-            event_type=args.type,
-            session_id=args.session_id,
-        )
-        lines = [f"Total: {len(events)}"] + [
-            f"  [{ev['event_type'].upper()}] {ev.get('summary', '')[:80]}"
-            for ev in events[:20]
-        ]
-        print(render_panel("Events", lines, status="ok"))
+        events_action = getattr(args, "events_action", None)
+        if events_action == "reassign":
+            from_concept = getattr(args, "from_concept", "")
+            to_concept = getattr(args, "to_concept", "")
+            if not from_concept or not to_concept:
+                print(render_panel("Error", ["--from and --to are required for reassign."], status="error"))
+            else:
+                events = eng.state._load_events(project)
+                from_clean = from_concept.strip().replace(" ", "-").lower()
+                to_clean = to_concept.strip().replace(" ", "-").lower()
+                event_id_filter = getattr(args, "event_id", "")
+                dry_run = getattr(args, "dry_run", False)
+                moved = 0
+                for ev in events:
+                    if event_id_filter and ev.get("event_id", "") != event_id_filter:
+                        continue
+                    cc = ev.get("concept_candidates", [])
+                    if from_clean not in [c.lower() for c in cc]:
+                        continue
+                    new_cc = [c for c in cc if c.lower() != from_clean]
+                    if to_clean not in [c.lower() for c in new_cc]:
+                        new_cc.append(to_clean)
+                    ev["concept_candidates"] = new_cc
+                    moved += 1
+                    if dry_run:
+                        print(f"  Would move: {ev.get('evidence', '')[:80]}...")
+                if not dry_run and moved > 0:
+                    p = eng._events_path(project)
+                    sfs = eng._sfs(project)
+                    sfs.write_text(p, "\n".join(json.dumps(e) for e in events) + "\n")
+                    eng.state.rebuild_registry(project)
+                label = "Would move" if dry_run else "Moved"
+                print(render_panel("Events Reassign", [f"{label} {moved} events from {from_concept} to {to_concept}"], status="ok"))
+        else:
+            events = eng.state.get_events(
+                project,
+                concept=args.concept,
+                event_type=args.type,
+                session_id=args.session_id,
+            )
+            lines = [f"Total: {len(events)}"] + [
+                f"  [{ev['event_type'].upper()}] {ev.get('summary', '')[:80]}"
+                for ev in events[:20]
+            ]
+            print(render_panel("Events", lines, status="ok"))
 
     elif args.command == "event":
         try:

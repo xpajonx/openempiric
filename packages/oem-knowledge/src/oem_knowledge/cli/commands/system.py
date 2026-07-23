@@ -879,6 +879,78 @@ def run_system_command(args):
                     print(render_panel("Split General Learning", lines, status="ok"))
             return
 
+        if getattr(args, "auto_cleanup", False) is True:
+            registry = eng.state._load_registry(project)
+            actions = []
+
+            duplicates = eng.propose_merges(0.85, project)
+            for d in duplicates:
+                actions.append({
+                    "type": "merge",
+                    "concepts": (d.get("concept_a", ""), d.get("concept_b", "")),
+                    "reason": f"Semantic duplicates (score: {d.get('similarity', 0):.2f})",
+                })
+
+            from datetime import datetime, timezone
+            now = datetime.now(timezone.utc)
+            for cid, cdata in registry.items():
+                if not isinstance(cdata, dict) or not cid.startswith("concept_"):
+                    continue
+                if cdata.get("status") == "candidate" and cdata.get("evidence_count", 0) == 0:
+                    created_str = cdata.get("created_at", "")
+                    try:
+                        created = datetime.fromisoformat(created_str.replace("Z", "+00:00"))
+                        age_days = (now - created).days
+                        if age_days > 30:
+                            actions.append({
+                                "type": "deprecate",
+                                "concept": cid,
+                                "reason": f"Ghost concept: 0 events, {age_days} days old",
+                            })
+                    except (ValueError, TypeError):
+                        pass
+
+            for cid, cdata in registry.items():
+                if not isinstance(cdata, dict) or not cid.startswith("concept_"):
+                    continue
+                if cdata.get("evidence_count", 0) > 500:
+                    actions.append({
+                        "type": "split",
+                        "concept": cid,
+                        "reason": f"Bloated concept: {cdata['evidence_count']} events",
+                    })
+
+            lines = [f"Found {len(actions)} cleanup actions:"]
+            for i, action in enumerate(actions[:20]):
+                lines.append(f"  {i+1}. [{action['type']}] {action['reason']}")
+            if len(actions) > 20:
+                lines.append(f"  ... and {len(actions) - 20} more")
+
+            if getattr(args, "apply", False):
+                for action in actions:
+                    try:
+                        if action["type"] == "merge":
+                            a, b = action["concepts"]
+                            eng.state.merge_concepts(project, a, b)
+                        elif action["type"] == "deprecate":
+                            cid = action["concept"]
+                            if cid in registry:
+                                cdata = registry[cid]
+                                cdata = eng.state.evaluate_concept_status(cdata, "deprecation", "system")
+                                registry[cid] = cdata
+                                eng.state._save_registry(registry, project)
+                                eng.materialization.materialize_concepts(project)
+                        elif action["type"] == "split":
+                            pass
+                    except Exception as e:
+                        lines.append(f"  Failed [{action['type']}]: {e}")
+                lines.append(f"Applied {len(actions)} actions")
+            else:
+                lines.append("Run with --apply to execute")
+
+            print(render_panel("Auto Cleanup", lines, status="warn" if actions else "ok"))
+            return
+
         if getattr(args, "fix", False):
             from oem_knowledge.runtime.recovery import cmd_recover
             res = cmd_recover(eng, project, scope="reflection", apply=True, backup=True, rebuild_reports=False)
@@ -1356,3 +1428,56 @@ def run_system_command(args):
                     print(render_panel("Retrieval Metrics", lines, status="info"))
                 except Exception as e:
                     print(render_panel("Metrics Error", [f"Failed to read metrics: {e}"], status="error"))
+
+
+def run_integrations_command(args):
+    project = getattr(args, "project", None)
+    if project == ".":
+        project = None
+    from oem_knowledge.engine import KnowledgeEngine
+    eng = KnowledgeEngine(project)
+    import atexit; atexit.register(eng.close)
+
+    integrations_action = getattr(args, "integrations_action", "")
+    if integrations_action == "git":
+        git_action = getattr(args, "git_action", "")
+        if git_action == "pre-commit":
+            do_install = getattr(args, "install", False)
+            do_uninstall = getattr(args, "uninstall", False)
+            hook_path = eng._resolve_harness(project).parent / ".git" / "hooks" / "pre-commit"
+
+            if do_uninstall:
+                if hook_path.exists():
+                    hook_path.unlink()
+                    print(render_panel("Git Pre-Commit", ["Hook removed from .git/hooks/pre-commit"], status="ok"))
+                else:
+                    print(render_panel("Git Pre-Commit", ["No hook found at .git/hooks/pre-commit"], status="info"))
+            elif do_install:
+                hook_path.parent.mkdir(parents=True, exist_ok=True)
+                hook_content = """#!/bin/bash
+# OEM pre-commit hook for event hygiene
+# Installed by: oem integrations git pre-commit --install
+
+set -e
+
+if command -v oem &>/dev/null; then
+    UNASSIGNED=$(oem events list 2>/dev/null | head -1 | grep -oP 'Total: \K[0-9]+' || echo "0")
+
+    if [ "$UNASSIGNED" -gt 50 ]; then
+        echo "  $UNASSIGNED events in OEM knowledge base."
+        echo "   Run: oem events list"
+        echo "   Or:  git commit --no-verify (to skip)"
+        exit 1
+    fi
+else
+    echo "oem: OEM not found on PATH — skipping pre-commit event check"
+fi
+"""
+                sfs = eng._sfs(project)
+                sfs.write_text(hook_path, hook_content)
+                import os
+                os.chmod(hook_path, 0o755)
+                print(render_panel("Git Pre-Commit", ["Hook installed at .git/hooks/pre-commit"], status="ok"))
+            else:
+                status = "installed" if hook_path.exists() else "not installed"
+                print(render_panel("Git Pre-Commit", [f"Status: {status}", "Use --install to install", "Use --uninstall to remove"], status="info"))

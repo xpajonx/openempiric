@@ -194,6 +194,62 @@ class SkillService:
     def __init__(self, engine: KnowledgeEngine):
         self.engine = engine
 
+    def create_skill_from_template(
+        self,
+        name: str,
+        description: str = "",
+        project: str | None = None,
+    ) -> SkillCandidate:
+        import uuid
+        import re as _re
+        now = utc_iso()
+        cid = uuid.uuid4().hex[:12]
+        slug = name.lower().replace(" ", "-").replace("_", "-")
+        slug = _re.sub(r"[^a-z0-9-]", "", slug).strip("-")[:80]
+        trigger = name.lower().replace("-", " ")
+
+        candidate = SkillCandidate(
+            candidate_id=cid,
+            slug=slug,
+            title=name,
+            trigger=trigger,
+            recommended_behavior=description or f"Skill candidate for {name}",
+            evidence=[],
+            rationale=f"Manually created skill candidate: {name}",
+            confidence="medium",
+            status="proposed",
+            source_event_ids=[],
+            source_concept_ids=[],
+            created_at=now,
+            updated_at=now,
+        )
+
+        sfs = self.engine._sfs(project)
+        layout = self.engine.layout(project)
+        filepath = layout.skill_candidates_dir / f"{slug}.md"
+
+        frontmatter_data = {
+            "generated_by": "openempiric",
+            "source_type": "oem_skill_candidate",
+            "status": candidate.status,
+            "confidence": candidate.confidence,
+            "candidate_id": candidate.candidate_id,
+            "slug": candidate.slug,
+            "created_at": candidate.created_at,
+            "updated_at": candidate.updated_at,
+        }
+        if candidate.source_event_ids:
+            frontmatter_data["source_event_ids"] = candidate.source_event_ids
+        if candidate.source_concept_ids:
+            frontmatter_data["source_concept_ids"] = candidate.source_concept_ids
+
+        frontmatter = dump_frontmatter(frontmatter_data)
+        body = dump_markdown_body(candidate)
+        content = f"{frontmatter}\n\n{body}"
+        sfs.write_text(filepath, content, force_allow_truncation=True)
+
+        return candidate
+
     def create_skill_candidate(
         self,
         candidate_id: str,

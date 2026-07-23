@@ -76,3 +76,6 @@ def main():
     elif args.command == "checkpoint":
         from .commands.checkpoint import run_checkpoint_command
         run_checkpoint_command(args)
+    elif args.command == "integrations":
+        from .commands.system import run_integrations_command
+        run_integrations_command(args)

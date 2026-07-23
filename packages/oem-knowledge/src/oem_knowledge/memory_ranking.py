@@ -65,6 +65,23 @@ PENALTY_SOURCE_DUMP = -6.0
 PENALTY_LARGE_LOW_DENSITY = -3.0
 PENALTY_GENERIC_ACTIVE_PROJECT_FOR_TECHNICAL = -4.0
 
+PENALTY_LARGE_CONCEPT = -3.0
+STATUS_BOOSTS = {
+    "canonical": 1.3,
+    "validated": 1.1,
+    "emerging": 0.9,
+    "candidate": 0.7,
+    "needs_review": 0.5,
+}
+PENALTY_LARGE_CONCEPT = -3.0
+STATUS_BOOSTS = {
+    "canonical": 1.3,
+    "validated": 1.1,
+    "emerging": 0.9,
+    "candidate": 0.7,
+    "needs_review": 0.5,
+}
+
 LARGE_CHUNK_CHAR_THRESHOLD = 1500
 
 # ============================================================================
@@ -730,7 +747,7 @@ def _apply_boosts(
     return final_score, relevance_score, importance_boost, eligible_for_type_boost, reasons, boosts, penalties
 
 
-def rank_search_result(query: str, candidate: dict[str, Any]) -> dict[str, Any]:
+def rank_search_result(query: str, candidate: dict[str, Any], registry: dict[str, Any] | None = None) -> dict[str, Any]:
     query_targets = extract_query_targets(query)
     query_targets["query_text"] = query
     document = candidate.get("document", "")
@@ -743,6 +760,25 @@ def rank_search_result(query: str, candidate: dict[str, Any]) -> dict[str, Any]:
     final_score, relevance_score, importance_boost, eligible_for_type_boost, reasons, boosts, penalties = _apply_boosts(
         base_score, query_targets, document, memory_type
     )
+
+    if registry:
+        concept_id = candidate.get("metadata", {}).get("concept_id", "")
+        if concept_id and concept_id in registry:
+            cdata = registry[concept_id]
+            evidence_count = cdata.get("evidence_count", 0)
+            if evidence_count > 100:
+                size_penalty = max(0.3, 1.0 - (evidence_count - 100) / 500.0)
+                final_score *= size_penalty
+                reasons.append(f"concept size penalty ({evidence_count} events): x{size_penalty:.2f}")
+            status = cdata.get("status", "candidate")
+            status_boost = STATUS_BOOSTS.get(status, 1.0)
+            if status_boost != 1.0:
+                final_score *= status_boost
+                reasons.append(f"concept status boost ({status}): x{status_boost}")
+            confidence = cdata.get("confidence", 1)
+            conf_boost = 0.5 + confidence / 10.0
+            final_score *= conf_boost
+            reasons.append(f"concept confidence boost ({confidence}/5): x{conf_boost:.2f}")
 
     result = dict(candidate)
     result["base_score"] = base_score
@@ -840,8 +876,8 @@ def build_ranking_debug_report(
     }
 
 
-def rank_search_results(query: str, candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    ranked = [rank_search_result(query, c) for c in candidates]
+def rank_search_results(query: str, candidates: list[dict[str, Any]], registry: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    ranked = [rank_search_result(query, c, registry) for c in candidates]
 
     # Stable sort with priority: exact path/filename > decision/failure > active/rule > final_score > base
     ranked.sort(

@@ -676,7 +676,8 @@ class SearchService:
             if not candidates:
                 return []
             candidates.sort(key=lambda x: x["score"], reverse=True)
-            ranked = rank_search_results(query, candidates)
+            registry = self.engine.state._load_registry()
+            ranked = rank_search_results(query, candidates, registry)
             filtered_ranked = []
             for r in ranked:
                 is_memory = (
@@ -706,7 +707,8 @@ class SearchService:
         if not candidates:
             return []
         candidates.sort(key=lambda x: x["score"], reverse=True)
-        ranked = rank_search_results(query, candidates)
+        registry = self.engine.state._load_registry()
+        ranked = rank_search_results(query, candidates, registry)
         filtered_ranked = []
         for r in ranked:
             is_memory = (
@@ -725,6 +727,7 @@ class SearchService:
             self.engine.state.record_concept_references(concept_ids, source="search")
         except Exception as ref_err:
             logger.warning("Failed to record concept references for fallback search results: %s", ref_err)
+
         return results
 
     def debug_ranking(self, query: str, k: int = 3, hybrid: bool = True) -> dict[str, Any]:

@@ -119,6 +119,45 @@ def run_skills_command(args):
             print(f"Error during deferral: {e}")
             sys.exit(1)
 
+    elif action == "create":
+        if not hasattr(args, 'name') or not args.name:
+            print("Error: skill name required")
+        else:
+            description = getattr(args, 'description', '') or ''
+            candidate = eng.skills.create_skill_from_template(args.name, description, project)
+            print(f"Skill candidate created: {candidate.slug}")
+            print(f"  Candidate ID: {candidate.candidate_id}")
+            print(f"  Status: {candidate.status}")
+            print(f"  File: .oem/skill_candidates/{candidate.slug}.md")
+            print(f"  Review: oem skills show {candidate.slug}")
+            print(f"  Edit:   oem skills edit {candidate.slug}")
+            print(f"  Approve: oem skills approve {candidate.slug}")
+
+    elif action == "preview":
+        if not hasattr(args, 'slug') or not args.slug:
+            print("Error: skill slug required")
+        else:
+            candidate = eng.skills.load_skill_candidate(args.slug, project)
+            if not candidate:
+                print(f"Skill candidate '{args.slug}' not found")
+            else:
+                lines = [
+                    f"Title: {candidate.title}",
+                    f"Slug: {candidate.slug}",
+                    f"Status: {candidate.status}",
+                    f"Confidence: {candidate.confidence}",
+                    f"",
+                    f"Trigger: {candidate.trigger}",
+                    f"Behavior: {candidate.recommended_behavior}",
+                    f"",
+                    f"When this skill is approved and active, the agent will:",
+                    f"  1. See the title '{candidate.title}' in preflight context",
+                    f"  2. Match on trigger '{candidate.trigger}' during task analysis",
+                    f"  3. Receive the recommended behavior as injected instructions",
+                ]
+                for line in lines:
+                    print(line)
+
     elif action == "edit":
         # Edit candidate in-place
         candidate = eng.skills.load_skill_candidate(args.slug, project)

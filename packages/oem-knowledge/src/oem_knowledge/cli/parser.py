@@ -166,6 +166,25 @@ def _setup_parser() -> argparse.ArgumentParser:
     events_p.add_argument("--concept", type=str, default="")
     events_p.add_argument("--type", type=str, default="")
     events_p.add_argument("--session-id", type=str, default="")
+    events_p.add_argument("--from", dest="from_concept", type=str, default="")
+    events_p.add_argument("--to", dest="to_concept", type=str, default="")
+    events_p.add_argument("--event-id", type=str, default="")
+    events_p.add_argument("--dry-run", action="store_true")
+    events_sub = events_p.add_subparsers(dest="events_action")
+    events_sub.required = False
+
+    events_list_p = events_sub.add_parser("list", help="List events")
+    events_list_p.add_argument("--project", type=str, default="")
+    events_list_p.add_argument("--concept", type=str, default="")
+    events_list_p.add_argument("--type", type=str, default="")
+    events_list_p.add_argument("--session-id", type=str, default="")
+
+    events_reassign_p = events_sub.add_parser("reassign", help="Reassign events between concepts")
+    events_reassign_p.add_argument("--from", dest="from_concept", type=str, default="", help="Source concept name/ID")
+    events_reassign_p.add_argument("--to", dest="to_concept", type=str, default="", help="Target concept name/ID")
+    events_reassign_p.add_argument("--event-id", type=str, default="", help="Single event ID to reassign")
+    events_reassign_p.add_argument("--dry-run", action="store_true", help="Preview without executing")
+    events_reassign_p.add_argument("--project", type=str, default="")
 
     event_p = sub.add_parser("event", help=argparse.SUPPRESS)
     event_p.add_argument("event_id", type=str)
@@ -461,6 +480,14 @@ def _setup_parser() -> argparse.ArgumentParser:
         "--split-general-learning", action="store_true",
         help="Reassign events from general-learning to more specific concepts"
     )
+    doctor_p.add_argument(
+        "--auto-cleanup", action="store_true",
+        help="Automatically detect stale/ghost/bloated concepts and suggest actions"
+    )
+    doctor_p.add_argument(
+        "--apply", action="store_true",
+        help="Execute suggested cleanup actions (use with --auto-cleanup)"
+    )
 
     warmup_p = sub.add_parser("warmup", help=argparse.SUPPRESS)
     warmup_p.add_argument("--project", type=str, default="")
@@ -559,6 +586,15 @@ def _setup_parser() -> argparse.ArgumentParser:
     skills_edit.add_argument("--behavior", type=str, default=None)
     skills_edit.add_argument("--project", type=str, default="")
 
+    skills_create = skills_sub.add_parser("create", help="Create a new skill candidate manually")
+    skills_create.add_argument("name", type=str, help="Skill name (slug)")
+    skills_create.add_argument("--description", type=str, default="", help="Skill description")
+    skills_create.add_argument("--project", type=str, default="")
+
+    skills_preview = skills_sub.add_parser("preview", help="Preview what a skill would look like when injected")
+    skills_preview.add_argument("slug", type=str)
+    skills_preview.add_argument("--project", type=str, default="")
+
     instructions_p = sub.add_parser("instructions", help="[User] Review and manage instruction directives")
     instructions_sub = instructions_p.add_subparsers(dest="instructions_action", required=True)
 
@@ -603,6 +639,17 @@ def _setup_parser() -> argparse.ArgumentParser:
     checkpoint_create_p = checkpoint_sub.add_parser("create", help="Create a manual working set checkpoint")
     checkpoint_create_p.add_argument("--project", type=str, default="")
     checkpoint_create_p.add_argument("--json", action="store_true", help="Output result in raw JSON format")
+
+    integrations_p = sub.add_parser("integrations", help="[User] Manage integrations (git hooks, editor plugins)")
+    integrations_sub = integrations_p.add_subparsers(dest="integrations_action", required=True)
+
+    git_p = integrations_sub.add_parser("git", help="Git integration commands")
+    git_sub = git_p.add_subparsers(dest="git_action", required=True)
+
+    git_precommit = git_sub.add_parser("pre-commit", help="Install pre-commit hook for event hygiene")
+    git_precommit.add_argument("--install", action="store_true", help="Install the pre-commit hook into .git/hooks/")
+    git_precommit.add_argument("--uninstall", action="store_true", help="Remove the pre-commit hook")
+    git_precommit.add_argument("--project", type=str, default="")
 
     sub._choices_actions = [
         a for a in sub._choices_actions if a.help is not argparse.SUPPRESS
