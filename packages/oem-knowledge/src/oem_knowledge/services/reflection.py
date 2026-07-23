@@ -581,6 +581,8 @@ class ReflectionService:
         on_unavailable = config.get("dense", {}).get("on_unavailable", "skip")
 
         resolved_mode = extraction_mode
+        if resolved_mode == "skip":
+            return self._empty_extraction_result(project, session_id)
         if resolved_mode == "auto":
             has_struct = bool(events or pending_events)
             if has_struct and structured_enabled:
@@ -889,6 +891,22 @@ class ReflectionService:
             "explainability": explainability,
             "reflection_time": time.perf_counter() - start_t,
             "reflection": reflection_status
+        }
+
+    def _empty_extraction_result(self, project: str | None, session_id: str) -> dict:
+        return {
+            "status": "success",
+            "mode": "skip",
+            "events_written": 0,
+            "events_rejected": 0,
+            "warnings": [],
+            "suggestion": "Concept extraction skipped (--no-extract).",
+            "report_path": None,
+            "knowledge_events": [],
+            "canonical_events": [],
+            "explainability": {},
+            "reflection_time": 0.0,
+            "reflection": {"extraction_skipped": True},
         }
 
     def reflect_session(

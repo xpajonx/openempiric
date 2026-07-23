@@ -824,6 +824,61 @@ def run_system_command(args):
             cmd_doctor_opencode(eng, project=project, wsl_distro=wsl_distro)
             return
 
+        if getattr(args, "split_general_learning", False) is True:
+            registry = eng.state._load_registry(project)
+            gl_id = None
+            for cid, cdata in registry.items():
+                if isinstance(cdata, dict) and cdata.get("canonical_name", "").lower() == "general-learning":
+                    gl_id = cid
+                    break
+            if not gl_id:
+                print(render_panel("Split General Learning", ["No general-learning concept found."], status="warn"))
+            else:
+                all_events = eng.state._load_events(project)
+                gl_events = [e for e in all_events if gl_id in e.get("concept_candidates", [])]
+                if not gl_events:
+                    print(render_panel("Split General Learning", ["general-learning has no events."], status="ok"))
+                elif len(list(registry.keys())) <= 2:
+                    print(render_panel("Split General Learning", ["Not enough other concepts to reassign to."], status="warn"))
+                else:
+                    other_cids = []
+                    other_texts = []
+                    for cid, cdata in registry.items():
+                        if cid != gl_id and isinstance(cdata, dict) and cid.startswith("concept_"):
+                            other_cids.append(cid)
+                            other_texts.append(cdata.get("canonical_name", cid))
+                    other_embeddings = eng.search.embed(other_texts)
+                    reassigned = 0
+                    for ev in gl_events:
+                        evidence = ev.get("evidence", "")
+                        if not evidence:
+                            continue
+                        ev_embedding = eng.search.embed([evidence[:512]])
+                        best_idx = -1
+                        best_score = 0.0
+                        for i in range(len(other_embeddings)):
+                            sim = eng.search.cosine_similarity(ev_embedding[0], other_embeddings[i])
+                            if sim > best_score:
+                                best_score = sim
+                                best_idx = i
+                        if best_score >= 0.75 and best_idx >= 0:
+                            target_cid = other_cids[best_idx]
+                            target = registry[target_cid]
+                            target["evidence_count"] = target.get("evidence_count", 0) + 1
+                            target.setdefault("source_event_ids", []).append(ev.get("event_id", ""))
+                            gl_data = registry[gl_id]
+                            gl_data["evidence_count"] = max(0, gl_data.get("evidence_count", 0) - 1)
+                            reassigned += 1
+                    eng.state._save_registry(registry, project)
+                    lines = [
+                        f"Reassigned {reassigned}/{len(gl_events)} events from general-learning.",
+                        f"Remaining in general-learning: {registry[gl_id].get('evidence_count', 0)}",
+                    ]
+                    if registry[gl_id].get("evidence_count", 0) < 10:
+                        lines.append("general-learning near-empty. Use 'oem concept delete general-learning' to clean up.")
+                    print(render_panel("Split General Learning", lines, status="ok"))
+            return
+
         if getattr(args, "fix", False):
             from oem_knowledge.runtime.recovery import cmd_recover
             res = cmd_recover(eng, project, scope="reflection", apply=True, backup=True, rebuild_reports=False)

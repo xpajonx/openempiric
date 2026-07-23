@@ -5,6 +5,7 @@ from pathlib import Path
 class SemanticIdentityResolver:
     def __init__(self, engine):
         self.engine = engine
+        self._cache: dict[tuple[str, str], float] = {}
 
     def scan_duplicates(self, project: str | None = None, threshold: float = 0.82) -> list[dict]:
         """Scan registry concepts for semantic duplicates."""
@@ -27,7 +28,12 @@ class SemanticIdentityResolver:
 
         for i in range(len(cids)):
             for j in range(i + 1, len(cids)):
-                sim = self.engine.search.cosine_similarity(embeddings[i], embeddings[j])
+                cache_key = (cids[i], cids[j])
+                if cache_key in self._cache:
+                    sim = self._cache[cache_key]
+                else:
+                    sim = self.engine.search.cosine_similarity(embeddings[i], embeddings[j])
+                    self._cache[cache_key] = sim
                 if sim >= threshold:
                     candidates.append({
                         "concept_a": cids[i],

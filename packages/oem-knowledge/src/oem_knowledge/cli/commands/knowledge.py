@@ -743,11 +743,36 @@ def _run_knowledge_command_impl(args):
 
 
     elif args.command == "merge":
-        res = eng.state.merge_concepts(project, args.primary_id, args.secondary_id)
-        if res.get("status") == "error":
-            print(render_panel("Merge Failure", [res.get("message", "")], status="error"))
+        registry = eng.state._load_registry(project)
+        primary_id = args.primary_id
+        secondary_id = args.secondary_id
+
+        if primary_id not in registry or secondary_id not in registry:
+            missing = []
+            if primary_id not in registry:
+                missing.append(primary_id)
+            if secondary_id not in registry:
+                missing.append(secondary_id)
+            print(render_panel("Merge Failure", [f"Concept(s) not found: {', '.join(missing)}"], status="error"))
         else:
-            print(render_panel("Concepts Merged", [res.get("message", "")], status="ok"))
+            p_data = registry[primary_id]
+            s_data = registry[secondary_id]
+            lines = [
+                f"Merging: {s_data['canonical_name']} -> {p_data['canonical_name']}",
+                f"  Events to transfer: {len(s_data.get('source_event_ids', []))}",
+                f"  Aliases to merge: {s_data.get('aliases', [])}",
+                f"  Wiki files: secondary will be deleted",
+            ]
+            if hasattr(args, 'dry_run') and args.dry_run:
+                lines.append("[dry-run] No changes made")
+                print(render_panel("Merge Preview", lines, status="warn"))
+            else:
+                print(render_panel("Merge Preview", lines, status="info"))
+                res = eng.state.merge_concepts(project, primary_id, secondary_id)
+                if res.get("status") == "error":
+                    print(render_panel("Merge Failure", [res.get("message", "")], status="error"))
+                else:
+                    print(render_panel("Concepts Merged", [res.get("message", "")], status="ok"))
 
     elif args.command == "source":
         if args.source_command == "index":

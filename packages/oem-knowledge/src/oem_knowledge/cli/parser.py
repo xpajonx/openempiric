@@ -205,6 +205,8 @@ def _setup_parser() -> argparse.ArgumentParser:
     merge_p.add_argument("primary_id", type=str)
     merge_p.add_argument("secondary_id", type=str)
     merge_p.add_argument("--auto", action="store_true", help="Automatically merge")
+    merge_p.add_argument("--dry-run", action="store_true", help="Preview merge without executing")
+    merge_p.add_argument("--force", action="store_true", help="Skip confirmation prompt")
     merge_p.add_argument("--project", type=str, default="")
 
     session_start_p = sub.add_parser(
@@ -241,6 +243,9 @@ def _setup_parser() -> argparse.ArgumentParser:
         type=float,
         default=None,
         help="Search indexing time budget in seconds (0 to skip)",
+    )
+    session_end_p.add_argument(
+        "--no-extract", action="store_true", help="Skip concept extraction during session-end"
     )
 
     session_status_p = sub.add_parser("session-status", help=argparse.SUPPRESS)
@@ -451,6 +456,10 @@ def _setup_parser() -> argparse.ArgumentParser:
     doctor_p.add_argument("--project", type=str, default="")
     doctor_p.add_argument(
         "--fix", action="store_true", help="Automatically repair safe doctor findings"
+    )
+    doctor_p.add_argument(
+        "--split-general-learning", action="store_true",
+        help="Reassign events from general-learning to more specific concepts"
     )
 
     warmup_p = sub.add_parser("warmup", help=argparse.SUPPRESS)

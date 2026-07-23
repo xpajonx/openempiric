@@ -64,6 +64,7 @@ def _run_session_command_impl(args):
             logging.debug(f"Could not load active session state: {e}")
 
         no_index = getattr(args, "no_index", False)
+        no_extract = getattr(args, "no_extract", False)
         index_budget = getattr(args, "index_budget_seconds", None)
 
         if no_index and index_budget is not None:
@@ -101,6 +102,7 @@ def _run_session_command_impl(args):
             session_started_at=session_started_at,
             update_index=not no_index,
             index_budget_seconds=final_budget,
+            extraction_mode="skip" if no_extract else "auto",
             progress_callback=progress_callback
         )
         commit_duration = time.time() - commit_start
