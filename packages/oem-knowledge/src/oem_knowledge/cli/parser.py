@@ -170,6 +170,8 @@ def _setup_parser() -> argparse.ArgumentParser:
     events_p.add_argument("--to", dest="to_concept", type=str, default="")
     events_p.add_argument("--event-id", type=str, default="")
     events_p.add_argument("--dry-run", action="store_true")
+    events_p.add_argument("--unassigned", action="store_true")
+    events_p.add_argument("--limit", type=int, default=20)
     events_sub = events_p.add_subparsers(dest="events_action")
     events_sub.required = False
 
@@ -178,10 +180,17 @@ def _setup_parser() -> argparse.ArgumentParser:
     events_list_p.add_argument("--concept", type=str, default="")
     events_list_p.add_argument("--type", type=str, default="")
     events_list_p.add_argument("--session-id", type=str, default="")
+    events_list_p.add_argument("--unassigned", action="store_true", help="Show only events with no concept assignment")
+    events_list_p.add_argument("--limit", type=int, default=20, help="Maximum events to display")
+
+    events_show_p = events_sub.add_parser("show", help="Show a single event by ID")
+    events_show_p.add_argument("event_id", type=str, help="Event UUID to display")
+    events_show_p.add_argument("--project", type=str, default="")
 
     events_reassign_p = events_sub.add_parser("reassign", help="Reassign events between concepts")
     events_reassign_p.add_argument("--from", dest="from_concept", type=str, default="", help="Source concept name/ID")
     events_reassign_p.add_argument("--to", dest="to_concept", type=str, default="", help="Target concept name/ID")
+    events_reassign_p.add_argument("--match", type=str, default="", help="Regex pattern to match against event evidence for bulk reassignment")
     events_reassign_p.add_argument("--event-id", type=str, default="", help="Single event ID to reassign")
     events_reassign_p.add_argument("--dry-run", action="store_true", help="Preview without executing")
     events_reassign_p.add_argument("--project", type=str, default="")
@@ -565,6 +574,7 @@ def _setup_parser() -> argparse.ArgumentParser:
 
     skills_suggest = skills_sub.add_parser("suggest", help="Suggest new candidates by scanning memory")
     skills_suggest.add_argument("--project", type=str, default="")
+    skills_suggest.add_argument("--relaxed", action="store_true", help="Use relaxed thresholds for candidate discovery")
 
     skills_approve = skills_sub.add_parser("approve", help="Approve candidate and promote to project skill")
     skills_approve.add_argument("slug", type=str)
@@ -589,6 +599,7 @@ def _setup_parser() -> argparse.ArgumentParser:
     skills_create = skills_sub.add_parser("create", help="Create a new skill candidate manually")
     skills_create.add_argument("name", type=str, help="Skill name (slug)")
     skills_create.add_argument("--description", type=str, default="", help="Skill description")
+    skills_create.add_argument("--concepts", type=str, default="", help="Comma-separated concept IDs to link")
     skills_create.add_argument("--project", type=str, default="")
 
     skills_preview = skills_sub.add_parser("preview", help="Preview what a skill would look like when injected")
@@ -639,6 +650,17 @@ def _setup_parser() -> argparse.ArgumentParser:
     checkpoint_create_p = checkpoint_sub.add_parser("create", help="Create a manual working set checkpoint")
     checkpoint_create_p.add_argument("--project", type=str, default="")
     checkpoint_create_p.add_argument("--json", action="store_true", help="Output result in raw JSON format")
+
+    review_p = sub.add_parser(
+        "review",
+        help="[User] Interactive review queue for unassigned events",
+    )
+    review_p.add_argument(
+        "--batch",
+        action="store_true",
+        help="Non-interactive mode: list unassigned events with top matches and exit",
+    )
+    review_p.add_argument("--project", type=str, default="")
 
     integrations_p = sub.add_parser("integrations", help="[User] Manage integrations (git hooks, editor plugins)")
     integrations_sub = integrations_p.add_subparsers(dest="integrations_action", required=True)

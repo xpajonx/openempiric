@@ -24,6 +24,7 @@ class ConceptData(BaseModel):
     updated_at: float = Field(default_factory=time.time)
     relationships: list[ConceptRelation] = Field(default_factory=list)
     source_event_ids: list[str] = Field(default_factory=list)
+    skills: list[str] = Field(default_factory=list, description="Slugs of approved skills linked to this concept")
 
 
 class KnowledgeEvent(BaseModel):
@@ -157,6 +158,10 @@ class SkillCandidate(BaseModel):
     recommended_behavior: str = Field(description="The behavior guideline recommendation")
     evidence: list[str] = Field(default_factory=list, description="Associated evidence items")
     rationale: str = Field(description="Why this candidate should become a skill")
+    concepts: list[str] = Field(default_factory=list, description="Concept IDs this skill relates to")
+    tools: list[str] = Field(default_factory=list, description="External tools this skill invokes")
+    best_practices: list[str] = Field(default_factory=list, description="SOP steps in order")
+    triggers: list[str] = Field(default_factory=list, description="Keywords that should trigger this skill")
     created_at: str = Field(description="ISO 8601 UTC timestamp format")
     updated_at: str = Field(description="ISO 8601 UTC timestamp format")
     source_event_ids: list[str] = Field(default_factory=list, description="IDs of source events")

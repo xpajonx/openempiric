@@ -1076,3 +1076,263 @@ def test_mcp_skill_candidate_approve_missing_slug_returns_clean_error(temp_proje
     assert "Slug is required" in res_str
 
 
+def test_skill_candidate_with_structured_sections_in_markdown(temp_project):
+    """Verify markdown body includes Concepts, Tools, Best Practices, Triggers sections."""
+    from oem_knowledge.services.skills import dump_markdown_body
+
+    candidate = SkillCandidate(
+        candidate_id="sc_struct_1",
+        slug="structured-workflow",
+        title="Structured Workflow",
+        status="proposed",
+        confidence="high",
+        trigger="When designing structured workflows.",
+        recommended_behavior="Use structured YAML templates.",
+        evidence=["Evidence A", "Evidence B"],
+        rationale="Structured approach reduces errors.",
+        concepts=["concept_yaml_templates", "concept_workflow_design"],
+        tools=["yamllint", "pydantic"],
+        best_practices=["Define schema first", "Validate with tests", "Document fields"],
+        triggers=["yaml template", "workflow design", "structured config"],
+        created_at="2026-07-23T00:00:00Z",
+        updated_at="2026-07-23T00:00:00Z",
+    )
+
+    body = dump_markdown_body(candidate)
+
+    assert "## Concepts" in body
+    assert "- concept_yaml_templates" in body
+    assert "- concept_workflow_design" in body
+    assert "## Tools" in body
+    assert "- yamllint" in body
+    assert "- pydantic" in body
+    assert "## Best Practices" in body
+    assert "1. Define schema first" in body
+    assert "2. Validate with tests" in body
+    assert "3. Document fields" in body
+    assert "## Triggers" in body
+    assert "- yaml template" in body
+    assert "- workflow design" in body
+    assert "- structured config" in body
+
+
+def test_skill_candidate_parse_structured_sections(temp_project):
+    """Verify parse_markdown_body extracts Concepts, Tools, Best Practices, Triggers."""
+    from oem_knowledge.services.skills import parse_markdown_body
+
+    markdown = """# Full Workflow
+
+## Trigger
+When something triggers.
+
+## Recommended behavior
+Do the thing.
+
+## Evidence
+- Evidence 1
+- Evidence 2
+
+## Concepts
+- concept_alpha
+- concept_beta
+
+## Tools
+- tool_one
+- tool_two
+
+## Best Practices
+1. Step one
+2. Step two
+3. Step three
+
+## Triggers
+- keyword_one
+- keyword_two
+
+## Why this should become a skill
+Because it works.
+
+## Status
+Proposed
+"""
+
+    result = parse_markdown_body(markdown)
+    assert result["concepts"] == ["concept_alpha", "concept_beta"]
+    assert result["tools"] == ["tool_one", "tool_two"]
+    assert result["best_practices"] == ["Step one", "Step two", "Step three"]
+    assert result["triggers"] == ["keyword_one", "keyword_two"]
+
+
+def test_skill_candidate_round_trip_with_structured_sections(temp_project):
+    """Verify create -> dump -> parse round-trip preserves all new sections."""
+    from oem_knowledge.services.skills import dump_markdown_body, parse_markdown_body
+
+    candidate = SkillCandidate(
+        candidate_id="sc_rt_1",
+        slug="round-trip-workflow",
+        title="Round Trip Workflow",
+        status="proposed",
+        confidence="high",
+        trigger="When round-tripping.",
+        recommended_behavior="Should round-trip.",
+        evidence=["Ev 1"],
+        rationale="Round trip is important.",
+        concepts=["concept_a", "concept_b"],
+        tools=["tool_x"],
+        best_practices=["First do this", "Then do that"],
+        triggers=["trigger phrase"],
+        created_at="2026-07-23T00:00:00Z",
+        updated_at="2026-07-23T00:00:00Z",
+    )
+
+    body = dump_markdown_body(candidate)
+    parsed = parse_markdown_body(body)
+
+    assert parsed["concepts"] == ["concept_a", "concept_b"]
+    assert parsed["tools"] == ["tool_x"]
+    assert parsed["best_practices"] == ["First do this", "Then do that"]
+    assert parsed["triggers"] == ["trigger phrase"]
+
+
+def test_create_skill_candidate_with_structured_sections(temp_project):
+    """Verify create_skill_candidate with new params produces correct markdown."""
+    engine, tmp_path = temp_project
+
+    candidate = engine.skills.create_skill_candidate(
+        candidate_id="sc_full_1",
+        slug="full-structured-workflow",
+        title="Full Structured Workflow",
+        trigger="When doing full structured work.",
+        recommended_behavior="Use the full template.",
+        evidence=["Evidence 1"],
+        rationale="Full template is better.",
+        concepts=["concept_main", "concept_sub"],
+        tools=["docker", "kubectl"],
+        best_practices=["Plan first", "Execute second", "Verify third"],
+        triggers=["full work", "structured task"],
+        project=str(tmp_path),
+    )
+
+    layout = engine.layout(str(tmp_path))
+    file_path = layout.skill_candidates_dir / "full-structured-workflow.md"
+    content = file_path.read_text(encoding="utf-8")
+
+    assert "## Concepts" in content
+    assert "- concept_main" in content
+    assert "- concept_sub" in content
+    assert "## Tools" in content
+    assert "- docker" in content
+    assert "- kubectl" in content
+    assert "## Best Practices" in content
+    assert "1. Plan first" in content
+    assert "2. Execute second" in content
+    assert "3. Verify third" in content
+    assert "## Triggers" in content
+    assert "- full work" in content
+    assert "- structured task" in content
+
+    # Round-trip: load back from disk
+    loaded = engine.skills.load_skill_candidate("full-structured-workflow", str(tmp_path))
+    assert loaded is not None
+    assert loaded.concepts == ["concept_main", "concept_sub"]
+    assert loaded.tools == ["docker", "kubectl"]
+    assert loaded.best_practices == ["Plan first", "Execute second", "Verify third"]
+    assert loaded.triggers == ["full work", "structured task"]
+
+
+def test_create_skill_from_template_with_structured_sections(temp_project):
+    """Verify create_skill_from_template accepts and persists new params."""
+    engine, tmp_path = temp_project
+
+    candidate = engine.skills.create_skill_from_template(
+        name="Template Structured Workflow",
+        description="A template with structure.",
+        project=str(tmp_path),
+        concepts=["concept_tpl"],
+        tools=["tool_tpl"],
+        best_practices=["Step A", "Step B"],
+        triggers=["tpl trigger"],
+    )
+
+    layout = engine.layout(str(tmp_path))
+    file_path = layout.skill_candidates_dir / "template-structured-workflow.md"
+    content = file_path.read_text(encoding="utf-8")
+
+    assert "## Concepts" in content
+    assert "- concept_tpl" in content
+    assert "## Tools" in content
+    assert "- tool_tpl" in content
+    assert "## Best Practices" in content
+    assert "1. Step A" in content
+    assert "2. Step B" in content
+    assert "## Triggers" in content
+    assert "- tpl trigger" in content
+
+    loaded = engine.skills.load_skill_candidate("template-structured-workflow", str(tmp_path))
+    assert loaded is not None
+    assert loaded.concepts == ["concept_tpl"]
+    assert loaded.tools == ["tool_tpl"]
+    assert loaded.best_practices == ["Step A", "Step B"]
+    assert loaded.triggers == ["tpl trigger"]
+
+
+def test_approved_skill_includes_structured_sections(temp_project):
+    """Verify dump_approved_skill_markdown includes new sections when non-empty."""
+    from oem_knowledge.services.skills import dump_approved_skill_markdown
+
+    candidate = SkillCandidate(
+        candidate_id="sc_app_1",
+        slug="approve-structured-workflow",
+        title="Approve Structured Workflow",
+        status="proposed",
+        confidence="high",
+        trigger="When approving structured.",
+        recommended_behavior="Should include sections.",
+        evidence=["Ev 1"],
+        rationale="Approved skills need structure.",
+        concepts=["concept_app"],
+        tools=["tool_app"],
+        best_practices=["Step app one"],
+        triggers=["approve trigger"],
+        created_at="2026-07-23T00:00:00Z",
+        updated_at="2026-07-23T00:00:00Z",
+    )
+
+    output = dump_approved_skill_markdown(candidate, "2026-07-23T00:00:00Z")
+
+    assert "## Concepts" in output
+    assert "- concept_app" in output
+    assert "## Tools" in output
+    assert "- tool_app" in output
+    assert "## Best Practices" in output
+    assert "1. Step app one" in output
+    assert "## Triggers" in output
+    assert "- approve trigger" in output
+
+
+def test_approved_skill_omits_empty_structured_sections(temp_project):
+    """Verify dump_approved_skill_markdown skips sections when lists are empty."""
+    from oem_knowledge.services.skills import dump_approved_skill_markdown
+
+    candidate = SkillCandidate(
+        candidate_id="sc_empty_1",
+        slug="empty-sections-workflow",
+        title="Empty Sections Workflow",
+        status="proposed",
+        confidence="medium",
+        trigger="When empty.",
+        recommended_behavior="Should omit empty sections.",
+        evidence=[],
+        rationale="Empty sections should not appear.",
+        created_at="2026-07-23T00:00:00Z",
+        updated_at="2026-07-23T00:00:00Z",
+    )
+
+    output = dump_approved_skill_markdown(candidate, "2026-07-23T00:00:00Z")
+
+    assert "## Concepts" not in output
+    assert "## Tools" not in output
+    assert "## Best Practices" not in output
+    assert "## Triggers" not in output
+
+

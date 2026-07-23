@@ -775,6 +775,217 @@ enabled = true
     print(render_panel("OEM Grok Setup", lines, status="ok"))
 
 
+def cmd_split_general_learning(eng, project: str | None = None, apply: bool = False) -> None:
+    """Reassign general-learning events to more specific concepts via embedding similarity.
+
+    When apply=False (default), runs as dry-run — prints what would change without writing.
+    When apply=True, persists the reassignment to the registry.
+    """
+    registry = eng.state._load_registry(project)
+    gl_id = None
+    for cid, cdata in registry.items():
+        if isinstance(cdata, dict) and cdata.get("canonical_name", "").lower() == "general-learning":
+            gl_id = cid
+            break
+    if not gl_id:
+        print(render_panel("Split General Learning", ["No general-learning concept found."], status="warn"))
+        return
+
+    all_events = eng.state._load_events(project)
+    gl_events = [e for e in all_events if gl_id in e.get("concept_candidates", [])]
+    if not gl_events:
+        print(render_panel("Split General Learning", ["general-learning has no events."], status="ok"))
+        return
+    if len(list(registry.keys())) <= 2:
+        print(render_panel("Split General Learning", ["Not enough other concepts to reassign to."], status="warn"))
+        return
+
+    other_cids = []
+    other_texts = []
+    for cid, cdata in registry.items():
+        if cid != gl_id and isinstance(cdata, dict) and cid.startswith("concept_"):
+            other_cids.append(cid)
+            other_texts.append(cdata.get("canonical_name", cid))
+
+    other_embeddings = eng.search.embed(other_texts)
+    planned = 0
+    skipped_no_evidence = 0
+    skipped_low_similarity = 0
+    assignments = []
+
+    for ev in gl_events:
+        evidence = ev.get("evidence", "")
+        if not evidence:
+            skipped_no_evidence += 1
+            continue
+        ev_embedding = eng.search.embed([evidence[:512]])
+        best_idx = -1
+        best_score = 0.0
+        for i in range(len(other_embeddings)):
+            sim = eng.search.cosine_similarity(ev_embedding[0], other_embeddings[i])
+            if sim > best_score:
+                best_score = sim
+                best_idx = i
+        if best_score >= 0.75 and best_idx >= 0:
+            target_cid = other_cids[best_idx]
+            target_name = registry[target_cid].get("canonical_name", target_cid)
+            assignments.append((target_cid, target_name, best_score, ev.get("event_id", "")))
+            if apply:
+                target = registry[target_cid]
+                target["evidence_count"] = target.get("evidence_count", 0) + 1
+                target.setdefault("source_event_ids", []).append(ev.get("event_id", ""))
+                gl_data = registry[gl_id]
+                gl_data["evidence_count"] = max(0, gl_data.get("evidence_count", 0) - 1)
+            planned += 1
+        else:
+            skipped_low_similarity += 1
+
+    if apply:
+        eng.state._save_registry(registry, project)
+
+    mode = "Applied" if apply else "Dry-run"
+    lines = [
+        f"{mode}: would reassign {planned}/{len(gl_events)} events from general-learning.",
+        f"  Skipped (no evidence text): {skipped_no_evidence}",
+        f"  Skipped (similarity < 0.75):  {skipped_low_similarity}",
+    ]
+    if assignments:
+        lines.append("")
+        lines.append("Top assignments to concepts:")
+        for target_cid, target_name, score, ev_id in assignments[:10]:
+            lines.append(f"  -> {target_name} ({target_cid})  score={score:.2f}  event={ev_id}")
+        if len(assignments) > 10:
+            lines.append(f"  ... and {len(assignments) - 10} more")
+
+    remaining = registry[gl_id].get("evidence_count", 0) if apply else len(gl_events) - planned
+    lines.append(f"Remaining in general-learning: {remaining}")
+    if remaining < 10:
+        lines.append("general-learning near-empty. Use 'oem concept delete general-learning' to clean up.")
+
+    print(render_panel("Split General Learning", lines, status="ok"))
+
+
+def cmd_auto_cleanup(eng, project=None, apply=False):
+    """Scan for ghost, bloated, and low-quality concepts.
+
+    Identifies three categories of problematic concepts:
+      - Ghost: candidate concepts with zero evidence, older than 30 days.
+      - Bloated: concepts with >500 events.
+      - Low-quality: concepts with low confidence + low evidence + older than 14 days.
+
+    When apply=True, deletes ghost concepts, deprecates low-quality ones, and
+    reports bloated ones as warnings.
+    """
+    import time
+    from oem_knowledge.ui import render_panel
+
+    try:
+        from oem_knowledge.services.state import _parse_timestamp
+    except ImportError:
+        def _parse_timestamp(val):
+            if val is None:
+                return None
+            try:
+                return float(val)
+            except (ValueError, TypeError):
+                pass
+            if isinstance(val, str):
+                from datetime import datetime
+                try:
+                    iso_str = val.strip()
+                    if iso_str.endswith("Z"):
+                        iso_str = iso_str[:-1] + "+00:00"
+                    return datetime.fromisoformat(iso_str).timestamp()
+                except Exception:
+                    pass
+            return None
+
+    registry = eng.state._load_registry(project)
+    now = time.time()
+    actions = []
+
+    for cid, cdata in list(registry.items()):
+        if not isinstance(cdata, dict):
+            continue
+
+        evidence_count = cdata.get("evidence_count", 0)
+        status = cdata.get("status", "candidate")
+        confidence = cdata.get("confidence", 1)
+        created_at = cdata.get("created_at", None)
+        canonical_name = cdata.get("canonical_name", cid)
+
+        # Parse timestamp - handle both Unix epoch and ISO 8601 formats
+        created_ts = _parse_timestamp(created_at) if created_at is not None else None
+        if created_ts is None:
+            continue
+
+        age_days = (now - created_ts) / 86400
+
+        # Ghost concepts: candidate, 0 events, > 30 days old
+        if status == "candidate" and evidence_count == 0 and age_days > 30:
+            actions.append({
+                "action": "delete",
+                "concept_id": cid,
+                "name": canonical_name,
+                "reason": f"ghost: 0 events, {age_days:.0f} days old",
+            })
+
+        # Bloated concepts: > 500 events
+        if evidence_count > 500:
+            actions.append({
+                "action": "warn",
+                "concept_id": cid,
+                "name": canonical_name,
+                "reason": f"bloated: {evidence_count} events",
+            })
+
+        # Low quality: health heuristic (low confidence + low evidence + old)
+        if confidence < 2 and evidence_count < 3 and age_days > 14:
+            actions.append({
+                "action": "deprecate",
+                "concept_id": cid,
+                "name": canonical_name,
+                "reason": f"low quality: confidence={confidence}, evidence={evidence_count}",
+            })
+
+    if not actions:
+        print(render_panel("Auto-Cleanup", ["No issues found. Registry is healthy!"], status="ok"))
+        return
+
+    # Report findings
+    lines = [f"Found {len(actions)} issue(s):", ""]
+    for a in actions:
+        lines.append(f"  [{a['action'].upper()}] {a['name']} ({a['concept_id']})")
+        lines.append(f"    Reason: {a['reason']}")
+
+    if not apply:
+        lines.append("")
+        lines.append("Run with --apply to execute these actions.")
+
+    print(render_panel("Auto-Cleanup", lines, status="warn" if not apply else "ok"))
+
+    if apply:
+        executed = 0
+        for a in actions:
+            if a["action"] == "delete":
+                if a["concept_id"] in registry:
+                    del registry[a["concept_id"]]
+                    executed += 1
+            elif a["action"] == "deprecate":
+                if a["concept_id"] in registry:
+                    registry[a["concept_id"]]["status"] = "deprecated"
+                    executed += 1
+            # "warn" actions are informational only
+
+        if executed > 0:
+            eng.state._save_registry(registry, project)
+            try:
+                eng.materialization.materialize_concepts(project)
+            except Exception:
+                pass
+        print(render_panel("Auto-Cleanup", [f"Executed {executed} action(s). Registry updated."], status="ok"))
+
+
 def run_system_command(args):
     # Setup deferred logging Configuration
     import logging
@@ -825,131 +1036,21 @@ def run_system_command(args):
             return
 
         if getattr(args, "split_general_learning", False) is True:
-            registry = eng.state._load_registry(project)
-            gl_id = None
-            for cid, cdata in registry.items():
-                if isinstance(cdata, dict) and cdata.get("canonical_name", "").lower() == "general-learning":
-                    gl_id = cid
-                    break
-            if not gl_id:
-                print(render_panel("Split General Learning", ["No general-learning concept found."], status="warn"))
-            else:
-                all_events = eng.state._load_events(project)
-                gl_events = [e for e in all_events if gl_id in e.get("concept_candidates", [])]
-                if not gl_events:
-                    print(render_panel("Split General Learning", ["general-learning has no events."], status="ok"))
-                elif len(list(registry.keys())) <= 2:
-                    print(render_panel("Split General Learning", ["Not enough other concepts to reassign to."], status="warn"))
-                else:
-                    other_cids = []
-                    other_texts = []
-                    for cid, cdata in registry.items():
-                        if cid != gl_id and isinstance(cdata, dict) and cid.startswith("concept_"):
-                            other_cids.append(cid)
-                            other_texts.append(cdata.get("canonical_name", cid))
-                    other_embeddings = eng.search.embed(other_texts)
-                    reassigned = 0
-                    for ev in gl_events:
-                        evidence = ev.get("evidence", "")
-                        if not evidence:
-                            continue
-                        ev_embedding = eng.search.embed([evidence[:512]])
-                        best_idx = -1
-                        best_score = 0.0
-                        for i in range(len(other_embeddings)):
-                            sim = eng.search.cosine_similarity(ev_embedding[0], other_embeddings[i])
-                            if sim > best_score:
-                                best_score = sim
-                                best_idx = i
-                        if best_score >= 0.75 and best_idx >= 0:
-                            target_cid = other_cids[best_idx]
-                            target = registry[target_cid]
-                            target["evidence_count"] = target.get("evidence_count", 0) + 1
-                            target.setdefault("source_event_ids", []).append(ev.get("event_id", ""))
-                            gl_data = registry[gl_id]
-                            gl_data["evidence_count"] = max(0, gl_data.get("evidence_count", 0) - 1)
-                            reassigned += 1
-                    eng.state._save_registry(registry, project)
-                    lines = [
-                        f"Reassigned {reassigned}/{len(gl_events)} events from general-learning.",
-                        f"Remaining in general-learning: {registry[gl_id].get('evidence_count', 0)}",
-                    ]
-                    if registry[gl_id].get("evidence_count", 0) < 10:
-                        lines.append("general-learning near-empty. Use 'oem concept delete general-learning' to clean up.")
-                    print(render_panel("Split General Learning", lines, status="ok"))
+            apply_mode = getattr(args, "apply", False)
+            cmd_split_general_learning(eng, project=project, apply=apply_mode)
             return
 
         if getattr(args, "auto_cleanup", False) is True:
-            registry = eng.state._load_registry(project)
-            actions = []
-
-            duplicates = eng.propose_merges(0.85, project)
-            for d in duplicates:
-                actions.append({
-                    "type": "merge",
-                    "concepts": (d.get("concept_a", ""), d.get("concept_b", "")),
-                    "reason": f"Semantic duplicates (score: {d.get('similarity', 0):.2f})",
-                })
-
-            from datetime import datetime, timezone
-            now = datetime.now(timezone.utc)
-            for cid, cdata in registry.items():
-                if not isinstance(cdata, dict) or not cid.startswith("concept_"):
-                    continue
-                if cdata.get("status") == "candidate" and cdata.get("evidence_count", 0) == 0:
-                    created_str = cdata.get("created_at", "")
-                    try:
-                        created = datetime.fromisoformat(created_str.replace("Z", "+00:00"))
-                        age_days = (now - created).days
-                        if age_days > 30:
-                            actions.append({
-                                "type": "deprecate",
-                                "concept": cid,
-                                "reason": f"Ghost concept: 0 events, {age_days} days old",
-                            })
-                    except (ValueError, TypeError):
-                        pass
-
-            for cid, cdata in registry.items():
-                if not isinstance(cdata, dict) or not cid.startswith("concept_"):
-                    continue
-                if cdata.get("evidence_count", 0) > 500:
-                    actions.append({
-                        "type": "split",
-                        "concept": cid,
-                        "reason": f"Bloated concept: {cdata['evidence_count']} events",
-                    })
-
-            lines = [f"Found {len(actions)} cleanup actions:"]
-            for i, action in enumerate(actions[:20]):
-                lines.append(f"  {i+1}. [{action['type']}] {action['reason']}")
-            if len(actions) > 20:
-                lines.append(f"  ... and {len(actions) - 20} more")
-
-            if getattr(args, "apply", False):
-                for action in actions:
-                    try:
-                        if action["type"] == "merge":
-                            a, b = action["concepts"]
-                            eng.state.merge_concepts(project, a, b)
-                        elif action["type"] == "deprecate":
-                            cid = action["concept"]
-                            if cid in registry:
-                                cdata = registry[cid]
-                                cdata = eng.state.evaluate_concept_status(cdata, "deprecation", "system")
-                                registry[cid] = cdata
-                                eng.state._save_registry(registry, project)
-                                eng.materialization.materialize_concepts(project)
-                        elif action["type"] == "split":
-                            pass
-                    except Exception as e:
-                        lines.append(f"  Failed [{action['type']}]: {e}")
-                lines.append(f"Applied {len(actions)} actions")
-            else:
-                lines.append("Run with --apply to execute")
-
-            print(render_panel("Auto Cleanup", lines, status="warn" if actions else "ok"))
+            apply_mode = getattr(args, "apply", False)
+            cmd_auto_cleanup(eng, project=project, apply=apply_mode)
             return
+
+        if getattr(args, "apply", False) and not getattr(args, "auto_cleanup", False) and not getattr(args, "split_general_learning", False):
+            print(render_panel(
+                "Doctor",
+                ["Warning: --apply only works with --split-general-learning or --auto-cleanup. Ignoring it."],
+                status="warn",
+            ))
 
         if getattr(args, "fix", False):
             from oem_knowledge.runtime.recovery import cmd_recover

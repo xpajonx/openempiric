@@ -67,7 +67,9 @@ def run_skills_command(args):
         print(render_panel(f"Skill Candidate: {candidate.slug}", lines, status="ok"))
 
     elif action == "suggest":
-        res = eng.skill_promotion.evaluate_skill_candidates(project)
+        # Always default to relaxed mode for best UX.
+        # The --relaxed flag exists in the parser for explicit documentation.
+        res = eng.skill_promotion.evaluate_skill_candidates(project, relaxed=True)
         from oem_knowledge.ui import render_panel
         if res.get("status") == "error":
             print(render_panel("Suggestion Error", res.get("warnings", []), status="error"))
@@ -124,7 +126,9 @@ def run_skills_command(args):
             print("Error: skill name required")
         else:
             description = getattr(args, 'description', '') or ''
-            candidate = eng.skills.create_skill_from_template(args.name, description, project)
+            concepts_str = getattr(args, 'concepts', '')
+            source_concept_ids = [c.strip() for c in concepts_str.split(",") if c.strip()] if concepts_str else None
+            candidate = eng.skills.create_skill_from_template(args.name, description, project, source_concept_ids=source_concept_ids)
             print(f"Skill candidate created: {candidate.slug}")
             print(f"  Candidate ID: {candidate.candidate_id}")
             print(f"  Status: {candidate.status}")

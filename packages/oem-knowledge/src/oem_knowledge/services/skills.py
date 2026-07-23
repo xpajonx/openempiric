@@ -73,6 +73,10 @@ def parse_markdown_body(body_text: str) -> dict:
         "recommended_behavior": "",
         "evidence": [],
         "rationale": "",
+        "concepts": [],
+        "tools": [],
+        "best_practices": [],
+        "triggers": [],
     }
     
     # Extract Title: `# Title`
@@ -101,6 +105,34 @@ def parse_markdown_body(body_text: str) -> dict:
             result["evidence"] = evidence_items
         elif header in ("why this should become a skill", "rationale"):
             result["rationale"] = content
+        elif header == "concepts":
+            for line in content.splitlines():
+                line_stripped = line.strip()
+                if line_stripped.startswith("-") or line_stripped.startswith("*"):
+                    result["concepts"].append(line_stripped[1:].strip())
+                elif line_stripped:
+                    result["concepts"].append(line_stripped)
+        elif header == "tools":
+            for line in content.splitlines():
+                line_stripped = line.strip()
+                if line_stripped.startswith("-") or line_stripped.startswith("*"):
+                    result["tools"].append(line_stripped[1:].strip())
+                elif line_stripped:
+                    result["tools"].append(line_stripped)
+        elif header == "best practices":
+            for line in content.splitlines():
+                line_stripped = line.strip()
+                if line_stripped:
+                    # Strip leading numbering like "1. " or "1) "
+                    cleaned = re.sub(r"^\d+[\.\)]\s*", "", line_stripped)
+                    result["best_practices"].append(cleaned)
+        elif header == "triggers":
+            for line in content.splitlines():
+                line_stripped = line.strip()
+                if line_stripped.startswith("-") or line_stripped.startswith("*"):
+                    result["triggers"].append(line_stripped[1:].strip())
+                elif line_stripped:
+                    result["triggers"].append(line_stripped)
             
     return result
 
@@ -117,11 +149,48 @@ def dump_markdown_body(candidate: SkillCandidate) -> str:
         body.append("\n".join(f"- {item}" for item in candidate.evidence) + "\n")
     else:
         body.append("\n")
+    body.append("## Concepts")
+    if candidate.concepts:
+        body.append("\n".join(f"- {item}" for item in candidate.concepts) + "\n")
+    else:
+        body.append("\n")
+    body.append("## Tools")
+    if candidate.tools:
+        body.append("\n".join(f"- {item}" for item in candidate.tools) + "\n")
+    else:
+        body.append("\n")
+    body.append("## Best Practices")
+    if candidate.best_practices:
+        items = []
+        for i, step in enumerate(candidate.best_practices, 1):
+            items.append(f"{i}. {step}")
+        body.append("\n".join(items) + "\n")
+    else:
+        body.append("\n")
+    body.append("## Triggers")
+    if candidate.triggers:
+        body.append("\n".join(f"- {item}" for item in candidate.triggers) + "\n")
+    else:
+        body.append("\n")
     body.append("## Why this should become a skill")
     body.append(candidate.rationale + "\n")
     body.append("## Status")
     body.append(candidate.status.title())
     return "\n".join(body)
+
+
+def _append_list_section(body: list[str], heading: str, items: list[str]) -> None:
+    """Append a section with bullet or numbered list items if non-empty."""
+    if not items:
+        return
+    body.append(f"## {heading}")
+    if heading == "Best Practices":
+        for i, item in enumerate(items, 1):
+            body.append(f"{i}. {item}")
+    else:
+        for item in items:
+            body.append(f"- {item}")
+    body.append("")
 
 
 def dump_approved_skill_markdown(candidate: SkillCandidate, approved_at: str) -> str:
@@ -145,6 +214,10 @@ def dump_approved_skill_markdown(candidate: SkillCandidate, approved_at: str) ->
         body.append("\n".join(f"- {item}" for item in candidate.evidence) + "\n")
     else:
         body.append("\n")
+    _append_list_section(body, "Concepts", candidate.concepts)
+    _append_list_section(body, "Tools", candidate.tools)
+    _append_list_section(body, "Best Practices", candidate.best_practices)
+    _append_list_section(body, "Triggers", candidate.triggers)
     
     return f"{frontmatter}\n\n" + "\n".join(body)
 
@@ -173,6 +246,10 @@ def dump_superseded_skill_markdown(candidate: SkillCandidate, approved_at: str, 
         body.append("\n".join(f"- {item}" for item in candidate.evidence) + "\n")
     else:
         body.append("\n")
+    _append_list_section(body, "Concepts", candidate.concepts)
+    _append_list_section(body, "Tools", candidate.tools)
+    _append_list_section(body, "Best Practices", candidate.best_practices)
+    _append_list_section(body, "Triggers", candidate.triggers)
     
     return f"{frontmatter}\n\n" + "\n".join(body)
 
@@ -199,6 +276,11 @@ class SkillService:
         name: str,
         description: str = "",
         project: str | None = None,
+        concepts: list[str] | None = None,
+        tools: list[str] | None = None,
+        best_practices: list[str] | None = None,
+        triggers: list[str] | None = None,
+        source_concept_ids: list[str] | None = None,
     ) -> SkillCandidate:
         import uuid
         import re as _re
@@ -218,8 +300,12 @@ class SkillService:
             rationale=f"Manually created skill candidate: {name}",
             confidence="medium",
             status="proposed",
+            concepts=concepts or [],
+            tools=tools or [],
+            best_practices=best_practices or [],
+            triggers=triggers or [],
             source_event_ids=[],
-            source_concept_ids=[],
+            source_concept_ids=source_concept_ids or concepts or [],
             created_at=now,
             updated_at=now,
         )
@@ -263,6 +349,10 @@ class SkillService:
         status: Literal["proposed", "approved", "rejected", "deferred", "superseded"] = "proposed",
         source_event_ids: list[str] | None = None,
         source_concept_ids: list[str] | None = None,
+        concepts: list[str] | None = None,
+        tools: list[str] | None = None,
+        best_practices: list[str] | None = None,
+        triggers: list[str] | None = None,
         created_at: str | None = None,
         updated_at: str | None = None,
         project: str | None = None,
@@ -278,6 +368,10 @@ class SkillService:
             rationale=rationale,
             confidence=confidence,
             status=status,
+            concepts=concepts or [],
+            tools=tools or [],
+            best_practices=best_practices or [],
+            triggers=triggers or [],
             source_event_ids=source_event_ids or [],
             source_concept_ids=source_concept_ids or [],
             created_at=created_at or now,
@@ -346,6 +440,10 @@ class SkillService:
             recommended_behavior=body_data.get("recommended_behavior", ""),
             evidence=body_data.get("evidence") or [],
             rationale=body_data.get("rationale", ""),
+            concepts=body_data.get("concepts") or [],
+            tools=body_data.get("tools") or [],
+            best_practices=body_data.get("best_practices") or [],
+            triggers=body_data.get("triggers") or [],
             confidence=metadata.get("confidence", "medium"),
             status=metadata.get("status", "proposed"),
             source_event_ids=metadata.get("source_event_ids") or [],
@@ -386,6 +484,23 @@ class SkillService:
         candidate.status = status
         now = utc_iso()
         candidate.updated_at = now
+
+        # Update concept back-references
+        if candidate.source_concept_ids:
+            try:
+                registry = self.engine.state._load_registry(project)
+                for cid in candidate.source_concept_ids:
+                    if cid in registry:
+                        if status == "approved":
+                            if candidate.slug not in registry[cid].setdefault("skills", []):
+                                registry[cid]["skills"].append(candidate.slug)
+                        elif prev_status == "approved" and status != "approved":
+                            skill_slugs = registry[cid].get("skills", [])
+                            if candidate.slug in skill_slugs:
+                                skill_slugs.remove(candidate.slug)
+                self.engine.state._save_registry(registry, project)
+            except Exception:
+                logger.warning("Failed to update concept back-references for skill %s", candidate.slug)
 
         # Save updated candidate in skill_candidates/
         sfs = self.engine._sfs(project)

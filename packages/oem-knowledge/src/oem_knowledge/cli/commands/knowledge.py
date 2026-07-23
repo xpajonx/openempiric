@@ -269,8 +269,59 @@ def _run_knowledge_command_impl(args):
         if events_action == "reassign":
             from_concept = getattr(args, "from_concept", "")
             to_concept = getattr(args, "to_concept", "")
-            if not from_concept or not to_concept:
-                print(render_panel("Error", ["--from and --to are required for reassign."], status="error"))
+            match_pattern = getattr(args, "match", "")
+
+            if not to_concept:
+                print(render_panel("Error", ["--to is required for reassign."], status="error"))
+            elif match_pattern:
+                # Regex bulk mode
+                import re
+                try:
+                    pattern = re.compile(match_pattern)
+                except re.error as e:
+                    print(render_panel("Error", [f"Invalid regex pattern: {e}"], status="error"))
+                    return
+                events = eng.state._load_events(project)
+                event_id_filter = getattr(args, "event_id", "")
+                dry_run = getattr(args, "dry_run", False)
+                moved = 0
+                from_clean = from_concept.strip().replace(" ", "-").lower() if from_concept else ""
+                to_clean = to_concept.strip().replace(" ", "-").lower()
+
+                for ev in events:
+                    if event_id_filter and ev.get("event_id", "") != event_id_filter:
+                        continue
+                    # If --from specified, only match events currently in that concept
+                    if from_clean:
+                        cc = ev.get("concept_candidates", [])
+                        if from_clean not in [c.lower() for c in cc]:
+                            continue
+                    # Match against evidence and summary
+                    evidence = ev.get("evidence", "")
+                    summary = ev.get("summary", "")
+                    if not (pattern.search(evidence) or pattern.search(summary)):
+                        continue
+                    # Perform reassignment
+                    cc = ev.get("concept_candidates", [])
+                    if from_clean:
+                        cc = [c for c in cc if c.lower() != from_clean]
+                    if to_clean not in [c.lower() for c in cc]:
+                        cc.append(to_clean)
+                    ev["concept_candidates"] = cc
+                    moved += 1
+                    if dry_run:
+                        print(f"  Would move: {ev.get('evidence', '')[:80]}...")
+
+                if not dry_run and moved > 0:
+                    p = eng._events_path(project)
+                    sfs = eng._sfs(project)
+                    sfs.write_text(p, "\n".join(json.dumps(e) for e in events) + "\n")
+                    eng.state.rebuild_registry(project)
+                label = "Would move" if dry_run else "Moved"
+                from_info = f" from {from_concept}" if from_concept else ""
+                print(render_panel("Events Reassign (regex)", [f"{label} {moved} events matching '{match_pattern}'{from_info} to {to_concept}"], status="ok"))
+            elif not from_concept:
+                print(render_panel("Error", ["--from is required for reassign (or use --match for regex bulk mode)."], status="error"))
             else:
                 events = eng.state._load_events(project)
                 from_clean = from_concept.strip().replace(" ", "-").lower()
@@ -298,6 +349,26 @@ def _run_knowledge_command_impl(args):
                     eng.state.rebuild_registry(project)
                 label = "Would move" if dry_run else "Moved"
                 print(render_panel("Events Reassign", [f"{label} {moved} events from {from_concept} to {to_concept}"], status="ok"))
+        elif events_action == "show":
+            event_id = getattr(args, "event_id", "")
+            if not event_id:
+                print(render_panel("Error", ["event_id is required for show."], status="error"))
+            else:
+                try:
+                    ev = eng.state.get_event(project, event_id)
+                    lines = [
+                        f"Event ID: {ev['event_id']}",
+                        f"Type: {ev.get('event_type', '')}",
+                        f"Timestamp: {ev.get('timestamp', '')}",
+                        f"Session: {ev.get('session_id', '')}",
+                        f"Confidence: {ev.get('confidence', '')}",
+                        f"Concepts: {', '.join(ev.get('concept_candidates', []))}",
+                        f"Summary: {ev.get('summary', '')}",
+                        f"Evidence: {ev.get('evidence', '')}",
+                    ]
+                    print(render_panel("Event Detail", lines, status="ok"))
+                except KeyError:
+                    print(render_panel("Not Found", [f"No event: {event_id}"], status="error"))
         else:
             events = eng.state.get_events(
                 project,
@@ -305,9 +376,12 @@ def _run_knowledge_command_impl(args):
                 event_type=args.type,
                 session_id=args.session_id,
             )
+            if getattr(args, 'unassigned', False):
+                events = [e for e in events if not e.get('concept_candidates')]
+            limit = getattr(args, 'limit', 20)
             lines = [f"Total: {len(events)}"] + [
                 f"  [{ev['event_type'].upper()}] {ev.get('summary', '')[:80]}"
-                for ev in events[:20]
+                for ev in events[:limit]
             ]
             print(render_panel("Events", lines, status="ok"))
 
@@ -514,6 +588,13 @@ def _run_knowledge_command_impl(args):
         elif args.action == "create":
             if not args.concept_id:
                 print(render_panel("Error", ["Concept name required for creation."], status="error"))
+            elif args.dry_run:
+                lines = [
+                    f"Would create concept: {args.concept_id}",
+                    f"  Status: {args.status}",
+                    f"  Aliases: {args.aliases or '(none)'}",
+                ]
+                print(render_panel("Dry Run", lines, status="warn"))
             else:
                 import time
                 from oem_knowledge.concept_id import allocate_concept_id
