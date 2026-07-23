@@ -477,6 +477,100 @@ def _run_knowledge_command_impl(args):
                     )
                 print(render_panel("Knowledge Fitness Telemetry", lines, status="stats"))
 
+        elif args.action == "create":
+            if not args.concept_id:
+                print(render_panel("Error", ["Concept name required for creation."], status="error"))
+            else:
+                import time
+                from oem_knowledge.concept_id import allocate_concept_id
+                registry = eng.state._load_registry(project)
+                wiki_dir = eng._concepts_dir(project)
+                cid = allocate_concept_id(registry, wiki_dir)
+                now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                aliases_list = [a.strip() for a in args.aliases.split(",") if a.strip()] if args.aliases else []
+                registry[cid] = {
+                    "concept_id": cid,
+                    "canonical_name": args.concept_id,
+                    "status": args.status,
+                    "confidence": 1,
+                    "evidence_count": 0,
+                    "session_count": 0,
+                    "sessions": [],
+                    "aliases": aliases_list,
+                    "source_event_ids": [],
+                    "created_at": now,
+                    "updated_at": now,
+                }
+                eng.state._save_registry(registry, project)
+                if args.status in ("validated", "canonical"):
+                    try:
+                        eng.materialization.materialize_concepts(project)
+                    except Exception as e:
+                        print(render_panel("Materialization", [f"Partial: concept created but materialization skipped ({e})"], status="warn"))
+                print(render_panel("Concept Created", [f"ID: {cid}", f"Name: {args.concept_id}", f"Status: {args.status}"], status="ok"))
+
+        elif args.action == "delete":
+            if not args.concept_id:
+                print(render_panel("Error", ["Concept ID or name required for deletion."], status="error"))
+            else:
+                registry = eng.state._load_registry(project)
+                cid = args.concept_id
+                cdata = registry.get(cid)
+                if not cdata:
+                    for rid, rdata in registry.items():
+                        if isinstance(rdata, dict) and (
+                            rdata.get("canonical_name", "").lower() == cid.lower()
+                            or cid.lower() in [a.lower() for a in rdata.get("aliases", [])]
+                        ):
+                            cid = rid
+                            cdata = rdata
+                            break
+                if not cdata:
+                    print(render_panel("Error", [f"Concept '{args.concept_id}' not found in registry."], status="error"))
+                else:
+                    wiki_file = eng._concepts_dir(project) / f"{cid}.md"
+                    if args.dry_run:
+                        lines = [
+                            f"Would delete: {cid} ({cdata['canonical_name']})",
+                            f"  Wiki file: {wiki_file} {'(exists)' if wiki_file.exists() else '(missing)'}",
+                            f"  Events: {len(cdata.get('source_event_ids', []))}",
+                        ]
+                        print(render_panel("Dry Run", lines, status="warn"))
+                    else:
+                        if wiki_file.exists():
+                            wiki_file.unlink()
+                        del registry[cid]
+                        for oid, odata in registry.items():
+                            if isinstance(odata, dict) and cid in odata.get("aliases", []):
+                                odata["aliases"].remove(cid)
+                        eng.state._save_registry(registry, project)
+                        print(render_panel("Concept Deleted", [f"Removed {cid} ({cdata['canonical_name']})"], status="ok"))
+
+        elif args.action == "materialize":
+            if not args.concept_id:
+                print(render_panel("Error", ["Concept ID or name required for materialization."], status="error"))
+            else:
+                registry = eng.state._load_registry(project)
+                cid = args.concept_id
+                cdata = registry.get(cid)
+                if not cdata:
+                    for rid, rdata in registry.items():
+                        if isinstance(rdata, dict) and (
+                            rdata.get("canonical_name", "").lower() == cid.lower()
+                            or cid.lower() in [a.lower() for a in rdata.get("aliases", [])]
+                        ):
+                            cid = rid
+                            cdata = rdata
+                            break
+                if not cdata:
+                    print(render_panel("Error", [f"Concept '{args.concept_id}' not found."], status="error"))
+                else:
+                    try:
+                        eng.materialization._materialize_concepts_impl(project, force=True)
+                        print(render_panel("Concept Materialized", [f"Materialized {cid} ({cdata['canonical_name']})"], status="ok"))
+                    except Exception as e:
+                        print(render_panel("Materialization Error", [str(e)], status="error"))
+
     elif args.command == "contradictions":
         from oem_knowledge.evolution import ContradictionDetector
         detector = ContradictionDetector(eng)

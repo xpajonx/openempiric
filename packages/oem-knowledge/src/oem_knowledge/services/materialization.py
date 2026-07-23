@@ -204,7 +204,7 @@ class MaterializationService:
                 "message": f"Lock acquisition failure during materialization: {e}",
             }
 
-    def _materialize_concepts_impl(self, project: str | None = None) -> dict:
+    def _materialize_concepts_impl(self, project: str | None = None, force: bool = False) -> dict:
         self.engine._resolve_harness(project)
         sessions_dir = self.engine._sessions_dir(project)
         if not sessions_dir.exists():
@@ -251,6 +251,7 @@ class MaterializationService:
 
             registry_updated = False
             reserved_ids = set()
+            materialized_in_run: set[str] = set()
 
             for session_file in session_files:
                 session_id = session_file.stem
@@ -381,9 +382,12 @@ class MaterializationService:
                     concept_file = concepts_dir / f"{cid}.md"
 
                     try:
+                        if force:
+                            if new_status in ("candidate", "emerging", "needs_review"):
+                                new_status = "validated"
                         if new_status in ("validated", "canonical", "needs_review"):
                             existing_body = ""
-                            is_new_concept = cid not in initial_registry_keys
+                            is_new_concept = cid not in initial_registry_keys and cid not in materialized_in_run
                             
                             retries = 0
                             max_allocation_retries = 3
@@ -458,6 +462,7 @@ source_event_ids: {json.dumps(cdata.get("source_event_ids", []))}
                             materialized_log.append(
                                 f"{cid} ({cdata['canonical_name']}) = {new_status}"
                             )
+                            materialized_in_run.add(cid)
 
                         elif new_status == "deprecated":
                             if concept_file.exists():
@@ -466,6 +471,9 @@ source_event_ids: {json.dumps(cdata.get("source_event_ids", []))}
                                     f"Delete | Deprecated concept {cid} ({cdata['canonical_name']})",
                                     project,
                                 )
+                            if cid in registry:
+                                del registry[cid]
+                                registry_updated = True
                             materialized_log.append(f"Deprecated: {cid}")
 
                         else:

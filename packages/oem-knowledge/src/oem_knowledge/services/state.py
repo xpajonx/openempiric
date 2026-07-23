@@ -440,7 +440,7 @@ class StateService:
             new_status = "canonical"
             history_reason = f"Standard Promotion: High session usage ({cdata.get('session_count', 0)}) and confidence ({confidence})"
         elif (
-            evidence_count >= 3
+            evidence_count >= 2
             or current_status == "validated"
             or (has_fitness and fit_score >= 0.80 and succ_sessions >= 2 and evidence_count >= 2)
         ):
@@ -449,7 +449,7 @@ class StateService:
                 history_reason = f"Telemetry Correlation: High fitness promotion (fitness: {fit_score * 100:.1f}%, successes: {succ_sessions}, evidence: {evidence_count})"
             else:
                 history_reason = f"Standard Validation: Evidence count ({evidence_count}) or status retention"
-        elif cdata.get("session_count", 0) >= 2:
+        elif cdata.get("session_count", 0) >= 1 and evidence_count >= 1:
             new_status = "emerging"
             history_reason = f"Standard Promotion: Emerging concept based on session count ({cdata.get('session_count', 0)})"
         else:

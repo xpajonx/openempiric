@@ -186,10 +186,14 @@ def _setup_parser() -> argparse.ArgumentParser:
     identity_p.add_argument("--project", type=str, default="")
 
     concept_p = sub.add_parser("concept", help=argparse.SUPPRESS)
-    concept_p.add_argument("action", choices=["evolve", "health", "fitness"])
+    concept_p.add_argument("action", choices=["evolve", "health", "fitness", "create", "delete", "materialize"])
     concept_p.add_argument("concept_id", type=str, nargs="?", default="")
     concept_p.add_argument("--format", choices=["text", "yaml", "json"], default="text")
     concept_p.add_argument("--project", type=str, default="")
+    concept_p.add_argument("--status", choices=["candidate", "validated", "canonical"], default="candidate")
+    concept_p.add_argument("--aliases", type=str, default="")
+    concept_p.add_argument("--force", action="store_true")
+    concept_p.add_argument("--dry-run", action="store_true")
 
     contradictions_p = sub.add_parser("contradictions", help=argparse.SUPPRESS)
     contradictions_p.add_argument("--project", type=str, default="")

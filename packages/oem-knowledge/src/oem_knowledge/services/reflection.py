@@ -171,7 +171,7 @@ class ReflectionService:
         evidence = ev.get("evidence")
         if not evidence or not isinstance(evidence, str):
             evidence = summary
-        concept_candidates = ev.get("concept_candidates") or ev.get("concepts")
+        concept_candidates = ev.get("concept_candidates") or ev.get("concept") or ev.get("concepts")
         if not concept_candidates:
             concept_candidates = []
         elif isinstance(concept_candidates, str):
