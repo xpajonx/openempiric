@@ -74,12 +74,15 @@ def _compile_oem_context(eng: KnowledgeEngine) -> dict:
     active_decisions = []
     relevant_failures = []
     try:
-        events = eng.state._load_events()
+        events = eng.state._load_events(include_user=True)
         seen_decisions = set()
         for ev in reversed(events):
             if ev.get("event_type") == "decision":
                 d = ev.get("evidence", "")
                 if d and d not in seen_decisions:
+                    scope = ev.get("scope", "project")
+                    if scope == "user":
+                        d = f"[User preference] {d}"
                     seen_decisions.add(d)
                     active_decisions.append(d)
                     if len(active_decisions) >= 5:
@@ -91,6 +94,9 @@ def _compile_oem_context(eng: KnowledgeEngine) -> dict:
             if ev.get("event_type") == "failure":
                 f = ev.get("evidence", "")
                 if f and f not in seen_failures:
+                    scope = ev.get("scope", "project")
+                    if scope == "user":
+                        f = f"[User preference] {f}"
                     seen_failures.add(f)
                     relevant_failures.append(f)
                     if len(relevant_failures) >= 5:

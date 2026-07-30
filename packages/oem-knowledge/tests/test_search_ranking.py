@@ -60,6 +60,24 @@ class TestMemoryTypeClassification:
         assert classify_memory_type("Search results:\n[1] foo\n[2] bar\nknowledge_search(query=...)") == "search_log"
         assert classify_memory_type("Full source dump\nFile contents:\ncat <<EOF\n...") == "source_dump"
 
+    def test_command_log_event_filtered(self):
+        from oem_knowledge.services.state import _is_command_log_event
+        assert _is_command_log_event("Command `npm install` executed with exit code 0") is True
+        assert _is_command_log_event("Exit code: 0") is True
+        assert _is_command_log_event("Decided to use hybrid search") is False
+
+    def test_memory_quality_score(self):
+        from oem_knowledge.services.state import memory_quality_score
+        # Good memory
+        s1 = memory_quality_score("Decided to use hybrid search because BM25 missed semantic matches", "Tested with 100 queries, hybrid returned 30% more relevant results")
+        assert s1 >= 0.6
+        # Empty summary
+        s2 = memory_quality_score("", "")
+        assert s2 == 0.0
+        # Short summary, no evidence
+        s3 = memory_quality_score("npm install", "")
+        assert s3 <= 0.3
+
 
 class TestQueryTargetExtraction:
     def test_extract_tokens(self):
@@ -891,4 +909,18 @@ class TestIdentifierMatchSubstringRegression:
         ranked = rank_search_results("api", candidates)
         assert "identifier_match" not in ranked[0]["ranking_boosts"]
         assert ranked[0]["final_score"] == 0.0
+
+
+def test_temporal_boost_constant_exists():
+    from oem_knowledge.memory_ranking import BOOST_TEMPORAL_MATCH, BOOST_EXACT_DECISION_PHRASE
+    assert BOOST_TEMPORAL_MATCH > 0
+    assert BOOST_EXACT_DECISION_PHRASE > 0
+
+
+def test_memory_type_stored_in_metadata():
+    from oem_knowledge.memory_ranking import classify_memory_type
+    doc = "## Decision\nWe chose SQLite for local caching because it's embedded and fast."
+    assert classify_memory_type(document=doc) == "decision"
+    doc2 = "Command `npm install` executed with exit code 0"
+    assert classify_memory_type(document=doc2) in ("command_log", "search_log", "observation")
 

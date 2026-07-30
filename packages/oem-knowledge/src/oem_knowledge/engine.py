@@ -318,20 +318,27 @@ class KnowledgeEngine:
                 ),
             ),
             (
-                "config/reflection.yml",
-                (
-                    "reflection:\n"
-                    "  mode: auto\n\n"
-                    "  structured:\n"
-                    "    enabled: true\n\n"
-                    "  marker:\n"
-                    "    enabled: true\n\n"
-                    "  dense:\n"
-                    "    enabled: false\n"
-                    "    on_unavailable: skip\n"
-                    "    max_retry_count: 0\n"
-                    "    queue_pending: false\n"
-                ),
+            "config/reflection.yml",
+            (
+                "reflection:\n"
+                "  mode: auto\n\n"
+                "  structured:\n"
+                "    enabled: true\n\n"
+                "  marker:\n"
+                "    enabled: true\n\n"
+                "  dense:\n"
+                "    enabled: false\n"
+                "    on_unavailable: skip\n"
+                "    max_retry_count: 0\n"
+                "    queue_pending: false\n\n"
+                "  auto_dream:\n"
+                "    enabled: false\n"
+                "    half_life_days: 30\n"
+                "    consolidate_threshold: 0.9\n"
+                "    promote_threshold:\n"
+                "      evidence_count: 5\n"
+                "      session_count: 3\n"
+            ),
             ),
         ]:
             fp = harness / fname
@@ -1589,3 +1596,48 @@ project: {project or "default"}
             return False
         except Exception:
             return False
+
+    def config_embedding_set_model(self, model_name: str, dry_run: bool = False) -> dict:
+        """Switch the embedding model. Requires re-indexing.
+
+        Args:
+            model_name: New embedding model name (e.g., 'BAAI/bge-large-en-v1.5')
+            dry_run: If True, report how many chunks would be re-embedded without making changes
+        """
+        import json
+        harness = self._resolve_harness()
+        config_path = harness / "config" / "embedding_model.json"
+
+        current_model = getattr(self.search, "_embedding_model", None) or "BAAI/bge-small-en-v1.5"
+
+        if dry_run:
+            count = "unknown"
+            try:
+                store = getattr(self.search, "_store", None)
+                if store and hasattr(store, "count"):
+                    count = store.count()
+            except Exception:
+                pass
+            return {
+                "status": "dry_run",
+                "current_model": current_model,
+                "new_model": model_name,
+                "chunks_to_reindex": count,
+                "message": f"Dry run: ~{count} chunks would be re-embedded with {model_name}",
+            }
+
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(json.dumps({
+            "embedding_model": model_name,
+            "previous_model": current_model,
+            "switched_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }, indent=2))
+
+        self.search._embedding_model = model_name
+
+        return {
+            "status": "success",
+            "model": model_name,
+            "message": f"Embedding model set to {model_name}. Run 'oem index --reindex' to re-embed.",
+            "warning": "Re-indexing required. Run in background to avoid blocking session_end.",
+        }

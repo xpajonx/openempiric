@@ -156,19 +156,25 @@ def register(mcp: object) -> None:
             }, indent=2)
 
     @mcp.tool()
-    def knowledge_search(query: str, k: int = 3, project: str = "") -> str:
+    def knowledge_search(query: str, k: int = 3, project: str = "",
+                         scope: str | None = None, memory_type: str | None = None,
+                         since: str | None = None, until: str | None = None) -> str:
         """Fast lookup and term-based search across concepts.
 
         Args:
             query: Search query
             k: Number of results to return. Defaults to 3.
             project: Project directory path. Defaults to current directory.
+            scope: Filter by memory scope: 'project', 'user', or 'session'. Optional.
+            memory_type: Filter by memory type: 'decision', 'failure', 'preference', etc. Optional.
+            since: ISO 8601 timestamp -- only return entries after this date. Optional.
+            until: ISO 8601 timestamp -- only return entries before this date. Optional.
         """
         try:
             project_root = resolve_active_project(project)
             memory_root = project_root / ".oem"
             with KnowledgeEngine(str(project_root)) as eng:
-                results = eng.search.search(query, k=k)
+                results = eng.search.search(query, k=k, scope=scope, memory_type=memory_type, since=since, until=until)
         except ProjectResolutionError as e:
             return handle_resolution_error("knowledge_search", e)
         except Exception as e:

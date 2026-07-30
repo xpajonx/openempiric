@@ -389,6 +389,14 @@ class SearchService:
                     mtime = os.path.getmtime(fp)
                     imp = self.derive_importance(rel_path)
 
+                    # Compute memory_type for this file's chunks
+                    doc_memory_type = "observation"
+                    try:
+                        from oem_knowledge.memory_ranking import classify_memory_type
+                        doc_memory_type = classify_memory_type(document=content)
+                    except Exception:
+                        pass
+
                     for c in chunks:
                         meta = {
                             "source": path_str,
@@ -402,6 +410,7 @@ class SearchService:
                             "created_at": str(mtime),
                             "updated_at": str(mtime),
                             "importance": imp,
+                            "memory_type": doc_memory_type,
                         }
                         # Propagate document-level metadata from frontmatter
                         for fm_key in ("concept_id", "concept_status"):
@@ -722,7 +731,9 @@ class SearchService:
 
         return candidates
 
-    def search(self, query: str, k: int = 3, hybrid: bool = True) -> list[dict]:
+    def search(self, query: str, k: int = 3, hybrid: bool = True,
+               scope: str | None = None, memory_type: str | None = None,
+               since: str | None = None, until: str | None = None) -> list[dict]:
         try:
             candidates = self._collect_raw_candidates(query, hybrid)
             if not candidates:
@@ -742,6 +753,32 @@ class SearchService:
                 if r.get("score", 0.0) <= 0.0:
                     continue
                 filtered_ranked.append(r)
+            # Apply filter parameters
+            if scope:
+                filtered_ranked = [r for r in filtered_ranked if r.get("scope", "project") == scope]
+            if memory_type:
+                filtered_ranked = [r for r in filtered_ranked if r.get("memory_type") == memory_type]
+            if since or until:
+                from datetime import datetime, timezone
+                try:
+                    since_dt = datetime.fromisoformat(since.replace("Z", "+00:00")) if since else None
+                    until_dt = datetime.fromisoformat(until.replace("Z", "+00:00")) if until else None
+                    def _in_window(r):
+                        ts = r.get("timestamp") or r.get("created_at") or r.get("updated_at")
+                        if not ts:
+                            return True
+                        try:
+                            dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+                        except (ValueError, TypeError):
+                            return True
+                        if since_dt and dt < since_dt:
+                            return False
+                        if until_dt and dt > until_dt:
+                            return False
+                        return True
+                    filtered_ranked = [r for r in filtered_ranked if _in_window(r)]
+                except Exception:
+                    pass
             results = filtered_ranked[:k]
             try:
                 concept_ids = self.engine.state.concept_ids_from_retrieval_results(results)

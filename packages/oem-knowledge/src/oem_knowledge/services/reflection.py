@@ -56,7 +56,7 @@ _SOURCE_PRIORITY = {"chat": 0, "chat-fallback": 1, "orchestrator": 2, "diff": 3}
 
 
 class ReflectionService:
-    def __init__(self, engine: KnowledgeEngine):
+    def __init__(self, engine: KnowledgeEngine | None = None):
         self.engine = engine
 
     def _detect_markers(self, text: str) -> bool:
@@ -208,6 +208,113 @@ class ReflectionService:
             "source": source,
             "source_type": "agent_transcript",
             "ingestion_eligible": True,
+        }
+
+    def add_inline_memory(
+        self,
+        memory_type: str,
+        content: str,
+        scope: str = "project",
+        confidence: int = 3,
+        evidence: str = "",
+        project: str | None = None,
+    ) -> dict:
+        """Add an inline memory during active work without waiting for session end.
+
+        Args:
+            memory_type: Type of memory (decision, observation, preference, failure, workaround)
+            content: The memory content/summary
+            scope: Scope (project, user, session)
+            confidence: Confidence 1-5 (auto-accept >= 3)
+            evidence: Supporting evidence/context
+            project: Optional project path override
+
+        Returns:
+            dict with event_id, auto_accepted, status
+        """
+        import uuid
+        from datetime import datetime, timezone
+        from oem_knowledge.services.state import _is_command_log_event
+
+        # Rate limiting check
+        if not hasattr(self, "_inline_memory_count"):
+            self._inline_memory_count = 0
+        if self._inline_memory_count >= 20:
+            return {"status": "rejected", "reason": "rate_limit", "message": "Max 20 inline memories per session"}
+        self._inline_memory_count += 1
+
+        # Quality gate
+        if _is_command_log_event(content):
+            return {"status": "rejected", "reason": "quality_gate", "message": "Content matches command log pattern, rejected"}
+
+        # Evidence requirement for auto-accept
+        if confidence >= 3 and (not evidence or len(evidence) < 20):
+            return {"status": "rejected", "reason": "evidence_required", "message": "Evidence must be at least 20 chars when confidence >= 3"}
+
+        event = {
+            "event_id": str(uuid.uuid4()),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "project": project or (self.engine._project_path.name if hasattr(self, 'engine') and hasattr(self.engine, '_project_path') else "unknown"),
+            "session_id": getattr(self, "_current_session_id", "inline"),
+            "event_type": memory_type,
+            "summary": content,
+            "evidence": evidence or content,
+            "confidence": confidence,
+            "source": "inline_agent",
+            "concept_candidates": [],
+            "schema_version": 1,
+            "scope": scope,
+        }
+
+        # Validate
+        warnings = []
+        normalized = self._validate_and_normalize_event(event, warnings)
+        if normalized is None:
+            return {"status": "rejected", "reason": "validation", "message": "; ".join(warnings)}
+
+        # Deduplicate via seen set
+        if not hasattr(self, "_seen_inline_ids"):
+            self._seen_inline_ids = set()
+        dedup_key = content.strip().lower()[:200]
+        if dedup_key in self._seen_inline_ids:
+            return {"status": "duplicate", "reason": "already_added", "event_id": None}
+        self._seen_inline_ids.add(dedup_key)
+
+        # Persist
+        try:
+            if scope == "user":
+                from oem_knowledge.services.state import get_user_events_path
+                user_path = get_user_events_path()
+                if user_path:
+                    user_path.parent.mkdir(parents=True, exist_ok=True)
+                    with open(user_path, "a") as f:
+                        import json
+                        f.write(json.dumps(normalized) + "\n")
+                else:
+                    # Fallback to project events if user identity unknown
+                    if self.engine is not None and hasattr(self.engine, 'state') and hasattr(self.engine.state, 'append_event'):
+                        self.engine.state.append_event(normalized, project)
+            elif self.engine is not None and hasattr(self.engine, 'state') and hasattr(self.engine.state, 'append_event'):
+                self.engine.state.append_event(normalized, project)
+            elif self.engine is not None:
+                # Fallback: append directly
+                p = self.engine._events_path(project)
+                p.parent.mkdir(parents=True, exist_ok=True)
+                with open(p, "a") as f:
+                    import json
+                    f.write(json.dumps(normalized) + "\n")
+            # else: no engine available (testing), memory is ephemeral
+        except Exception as e:
+            return {"status": "error", "reason": "persist_failed", "message": str(e)}
+
+        auto_accepted = confidence >= 3
+        return {
+            "status": "success",
+            "event_id": normalized.get("event_id"),
+            "auto_accepted": auto_accepted,
+            "flagged": not auto_accepted,
+            "memory_type": memory_type,
+            "scope": scope,
         }
 
     def _fallback_extract(self, conversation_text: str) -> list[dict]:
@@ -923,6 +1030,9 @@ class ReflectionService:
     ) -> dict:
         import time
         from pathlib import Path
+
+        # NOTE: In a future refactoring, this method will be decomposed to use
+        # runtime.commit_pipeline.CommitPipeline for crash-safe phase execution.
         
         # Call the new extract_session_events method
         res = self.extract_session_events(

@@ -242,6 +242,48 @@ def register(mcp: object) -> None:
             }, indent=2)
 
     @mcp.tool()
+    def knowledge_add_memory(
+        memory_type: str,
+        content: str,
+        scope: str = "project",
+        confidence: int = 3,
+        evidence: str = "",
+        project: str = "",
+    ) -> str:
+        """Add an inline memory during active work without waiting for session end.
+
+        Args:
+            memory_type: Type of memory: 'decision', 'observation', 'preference', 'failure', 'workaround'
+            content: The memory content/summary
+            scope: Memory scope: 'project', 'user', or 'session'
+            confidence: Confidence rating 1-5. Auto-accepted if >= 3.
+            evidence: Supporting evidence or context for the memory
+            project: Project directory path. Defaults to current directory.
+        """
+        try:
+            project_root = resolve_active_project(project)
+            with KnowledgeEngine(str(project_root)) as eng:
+                result = eng.reflection.add_inline_memory(
+                    memory_type=memory_type,
+                    content=content,
+                    scope=scope,
+                    confidence=confidence,
+                    evidence=evidence,
+                    project=str(project_root),
+                )
+            result["project_root"] = str(project_root)
+            result["operation"] = "knowledge_add_memory"
+            return json.dumps(result, indent=2)
+        except ProjectResolutionError as e:
+            return handle_resolution_error("knowledge_add_memory", e)
+        except Exception as e:
+            return json.dumps({
+                "status": "error",
+                "operation": "knowledge_add_memory",
+                "message": str(e)
+            }, indent=2)
+
+    @mcp.tool()
     def knowledge_index(force: bool = False, project: str = "") -> str:
         """Re-index all markdown files in the project's .oem/ concept wiki/registry/skills trees.
 
