@@ -422,6 +422,31 @@ class StateService:
             logger.error("Timed out acquiring state lock for %s", p)
             raise
 
+    def load_events(
+        self,
+        project: str | None = None,
+        include_user: bool = False,
+    ) -> list[dict]:
+        """Public alias for _load_events. Satisfies EventStoreProtocol."""
+        return self._load_events(project, include_user=include_user)
+
+    def load_registry(
+        self,
+        project: str | None = None,
+        lock: bool = True,
+    ) -> dict:
+        """Public alias for _load_registry. Satisfies RegistryStoreProtocol."""
+        return self._load_registry(project, lock=lock)
+
+    def save_registry(
+        self,
+        registry: dict,
+        project: str | None = None,
+        lock: bool = False,
+    ) -> None:
+        """Public alias for _save_registry. Satisfies RegistryStoreProtocol."""
+        self._save_registry(registry, project, lock=lock)
+
     def _resolve_concept(
         self,
         term: str,

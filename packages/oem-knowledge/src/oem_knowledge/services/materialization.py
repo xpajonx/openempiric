@@ -180,6 +180,13 @@ class MaterializationService:
         sfs = self.engine._sfs(project)
         return sfs.write_text(file_path, content)
 
+    def safe_write_concept_file(self, file_path, content: str, project: str | None = None):
+        """Public wrapper for _safe_write_concept_file. Satisfies ConceptFilesProtocol.
+
+        Returns True if the write succeeded.
+        """
+        return self._safe_write_concept_file(file_path, content, project)
+
     def _log_action(self, message: str, project: str | None = None):
         harness = self.engine._resolve_harness(project)
         log_file = harness / "wiki" / "log.md"
