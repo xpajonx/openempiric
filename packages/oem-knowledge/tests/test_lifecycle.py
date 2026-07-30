@@ -166,3 +166,85 @@ class TestKnowledgeAddMemory:
         normalized = svc._validate_and_normalize_event(ev, warnings)
         assert normalized is None
         assert any("missing summary" in w for w in warnings)
+
+
+class TestStructuredEvents:
+    """Regression tests for structured events processing via knowledge_reflect / knowledge_session_end."""
+
+    def test_extract_session_events_structured_mode(self, tmp_path):
+        """extract_session_events processes events with extraction_mode='structured'."""
+        from oem_knowledge.engine import KnowledgeEngine
+        from oem_knowledge.services.reflection import ReflectionService
+
+        proj = tmp_path / "test_proj"
+        proj.mkdir()
+        eng = KnowledgeEngine(proj)
+        eng.init_project(str(proj))
+
+        svc = eng.reflection
+        events = [
+            {
+                "event_id": "ev-001",
+                "event_type": "decision",
+                "summary": "Decided to use PostgreSQL for storage",
+                "evidence": "PostgreSQL handles concurrent writes better",
+                "confidence": 4,
+                "source": "agent_structured",
+            },
+            {
+                "event_id": "ev-002",
+                "event_type": "failure",
+                "summary": "SQLite WAL mode caused lock contention",
+                "evidence": "Multiple writers locked up under WAL",
+                "confidence": 3,
+                "source": "agent_structured",
+            },
+        ]
+
+        res = svc.extract_session_events(
+            project=str(proj),
+            events=events,
+            extraction_mode="structured",
+        )
+
+        assert res["status"] in ("success", "partial")
+        assert res["events_written"] == 2
+        assert res["mode"] == "structured"
+
+    def test_reflect_session_structured_events_written(self, tmp_path):
+        """reflect_session persists structured events to events.jsonl."""
+        import json
+        from oem_knowledge.engine import KnowledgeEngine
+
+        proj = tmp_path / "test_proj"
+        proj.mkdir()
+        eng = KnowledgeEngine(proj)
+        eng.init_project(str(proj))
+
+        events = [
+            {
+                "event_id": "ev-003",
+                "event_type": "decision",
+                "summary": "Chose FastAPI over Flask",
+                "evidence": "FastAPI has better async support",
+                "confidence": 4,
+                "source": "agent_structured",
+            },
+        ]
+
+        res = eng.reflection.reflect_session(
+            project=str(proj),
+            events=events,
+            extraction_mode="structured",
+        )
+
+        assert res["status"] in ("success", "partial")
+        assert res["events_written"] == 1
+
+        # Verify event was persisted to events.jsonl
+        events_path = eng._events_path(str(proj))
+        assert events_path.exists()
+        with open(events_path) as f:
+            stored = [json.loads(line) for line in f if line.strip()]
+        assert len(stored) == 1
+        assert stored[0]["summary"] == "Chose FastAPI over Flask"

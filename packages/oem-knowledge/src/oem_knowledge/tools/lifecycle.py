@@ -19,7 +19,7 @@ def _commit_session_from_tool(
     project_root: Path,
     conversation_text: str,
     session_id: str,
-    events: list[dict] | None = None,
+    events: list | None = None,
     extraction_mode: str = "auto",
     timeout_seconds: float | None = None,
 ) -> dict:
@@ -341,7 +341,7 @@ def register(mcp: object) -> None:
         project: str = "",
         conversation_text: str = "",
         session_id: str = "",
-        events: list[dict] | None = None,
+        events: list | None = None,
         extraction_mode: str = "auto",
         timeout_seconds: float | None = None,
     ) -> str:
@@ -695,7 +695,7 @@ def register(mcp: object) -> None:
         project: str = "",
         conversation_text: str = "",
         session_id: str = "",
-        events: list[dict] | None = None,
+        events: list | None = None,
         extraction_mode: str = "auto",
         timeout_seconds: float | None = None,
     ) -> str:
