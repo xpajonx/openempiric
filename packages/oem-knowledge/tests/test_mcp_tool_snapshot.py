@@ -36,6 +36,9 @@ def test_mcp_tool_names_snapshot():
         "knowledge_materialize",
         "knowledge_session_commit",
         "knowledge_session_end",
+        "knowledge_add_memory",
+        "knowledge_export",
+        "knowledge_import",
 
         # Concepts (from oem_knowledge.tools.concepts)
         "knowledge_get_events",
@@ -61,4 +64,4 @@ def test_mcp_tool_names_snapshot():
     }
 
     assert registered_tools == expected_tools
-    assert len(registered_tools) == 30
+    assert len(registered_tools) == 33

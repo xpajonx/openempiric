@@ -20,6 +20,9 @@ export interface ConceptData {
   source_event_ids: string[];
   skills: string[];
   scope: "project" | "user" | "session";
+  created_by?: string | null;
+  last_accessed_at: number;
+  access_count: number;
 }
 
 export interface KnowledgeEvent {
