@@ -173,6 +173,40 @@ class KnowledgeEngine:
         self.skills = SkillService(self)
         self.skill_promotion = SkillPromotionService(self)
 
+        # Phase 3: Instantiate Storage layer wrappers
+        from oem_knowledge.storage.event_store import EventStore
+        from oem_knowledge.storage.registry_store import RegistryStore
+        from oem_knowledge.storage.concept_files import ConceptFiles
+        from oem_knowledge.storage.session_files import SessionFiles
+        from oem_knowledge.storage.user_store import UserStore
+
+        self.event_store = EventStore(self)
+        self.registry_store = RegistryStore(self)
+        self.concept_files = ConceptFiles(self)
+        self.session_files = SessionFiles(self)
+        self.user_store = UserStore(self)
+
+        # Phase 3: Instantiate Computation layer wrappers
+        from oem_knowledge.computation.snapshot import SnapshotComputation
+        from oem_knowledge.computation.reflection import ReflectionComputation
+        from oem_knowledge.computation.indexing import IndexingComputation
+        from oem_knowledge.computation.search import SearchComputation
+        from oem_knowledge.computation.fitness import FitnessComputation
+        from oem_knowledge.computation.evolution import EvolutionComputation
+        from oem_knowledge.computation.preflight import PreflightComputation
+        from oem_knowledge.computation.materialization import MaterializationComputation
+        from oem_knowledge.computation.skills import SkillsComputation
+
+        self.snapshot = SnapshotComputation(self)
+        self.materialization_computation = MaterializationComputation(self)
+        self.reflection_computation = ReflectionComputation(self)
+        self.indexing = IndexingComputation(self)
+        self.search_computation = SearchComputation(self)
+        self.fitness_computation = FitnessComputation(self)
+        self.evolution = EvolutionComputation(self)
+        self.preflight_computation = PreflightComputation(self)
+        self.skills_computation = SkillsComputation(self)
+
     def close(self) -> None:
         for service in (getattr(self, "search", None), getattr(self, "source", None)):
             close = getattr(service, "close", None)

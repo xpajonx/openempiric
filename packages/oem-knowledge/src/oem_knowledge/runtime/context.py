@@ -12,7 +12,7 @@ def _compile_oem_context(eng: KnowledgeEngine) -> dict:
     """Build the OEMRuntimeContext dict from the engine's registry and events."""
     active_concepts = []
     try:
-        registry = eng.state._load_registry()
+        registry = eng.state.load_registry()
         
         # Determine recommended concept IDs from session state (pre-search)
         rec_ids = set()
@@ -74,7 +74,7 @@ def _compile_oem_context(eng: KnowledgeEngine) -> dict:
     active_decisions = []
     relevant_failures = []
     try:
-        events = eng.state._load_events(include_user=True)
+        events = eng.state.load_events(include_user=True)
         seen_decisions = set()
         for ev in reversed(events):
             if ev.get("event_type") == "decision":
