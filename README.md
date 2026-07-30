@@ -22,6 +22,22 @@ Instead of writing and updating guidelines manually, you simply work with your a
 
 ---
 
+## What's New in v1.1.0
+
+v1.1.0 is a **ground-up architectural rebuild** of OpenEmpiric's core memory module. The external API (MCP tools, CLI commands) is fully preserved — no action needed for existing users.
+
+**Highlights:**
+
+- **Three-layer architecture** — Storage, Computation, and API layers with strict unidirectional dependencies and protocol contracts
+- **Event-sourced snapshots** — `events.jsonl` is the sole source of truth; the concept registry is a derived materialized view rebuilt on every `session_end`
+- **Export/Import** — Transfer memory between machines via `.tar.gz` archives with automatic dedup
+- **Bug fixes** — `knowledge_add_memory` schema mismatch fixed; `knowledge_reflect` now correctly processes structured events
+- **Engine.py shrunk** from ~1,640 lines to ~200 lines of thin orchestration
+
+See [RELEASE_NOTES.md](RELEASE_NOTES.md) for the full changelog.
+
+---
+
 ## How it Works
 
 OpenEmpiric shifts the model of AI coding sessions from a simple wrapped process to an **active knowledge infrastructure**. It is best explained through two layers: the user mental model (why it exists) and the internal runtime flow (how it works).
@@ -67,6 +83,73 @@ graph TD
 
 ---
 
+## Layered Architecture (v1.1.0+)
+
+OpenEmpiric is built as a three-layer architecture with strict unidirectional dependencies:
+
+```
+Storage Layer (file I/O only)
+    |
+    v
+Computation Layer (pure logic over Storage)
+    |
+    v
+API Layer (MCP/CLI glue)
+```
+
+### Storage Layer (`oem_knowledge/storage/`)
+
+File I/O only. No business logic. No compute.
+
+- **EventStore** — Append-only event log (`events.jsonl`) with schema migration
+- **RegistryStore** — Concept registry JSON read/write under `FileLock`
+- **ConceptFiles** — `wiki/*.md` write with collision handling
+- **SessionFiles** — Session state serialization
+- **UserStore** — User-scoped event log at `~/.config/openempiric/`
+
+### Computation Layer (`oem_knowledge/computation/`)
+
+Pure computation over Storage data. No MCP awareness. No direct file I/O.
+
+- **SnapshotComputation** — Replay events -> registry + concepts (`rebuild_registry` is the primary snapshot path)
+- **ReflectionComputation** — Event extraction (structured, marker, dense LLM)
+- **IndexingComputation** — Chunk, embed, index into vector store
+- **SearchComputation** — Hybrid BM25 + dense search with relevance ranking
+- **FitnessComputation** — Concept fitness scoring
+- **EvolutionComputation** — Decay, merge, promotion
+- **MaterializationComputation** — Concept file generation from events
+- **PreflightComputation** — Preflight routing against memory, concepts, skills
+- **SkillsComputation** — Skill candidate management + promotion
+
+### API Layer
+
+Thin glue between MCP/CLI and Computation layer:
+
+- **KnowledgeEngine** — Orchestrator (session lifecycle, scope resolution)
+- **MCP Tools** — `knowledge_session_start`, `knowledge_read`, `knowledge_search`, `knowledge_reflect`, `knowledge_session_end`, `knowledge_add_memory`, `knowledge_export`, `knowledge_import`, and more
+- **CLI Commands** — `oem run`, `oem search`, `oem reflect`, `oem index`, etc.
+
+### Event-Sourced Model
+
+`events.jsonl` is the **sole source of truth**. The concept registry (`concept_registry.json`) and wiki files (`wiki/*.md`) are **derived materialized views** computed by replaying the event log. Every `session_end` rebuilds the registry from scratch via `rebuild_registry()`.
+
+### Scope Model
+
+Memory is isolated by scope:
+
+- **Project** — `.oem/events.jsonl` in the project root
+- **User** — `~/.config/openempiric/user_events.jsonl` (cross-project)
+- **Session** — Transient, scoped to a single session
+
+### Export/Import
+
+Transfer memory between machines without a remote:
+
+- `knowledge_export` — Exports `.oem/` + user events to a `.tar.gz` archive
+- `knowledge_import` — Merges archive into existing memory with event_id dedup and alias-merge for concept conflicts
+
+---
+
 ## Key Features
 
 - **🧠 Zero-Config Agent Memory**: No manual updates or prompt-engineering required. OEM learns continuously in the background.
@@ -74,6 +157,8 @@ graph TD
 - **🛡️ Secure File System Guards**: SFS wrapper protects the host workspace with strict path-traversal limits and truncation protection (prevents agents from accidentally erasing large files).
 - **🔎 Local RAG Retrieval**: Perform hybrid vector-BM25 search queries across your project's memory repository locally.
 - **📚 Materialized Wiki**: Auto-generates clean, human-readable markdown documentation in `.oem/wiki/` as the knowledge graph evolves.
+- **📦 Three-Layer Architecture**: Clean separation of Storage, Computation, and API with protocol contracts between layers.
+- **📤 Export/Import**: Transfer memory between machines via `.tar.gz` archives with automatic dedup.
 
 ---
 
