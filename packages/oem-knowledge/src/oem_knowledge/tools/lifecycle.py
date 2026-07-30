@@ -262,6 +262,17 @@ def register(mcp: object) -> None:
         """
         try:
             project_root = resolve_active_project(project)
+            # Get session_id from active session state
+            session_id = ""
+            try:
+                state_dir = project_root / ".oem" / "state"
+                active_session_file = state_dir / "active_session.json"
+                if active_session_file.exists():
+                    import json as _json
+                    session_data = _json.loads(active_session_file.read_text())
+                    session_id = session_data.get("session_id", "")
+            except Exception:
+                pass
             with KnowledgeEngine(str(project_root)) as eng:
                 result = eng.reflection.add_inline_memory(
                     memory_type=memory_type,
@@ -269,6 +280,7 @@ def register(mcp: object) -> None:
                     scope=scope,
                     confidence=confidence,
                     evidence=evidence,
+                    session_id=session_id,
                     project=str(project_root),
                 )
             result["project_root"] = str(project_root)

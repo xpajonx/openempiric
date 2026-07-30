@@ -119,3 +119,50 @@ class TestKnowledgeAddMemory:
         )
         assert result["status"] == "rejected"
         assert result.get("reason") == "validation"
+
+    def test_event_accepted_with_concept_instead_of_summary(self):
+        """Event with 'concept' but no 'summary' is accepted."""
+        from oem_knowledge.services.reflection import ReflectionService
+        svc = ReflectionService()
+        ev = {
+            "event_type": "observation",
+            "concept": "fix-auth-bug",
+            "evidence": "Fixed the auth bug by adding token refresh",
+            "confidence": 4,
+            "source": "agent_structured",
+        }
+        warnings = []
+        normalized = svc._validate_and_normalize_event(ev, warnings)
+        assert normalized is not None
+        assert normalized["summary"] == "fix-auth-bug"
+
+    def test_event_accepted_with_concept_candidates_instead_of_summary(self):
+        """Event with 'concept_candidates' but no 'summary' is accepted."""
+        from oem_knowledge.services.reflection import ReflectionService
+        svc = ReflectionService()
+        ev = {
+            "event_type": "decision",
+            "concept_candidates": ["use-uv-over-pip"],
+            "evidence": "uv is faster",
+            "confidence": 4,
+            "source": "agent_structured",
+        }
+        warnings = []
+        normalized = svc._validate_and_normalize_event(ev, warnings)
+        assert normalized is not None
+        assert normalized["summary"] == "use-uv-over-pip"
+
+    def test_event_rejected_when_no_summary_concept_or_candidates(self):
+        """Event with no summary, concept, or concept_candidates is still rejected."""
+        from oem_knowledge.services.reflection import ReflectionService
+        svc = ReflectionService()
+        ev = {
+            "event_type": "observation",
+            "evidence": "no summary or concept",
+            "confidence": 4,
+            "source": "agent_structured",
+        }
+        warnings = []
+        normalized = svc._validate_and_normalize_event(ev, warnings)
+        assert normalized is None
+        assert any("missing summary" in w for w in warnings)

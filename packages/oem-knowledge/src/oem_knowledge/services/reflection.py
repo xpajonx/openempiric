@@ -157,8 +157,20 @@ class ReflectionService:
         event_type = ev.get("event_type") or ev.get("type")
         summary = ev.get("summary")
         if not summary or not isinstance(summary, str):
-            warnings_list.append("Event rejected: missing summary")
-            return None
+            # Fall back through concept, concepts, concept_candidates[0]
+            fallback = ev.get("concept") or ev.get("concepts")
+            if not fallback or not isinstance(fallback, str):
+                cc = ev.get("concept_candidates")
+                if isinstance(cc, list) and any(c is not None for c in cc):
+                    first_valid = next((c for c in cc if c is not None), None)
+                    fallback = str(first_valid)
+                elif isinstance(cc, str) and cc:
+                    fallback = cc
+            if fallback and isinstance(fallback, str):
+                summary = str(fallback)
+            else:
+                warnings_list.append("Event rejected: missing summary")
+                return None
         if not event_type or not isinstance(event_type, str):
             warnings_list.append("Event type missing or invalid; mapped to 'observation'.")
             event_type = "observation"
@@ -207,6 +219,8 @@ class ReflectionService:
             "confidence": confidence,
             "source": source,
             "source_type": "agent_transcript",
+            "project": ev.get("project", ""),
+            "session_id": ev.get("session_id", ""),
             "ingestion_eligible": True,
         }
 
@@ -217,6 +231,7 @@ class ReflectionService:
         scope: str = "project",
         confidence: int = 3,
         evidence: str = "",
+        session_id: str = "",
         project: str | None = None,
     ) -> dict:
         """Add an inline memory during active work without waiting for session end.
@@ -250,6 +265,9 @@ class ReflectionService:
         # Evidence requirement for auto-accept
         if confidence >= 3 and (not evidence or len(evidence) < 20):
             return {"status": "rejected", "reason": "evidence_required", "message": "Evidence must be at least 20 chars when confidence >= 3"}
+
+        if session_id:
+            self._current_session_id = session_id
 
         event = {
             "event_id": str(uuid.uuid4()),
