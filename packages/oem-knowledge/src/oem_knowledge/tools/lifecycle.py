@@ -570,6 +570,69 @@ def register(mcp: object) -> None:
             }, indent=2)
 
     @mcp.tool()
+    def knowledge_export(project: str = "", output_path: str = "") -> str:
+        """Export project memory to a tar.gz archive for backup or transfer.
+
+        Args:
+            project: Project directory path. Defaults to current directory.
+            output_path: Path for the output .tar.gz archive. Required.
+        """
+        if not output_path:
+            return json.dumps({
+                "status": "error",
+                "operation": "knowledge_export",
+                "message": "output_path is required"
+            }, indent=2)
+        try:
+            project_root = resolve_active_project(project)
+            with KnowledgeEngine(str(project_root)) as eng:
+                result = eng.export_memory(output_path, str(project_root))
+            result["project_root"] = str(project_root)
+            result["operation"] = "knowledge_export"
+            return json.dumps(result, indent=2)
+        except ProjectResolutionError as e:
+            return handle_resolution_error("knowledge_export", e)
+        except Exception as e:
+            return json.dumps({
+                "status": "error",
+                "operation": "knowledge_export",
+                "message": str(e)
+            }, indent=2)
+
+    @mcp.tool()
+    def knowledge_import(project: str = "", input_path: str = "") -> str:
+        """Import project memory from a tar.gz archive, merging with existing memory.
+
+        Uses event_id dedup to avoid duplicates. Returns counts of imported
+        and skipped events.
+
+        Args:
+            project: Project directory path. Defaults to current directory.
+            input_path: Path to the .tar.gz archive to import. Required.
+        """
+        if not input_path:
+            return json.dumps({
+                "status": "error",
+                "operation": "knowledge_import",
+                "message": "input_path is required"
+            }, indent=2)
+        try:
+            project_root = resolve_active_project(project)
+            with KnowledgeEngine(str(project_root)) as eng:
+                result = eng.import_memory(input_path, str(project_root))
+            result["project_root"] = str(project_root)
+            result["operation"] = "knowledge_import"
+            return json.dumps(result, indent=2)
+        except ProjectResolutionError as e:
+            return handle_resolution_error("knowledge_import", e)
+        except Exception as e:
+            return json.dumps({
+                "status": "error",
+                "operation": "knowledge_import",
+                "message": str(e)
+            }, indent=2)
+
+    @mcp.tool()
     def knowledge_session_commit(
         project: str = "",
         conversation_text: str = "",

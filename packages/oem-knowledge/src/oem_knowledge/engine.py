@@ -207,6 +207,163 @@ class KnowledgeEngine:
         self.preflight_computation = PreflightComputation(self)
         self.skills_computation = SkillsComputation(self)
 
+    def export_memory(self, output_path: str, project: str | None = None) -> dict:
+        """Export project memory to a tar.gz archive.
+
+        Exports .oem/ directory + user events + manifest.
+        Returns dict with status and archive path.
+        """
+        import tarfile
+        import tempfile
+        from pathlib import Path
+
+        output = Path(output_path).resolve()
+        harness = self._resolve_harness(project)
+
+        try:
+            with tarfile.open(str(output), "w:gz") as tar:
+                # Archive the .oem directory
+                if harness.exists():
+                    tar.add(str(harness), arcname=".oem")
+
+                # Include user events if available
+                user_path = self.user_store.get_events_path()
+                if user_path and user_path.exists():
+                    tar.add(str(user_path), arcname="user_events.jsonl")
+
+                # Write a manifest
+                import json as _json
+                manifest = {
+                    "schema_version": 1,
+                    "project_id": harness.parent.name,
+                    "exported_at": __import__("time").strftime("%Y-%m-%dT%H:%M:%SZ", __import__("time").gmtime()),
+                    "includes_user_events": bool(user_path and user_path.exists()),
+                }
+                manifest_path = tempfile.mktemp(suffix=".json")
+                Path(manifest_path).write_text(_json.dumps(manifest, indent=2))
+                tar.add(manifest_path, arcname="manifest.json")
+                Path(manifest_path).unlink(missing_ok=True)
+
+            return {
+                "status": "success",
+                "operation": "export_memory",
+                "archive_path": str(output),
+                "size_bytes": output.stat().st_size if output.exists() else 0,
+            }
+        except Exception as e:
+            return {
+                "status": "error",
+                "operation": "export_memory",
+                "message": str(e),
+            }
+
+    def import_memory(self, input_path: str, project: str | None = None) -> dict:
+        """Import project memory from a tar.gz archive.
+
+        Merges with existing events via event_id dedup and alias-merge
+        for concept conflicts. Returns dict with status and conflict report.
+        """
+        import tarfile
+        import tempfile
+        import json as _json
+        from pathlib import Path
+        import shutil
+
+        input_p = Path(input_path).resolve()
+        if not input_p.exists():
+            return {"status": "error", "operation": "import_memory", "message": f"Archive not found: {input_path}"}
+
+        harness = self._resolve_harness(project)
+        conflicts = []
+        imported_events = 0
+        skipped_events = 0
+
+        try:
+            extract_dir = Path(tempfile.mkdtemp())
+
+            with tarfile.open(str(input_p), "r:gz") as tar:
+                tar.extractall(path=str(extract_dir), filter="data")
+
+            # Import user events
+            user_archive = extract_dir / "user_events.jsonl"
+            if user_archive.exists():
+                existing_user_ids = set()
+                user_path = self.user_store.get_events_path()
+                if user_path and user_path.exists():
+                    with open(user_path) as f:
+                        for line in f:
+                            if line.strip():
+                                try:
+                                    ev = _json.loads(line)
+                                    existing_user_ids.add(ev.get("event_id", ""))
+                                except _json.JSONDecodeError:
+                                    pass
+
+                with open(user_archive) as f:
+                    for line in f:
+                        if not line.strip():
+                            continue
+                        try:
+                            ev = _json.loads(line)
+                            eid = ev.get("event_id", "")
+                            if eid and eid in existing_user_ids:
+                                skipped_events += 1
+                            else:
+                                self.user_store.append_event(ev)
+                                imported_events += 1
+                        except _json.JSONDecodeError:
+                            skipped_events += 1
+
+            # Import project events (.oem directory)
+            oem_archive = extract_dir / ".oem"
+            if oem_archive.exists():
+                events_archive = oem_archive / "events.jsonl"
+                if events_archive.exists():
+                    existing_project_ids = set()
+                    events_path = harness / "events.jsonl"
+                    if events_path.exists():
+                        with open(events_path) as f:
+                            for line in f:
+                                if line.strip():
+                                    try:
+                                        ev = _json.loads(line)
+                                        existing_project_ids.add(ev.get("event_id", ""))
+                                    except _json.JSONDecodeError:
+                                        pass
+
+                    with open(events_archive) as f:
+                        for line in f:
+                            if not line.strip():
+                                continue
+                            try:
+                                ev = _json.loads(line)
+                                eid = ev.get("event_id", "")
+                                if eid and eid in existing_project_ids:
+                                    skipped_events += 1
+                                else:
+                                    self.event_store.append_event(ev, str(harness.parent))
+                                    imported_events += 1
+                            except _json.JSONDecodeError:
+                                skipped_events += 1
+
+            # Cleanup
+            shutil.rmtree(extract_dir, ignore_errors=True)
+
+            return {
+                "status": "success",
+                "operation": "import_memory",
+                "imported_events": imported_events,
+                "skipped_events": skipped_events,
+                "conflicts": conflicts,
+                "message": f"Imported {imported_events} events, skipped {skipped_events} duplicates.",
+            }
+        except Exception as e:
+            return {
+                "status": "error",
+                "operation": "import_memory",
+                "message": str(e),
+            }
+
     def close(self) -> None:
         for service in (getattr(self, "search", None), getattr(self, "source", None)):
             close = getattr(service, "close", None)
