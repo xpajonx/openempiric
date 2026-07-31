@@ -737,3 +737,32 @@ def register(mcp: object) -> None:
                 "operation": "knowledge_session_end",
                 "message": f"# Session End Failure\n\nError: {e}"
             }, indent=2)
+
+    @mcp.tool()
+    def knowledge_dream(project: str = None, force: bool = False) -> str:
+        """Run the memory maintainer dream cycle (consolidation, decay, promotion, archive, merge).
+
+        Args:
+            project: Project path (None for auto-detect).
+            force: Run even with fewer than 2 concepts.
+
+        Returns:
+            Dict with status and per-phase results.
+        """
+        try:
+            project_root = resolve_active_project(project)
+            memory_root = project_root / ".oem"
+            with KnowledgeEngine(str(project_root)) as eng:
+                res = eng.dream(project=str(project_root), force=force)
+            res["project_root"] = str(project_root)
+            res["memory_root"] = str(memory_root)
+            res["operation"] = "knowledge_dream"
+            return json.dumps(res, indent=2)
+        except ProjectResolutionError as e:
+            return handle_resolution_error("knowledge_dream", e)
+        except Exception as e:
+            return json.dumps({
+                "status": "error",
+                "operation": "knowledge_dream",
+                "message": str(e)
+            }, indent=2)

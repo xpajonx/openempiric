@@ -92,6 +92,10 @@ def _setup_parser() -> argparse.ArgumentParser:
     search_p.add_argument("--project", type=str, default="")
     search_p.add_argument("--debug-ranking", action="store_true", help="Show raw/reranked candidate breakdown with identity fields and failure classification")
 
+    dream_p = sub.add_parser("dream", help="[User] Run memory consolidation (decay, promote, archive, merge)")
+    dream_p.add_argument("--force", action="store_true", help="Run even with fewer than 2 concepts")
+    dream_p.add_argument("--project", type=str, default="")
+
     source_p = sub.add_parser("source", help="[User] Search and read the project source corpus")
     source_sub = source_p.add_subparsers(dest="source_command", required=True, metavar="SOURCE_COMMAND")
 

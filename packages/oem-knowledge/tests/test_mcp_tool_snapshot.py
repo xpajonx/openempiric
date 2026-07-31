@@ -39,6 +39,7 @@ def test_mcp_tool_names_snapshot():
         "knowledge_add_memory",
         "knowledge_export",
         "knowledge_import",
+        "knowledge_dream",
 
         # Concepts (from oem_knowledge.tools.concepts)
         "knowledge_get_events",
@@ -64,4 +65,4 @@ def test_mcp_tool_names_snapshot():
     }
 
     assert registered_tools == expected_tools
-    assert len(registered_tools) == 33
+    assert len(registered_tools) == 34

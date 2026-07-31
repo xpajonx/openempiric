@@ -61,6 +61,7 @@ def main():
         "health",
         "source",
         "active-work",
+        "dream",
     ):
         from .commands.knowledge import run_knowledge_command
         run_knowledge_command(args)

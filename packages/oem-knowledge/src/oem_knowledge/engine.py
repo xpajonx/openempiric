@@ -1618,10 +1618,167 @@ project: {project or "default"}
             "index_skipped": (events_written == 0),
             "events_written": events_written,
         })
+        # Phase: Dream (post-session consolidation)
+        if events_written > 0:
+            try:
+                auto_dream_enabled = self._is_auto_dream_enabled(project)
+            except Exception:
+                auto_dream_enabled = False
+
+            if auto_dream_enabled:
+                try:
+                    dream_result = self.dream(project=project)
+                    standard_res["dream"] = dream_result
+                except Exception as e:
+                    logger.warning("Dream phase failed (non-fatal): %s", e)
+                    standard_res["dream"] = {"status": "failed", "error": str(e)}
         return standard_res
 
     def session_commit(self, *args, **kwargs) -> dict:
         return self.session_end(*args, **kwargs)
+
+    def dream(self, project: str | None = None, force: bool = False) -> dict:
+        """Run the memory maintainer dream cycle.
+        
+        Four phases:
+        1. Orientation — scan registry + events, establish baseline
+        2. Signal Gather — identify decay/promotion/archive/merge candidates
+        3. Consolidation — apply changes
+        4. Pruning — log actions, re-index
+        """
+        from oem_knowledge.services.evolution import (
+            apply_decay, DreamLog, should_archive, should_promote,
+        )
+
+        harness = self._resolve_harness(project)
+        registry = self._load_registry(project) if hasattr(self, '_load_registry') else self.state._load_registry(project)
+        events = self.state.get_events(project)
+        config = self._read_reflection_config(project)
+        reflection_cfg = config.get("reflection", {})
+        auto_dream_cfg = reflection_cfg.get("auto_dream", {})
+
+        half_life = auto_dream_cfg.get("half_life_days", 30)
+        consolidate_threshold = auto_dream_cfg.get("consolidate_threshold", 0.9)
+        promote_cfg = auto_dream_cfg.get("promote_threshold", {})
+        evidence_threshold = promote_cfg.get("evidence_count", 5)
+        session_threshold = promote_cfg.get("session_count", 3)
+
+        # Phase 1: Orientation
+        total_concepts = len(registry)
+        if total_concepts < 2 and not force:
+            return {"status": "noop", "reason": "fewer than 2 concepts", "total_concepts": total_concepts}
+
+        baseline = {
+            "total_concepts": total_concepts,
+            "total_events": len(events),
+            "by_status": {},
+        }
+        for cdata in registry.values():
+            if isinstance(cdata, dict):
+                st = cdata.get("status", "candidate")
+                baseline["by_status"][st] = baseline["by_status"].get(st, 0) + 1
+
+        # Phase 2: Signal Gathering
+        promotion_candidates = []
+        archival_candidates = []
+        decay_candidates = []
+        merge_candidates = []
+
+        concept_list = [
+            {"concept_id": cid, **cdata}
+            for cid, cdata in registry.items()
+            if isinstance(cdata, dict)
+        ]
+
+        decay_results = apply_decay(concept_list, half_life_days=half_life)
+        for dr in decay_results:
+            decay_candidates.append(dr)
+
+        for cid, cdata in registry.items():
+            if not isinstance(cdata, dict):
+                continue
+            should_prom, prom_reason = should_promote(cdata, evidence_threshold=evidence_threshold, session_threshold=session_threshold)
+            if should_prom:
+                promotion_candidates.append({"concept_id": cid, "reason": prom_reason})
+
+            should_arch, arch_reason = should_archive(cdata, stale_sessions=30, current_session_count=len(events))
+            if should_arch:
+                archival_candidates.append({"concept_id": cid, "reason": arch_reason})
+
+        try:
+            merge_proposals = self.propose_merges(similarity_threshold=consolidate_threshold, project=project)
+            merge_candidates = merge_proposals if merge_proposals else []
+        except Exception as e:
+            logger.warning("Merge proposal failed during dream: %s", e)
+            merge_candidates = []
+
+        # Phase 3: Consolidation
+        dream_log = DreamLog(harness / "state" / "dream_log.jsonl")
+        promotions_applied = 0
+        archives_applied = 0
+        decays_applied = 0
+        merges_applied = 0
+
+        # Apply decays
+        for dr in decay_candidates:
+            cid = dr["concept_id"]
+            if cid in registry and isinstance(registry[cid], dict):
+                old_conf = registry[cid].get("confidence", 1)
+                registry[cid]["confidence"] = dr["new_confidence"]
+                decays_applied += 1
+                dream_log.record("decay", {"concept_id": cid, "old_confidence": old_conf, "new_confidence": dr["new_confidence"]})
+
+        # Apply promotions
+        for pc in promotion_candidates:
+            cid = pc["concept_id"]
+            if cid in registry and isinstance(registry[cid], dict):
+                old_status = registry[cid].get("status", "candidate")
+                if old_status == "candidate":
+                    registry[cid]["status"] = "emerging"
+                elif old_status == "emerging":
+                    registry[cid]["status"] = "validated"
+                promotions_applied += 1
+                dream_log.record("promotion", {"concept_id": cid, "from_status": old_status, "to_status": registry[cid]["status"]})
+
+        # Apply archivals
+        for ac in archival_candidates:
+            cid = ac["concept_id"]
+            if cid in registry and isinstance(registry[cid], dict):
+                old_status = registry[cid].get("status", "candidate")
+                registry[cid]["status"] = "needs_review"
+                archives_applied += 1
+                dream_log.record("archive", {"concept_id": cid, "from_status": old_status})
+
+        # Apply merges
+        for mc in merge_candidates:
+            primary_id = mc.get("primary_id")
+            secondary_id = mc.get("secondary_id")
+            if primary_id and secondary_id and primary_id in registry and secondary_id in registry:
+                try:
+                    self.state.merge_concepts(project, primary_id, secondary_id)
+                    merges_applied += 1
+                    dream_log.record("merge", {"primary_id": primary_id, "secondary_id": secondary_id})
+                except Exception as e:
+                    logger.warning("Merge failed for %s -> %s: %s", secondary_id, primary_id, e)
+
+        # Save registry (only if changes were made)
+        if decays_applied > 0 or promotions_applied > 0 or archives_applied > 0:
+            self.state._save_registry(registry, project)
+
+        # Phase 4: Pruning
+        try:
+            self.search.index_all()
+        except Exception as e:
+            logger.warning("Index re-build during dream failed: %s", e)
+
+        return {
+            "status": "success",
+            "baseline": baseline,
+            "decay": {"candidates": len(decay_candidates), "applied": decays_applied},
+            "promotion": {"candidates": len(promotion_candidates), "applied": promotions_applied},
+            "archive": {"candidates": len(archival_candidates), "applied": archives_applied},
+            "merge": {"candidates": len(merge_candidates), "applied": merges_applied},
+        }
 
     def preflight(
         self,
@@ -1738,7 +1895,27 @@ project: {project or "default"}
         from oem_knowledge.runtime.read import execute_knowledge_read
         return execute_knowledge_read(self, project, scope, limit)
 
+    def _read_reflection_config(self, project: str | None = None) -> dict:
+        """Read and parse config/reflection.yml, returning a dict."""
+        try:
+            import yaml
+            harness = self._resolve_harness(project)
+            config_path = harness / "config" / "reflection.yml"
+            if not config_path.exists():
+                return {}
+            with open(config_path, "r") as f:
+                data = yaml.safe_load(f)
+            return data if isinstance(data, dict) else {}
+        except Exception as e:
+            logger.warning("Failed to read reflection config: %s", e)
+            return {}
 
+    def _is_auto_dream_enabled(self, project: str | None = None) -> bool:
+        """Check if auto_dream is enabled in config/reflection.yml."""
+        config = self._read_reflection_config(project)
+        reflection = config.get("reflection", {})
+        auto_dream = reflection.get("auto_dream", {})
+        return bool(auto_dream.get("enabled", False))
 
     def propose_merges(self, similarity_threshold: float = 0.85, project: str | None = None) -> list[dict]:
         from oem_knowledge.evolution import ConceptEvolutionEngine
