@@ -18,6 +18,11 @@ export interface ConceptData {
   updated_at: number;
   relationships: ConceptRelation[];
   source_event_ids: string[];
+  skills: string[];
+  scope: "project" | "user" | "session";
+  created_by?: string | null;
+  last_accessed_at: number;
+  access_count: number;
 }
 
 export interface KnowledgeEvent {
@@ -37,6 +42,7 @@ export interface KnowledgeEvent {
   tokens?: Record<string, number> | null;
   cost?: number | null;
   duration_s?: number | null;
+  scope: "project" | "user" | "session";
 }
 
 export interface TodoItem {
@@ -139,6 +145,10 @@ export interface SkillCandidate {
   recommended_behavior: string;
   evidence: string[];
   rationale: string;
+  concepts: string[];
+  tools: string[];
+  best_practices: string[];
+  triggers: string[];
   created_at: string;
   updated_at: string;
   source_event_ids: string[];

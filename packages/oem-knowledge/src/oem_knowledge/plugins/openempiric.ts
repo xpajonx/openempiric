@@ -610,3 +610,6 @@ export const OpenempiricPlugin: Plugin = async (input, options) => {
     }
   }
 }
+
+export default OpenempiricPlugin
+

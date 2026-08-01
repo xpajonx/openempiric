@@ -25,6 +25,10 @@ class ConceptData(BaseModel):
     relationships: list[ConceptRelation] = Field(default_factory=list)
     source_event_ids: list[str] = Field(default_factory=list)
     skills: list[str] = Field(default_factory=list, description="Slugs of approved skills linked to this concept")
+    scope: Literal["project", "user", "session"] = Field(default="project", description="Memory scope: project, user, or session")
+    created_by: str | None = Field(default=None, description="Agent identifier that created this concept")
+    last_accessed_at: float = Field(default_factory=time.time, description="Last time this concept was accessed")
+    access_count: int = Field(default=0, description="Number of times accessed")
 
 
 class KnowledgeEvent(BaseModel):
@@ -56,6 +60,7 @@ class KnowledgeEvent(BaseModel):
     duration_s: float | None = Field(
         default=None, description="Subprocess run duration in seconds"
     )
+    scope: Literal["project", "user", "session"] = Field(default="project", description="Memory scope: project, user, or session")
 
 
 class TodoItem(BaseModel):

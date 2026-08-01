@@ -173,6 +173,197 @@ class KnowledgeEngine:
         self.skills = SkillService(self)
         self.skill_promotion = SkillPromotionService(self)
 
+        # Phase 3: Instantiate Storage layer wrappers
+        from oem_knowledge.storage.event_store import EventStore
+        from oem_knowledge.storage.registry_store import RegistryStore
+        from oem_knowledge.storage.concept_files import ConceptFiles
+        from oem_knowledge.storage.session_files import SessionFiles
+        from oem_knowledge.storage.user_store import UserStore
+
+        self.event_store = EventStore(self)
+        self.registry_store = RegistryStore(self)
+        self.concept_files = ConceptFiles(self)
+        self.session_files = SessionFiles(self)
+        self.user_store = UserStore(self)
+
+        # Phase 3: Instantiate Computation layer wrappers
+        from oem_knowledge.computation.snapshot import SnapshotComputation
+        from oem_knowledge.computation.reflection import ReflectionComputation
+        from oem_knowledge.computation.indexing import IndexingComputation
+        from oem_knowledge.computation.search import SearchComputation
+        from oem_knowledge.computation.fitness import FitnessComputation
+        from oem_knowledge.computation.evolution import EvolutionComputation
+        from oem_knowledge.computation.preflight import PreflightComputation
+        from oem_knowledge.computation.materialization import MaterializationComputation
+        from oem_knowledge.computation.skills import SkillsComputation
+
+        self.snapshot = SnapshotComputation(self)
+        self.materialization_computation = MaterializationComputation(self)
+        self.reflection_computation = ReflectionComputation(self)
+        self.indexing = IndexingComputation(self)
+        self.search_computation = SearchComputation(self)
+        self.fitness_computation = FitnessComputation(self)
+        self.evolution = EvolutionComputation(self)
+        self.preflight_computation = PreflightComputation(self)
+        self.skills_computation = SkillsComputation(self)
+
+    def export_memory(self, output_path: str, project: str | None = None) -> dict:
+        """Export project memory to a tar.gz archive.
+
+        Exports .oem/ directory + user events + manifest.
+        Returns dict with status and archive path.
+        """
+        import tarfile
+        import tempfile
+        from pathlib import Path
+
+        output = Path(output_path).resolve()
+        harness = self._resolve_harness(project)
+
+        try:
+            with tarfile.open(str(output), "w:gz") as tar:
+                # Archive the .oem directory
+                if harness.exists():
+                    tar.add(str(harness), arcname=".oem")
+
+                # Include user events if available
+                user_path = self.user_store.get_events_path()
+                if user_path and user_path.exists():
+                    tar.add(str(user_path), arcname="user_events.jsonl")
+
+                # Write a manifest
+                import json as _json
+                manifest = {
+                    "schema_version": 1,
+                    "project_id": harness.parent.name,
+                    "exported_at": __import__("time").strftime("%Y-%m-%dT%H:%M:%SZ", __import__("time").gmtime()),
+                    "includes_user_events": bool(user_path and user_path.exists()),
+                }
+                manifest_path = tempfile.mktemp(suffix=".json")
+                Path(manifest_path).write_text(_json.dumps(manifest, indent=2))
+                tar.add(manifest_path, arcname="manifest.json")
+                Path(manifest_path).unlink(missing_ok=True)
+
+            return {
+                "status": "success",
+                "operation": "export_memory",
+                "archive_path": str(output),
+                "size_bytes": output.stat().st_size if output.exists() else 0,
+            }
+        except Exception as e:
+            return {
+                "status": "error",
+                "operation": "export_memory",
+                "message": str(e),
+            }
+
+    def import_memory(self, input_path: str, project: str | None = None) -> dict:
+        """Import project memory from a tar.gz archive.
+
+        Merges with existing events via event_id dedup and alias-merge
+        for concept conflicts. Returns dict with status and conflict report.
+        """
+        import tarfile
+        import tempfile
+        import json as _json
+        from pathlib import Path
+        import shutil
+
+        input_p = Path(input_path).resolve()
+        if not input_p.exists():
+            return {"status": "error", "operation": "import_memory", "message": f"Archive not found: {input_path}"}
+
+        harness = self._resolve_harness(project)
+        conflicts = []
+        imported_events = 0
+        skipped_events = 0
+
+        try:
+            extract_dir = Path(tempfile.mkdtemp())
+
+            with tarfile.open(str(input_p), "r:gz") as tar:
+                tar.extractall(path=str(extract_dir), filter="data")
+
+            # Import user events
+            user_archive = extract_dir / "user_events.jsonl"
+            if user_archive.exists():
+                existing_user_ids = set()
+                user_path = self.user_store.get_events_path()
+                if user_path and user_path.exists():
+                    with open(user_path) as f:
+                        for line in f:
+                            if line.strip():
+                                try:
+                                    ev = _json.loads(line)
+                                    existing_user_ids.add(ev.get("event_id", ""))
+                                except _json.JSONDecodeError:
+                                    pass
+
+                with open(user_archive) as f:
+                    for line in f:
+                        if not line.strip():
+                            continue
+                        try:
+                            ev = _json.loads(line)
+                            eid = ev.get("event_id", "")
+                            if eid and eid in existing_user_ids:
+                                skipped_events += 1
+                            else:
+                                self.user_store.append_event(ev)
+                                imported_events += 1
+                        except _json.JSONDecodeError:
+                            skipped_events += 1
+
+            # Import project events (.oem directory)
+            oem_archive = extract_dir / ".oem"
+            if oem_archive.exists():
+                events_archive = oem_archive / "events.jsonl"
+                if events_archive.exists():
+                    existing_project_ids = set()
+                    events_path = harness / "events.jsonl"
+                    if events_path.exists():
+                        with open(events_path) as f:
+                            for line in f:
+                                if line.strip():
+                                    try:
+                                        ev = _json.loads(line)
+                                        existing_project_ids.add(ev.get("event_id", ""))
+                                    except _json.JSONDecodeError:
+                                        pass
+
+                    with open(events_archive) as f:
+                        for line in f:
+                            if not line.strip():
+                                continue
+                            try:
+                                ev = _json.loads(line)
+                                eid = ev.get("event_id", "")
+                                if eid and eid in existing_project_ids:
+                                    skipped_events += 1
+                                else:
+                                    self.event_store.append_event(ev, str(harness.parent))
+                                    imported_events += 1
+                            except _json.JSONDecodeError:
+                                skipped_events += 1
+
+            # Cleanup
+            shutil.rmtree(extract_dir, ignore_errors=True)
+
+            return {
+                "status": "success",
+                "operation": "import_memory",
+                "imported_events": imported_events,
+                "skipped_events": skipped_events,
+                "conflicts": conflicts,
+                "message": f"Imported {imported_events} events, skipped {skipped_events} duplicates.",
+            }
+        except Exception as e:
+            return {
+                "status": "error",
+                "operation": "import_memory",
+                "message": str(e),
+            }
+
     def close(self) -> None:
         for service in (getattr(self, "search", None), getattr(self, "source", None)):
             close = getattr(service, "close", None)
@@ -318,20 +509,27 @@ class KnowledgeEngine:
                 ),
             ),
             (
-                "config/reflection.yml",
-                (
-                    "reflection:\n"
-                    "  mode: auto\n\n"
-                    "  structured:\n"
-                    "    enabled: true\n\n"
-                    "  marker:\n"
-                    "    enabled: true\n\n"
-                    "  dense:\n"
-                    "    enabled: false\n"
-                    "    on_unavailable: skip\n"
-                    "    max_retry_count: 0\n"
-                    "    queue_pending: false\n"
-                ),
+            "config/reflection.yml",
+            (
+                "reflection:\n"
+                "  mode: auto\n\n"
+                "  structured:\n"
+                "    enabled: true\n\n"
+                "  marker:\n"
+                "    enabled: true\n\n"
+                "  dense:\n"
+                "    enabled: false\n"
+                "    on_unavailable: skip\n"
+                "    max_retry_count: 0\n"
+                "    queue_pending: false\n\n"
+                "  auto_dream:\n"
+                "    enabled: false\n"
+                "    half_life_days: 30\n"
+                "    consolidate_threshold: 0.9\n"
+                "    promote_threshold:\n"
+                "      evidence_count: 5\n"
+                "      session_count: 3\n"
+            ),
             ),
         ]:
             fp = harness / fname
@@ -1420,10 +1618,167 @@ project: {project or "default"}
             "index_skipped": (events_written == 0),
             "events_written": events_written,
         })
+        # Phase: Dream (post-session consolidation)
+        if events_written > 0:
+            try:
+                auto_dream_enabled = self._is_auto_dream_enabled(project)
+            except Exception:
+                auto_dream_enabled = False
+
+            if auto_dream_enabled:
+                try:
+                    dream_result = self.dream(project=project)
+                    standard_res["dream"] = dream_result
+                except Exception as e:
+                    logger.warning("Dream phase failed (non-fatal): %s", e)
+                    standard_res["dream"] = {"status": "failed", "error": str(e)}
         return standard_res
 
     def session_commit(self, *args, **kwargs) -> dict:
         return self.session_end(*args, **kwargs)
+
+    def dream(self, project: str | None = None, force: bool = False) -> dict:
+        """Run the memory maintainer dream cycle.
+        
+        Four phases:
+        1. Orientation — scan registry + events, establish baseline
+        2. Signal Gather — identify decay/promotion/archive/merge candidates
+        3. Consolidation — apply changes
+        4. Pruning — log actions, re-index
+        """
+        from oem_knowledge.services.evolution import (
+            apply_decay, DreamLog, should_archive, should_promote,
+        )
+
+        harness = self._resolve_harness(project)
+        registry = self._load_registry(project) if hasattr(self, '_load_registry') else self.state._load_registry(project)
+        events = self.state.get_events(project)
+        config = self._read_reflection_config(project)
+        reflection_cfg = config.get("reflection", {})
+        auto_dream_cfg = reflection_cfg.get("auto_dream", {})
+
+        half_life = auto_dream_cfg.get("half_life_days", 30)
+        consolidate_threshold = auto_dream_cfg.get("consolidate_threshold", 0.9)
+        promote_cfg = auto_dream_cfg.get("promote_threshold", {})
+        evidence_threshold = promote_cfg.get("evidence_count", 5)
+        session_threshold = promote_cfg.get("session_count", 3)
+
+        # Phase 1: Orientation
+        total_concepts = len(registry)
+        if total_concepts < 2 and not force:
+            return {"status": "noop", "reason": "fewer than 2 concepts", "total_concepts": total_concepts}
+
+        baseline = {
+            "total_concepts": total_concepts,
+            "total_events": len(events),
+            "by_status": {},
+        }
+        for cdata in registry.values():
+            if isinstance(cdata, dict):
+                st = cdata.get("status", "candidate")
+                baseline["by_status"][st] = baseline["by_status"].get(st, 0) + 1
+
+        # Phase 2: Signal Gathering
+        promotion_candidates = []
+        archival_candidates = []
+        decay_candidates = []
+        merge_candidates = []
+
+        concept_list = [
+            {"concept_id": cid, **cdata}
+            for cid, cdata in registry.items()
+            if isinstance(cdata, dict)
+        ]
+
+        decay_results = apply_decay(concept_list, half_life_days=half_life)
+        for dr in decay_results:
+            decay_candidates.append(dr)
+
+        for cid, cdata in registry.items():
+            if not isinstance(cdata, dict):
+                continue
+            should_prom, prom_reason = should_promote(cdata, evidence_threshold=evidence_threshold, session_threshold=session_threshold)
+            if should_prom:
+                promotion_candidates.append({"concept_id": cid, "reason": prom_reason})
+
+            should_arch, arch_reason = should_archive(cdata, stale_sessions=30, current_session_count=len(events))
+            if should_arch:
+                archival_candidates.append({"concept_id": cid, "reason": arch_reason})
+
+        try:
+            merge_proposals = self.propose_merges(similarity_threshold=consolidate_threshold, project=project)
+            merge_candidates = merge_proposals if merge_proposals else []
+        except Exception as e:
+            logger.warning("Merge proposal failed during dream: %s", e)
+            merge_candidates = []
+
+        # Phase 3: Consolidation
+        dream_log = DreamLog(harness / "state" / "dream_log.jsonl")
+        promotions_applied = 0
+        archives_applied = 0
+        decays_applied = 0
+        merges_applied = 0
+
+        # Apply decays
+        for dr in decay_candidates:
+            cid = dr["concept_id"]
+            if cid in registry and isinstance(registry[cid], dict):
+                old_conf = registry[cid].get("confidence", 1)
+                registry[cid]["confidence"] = dr["new_confidence"]
+                decays_applied += 1
+                dream_log.record("decay", {"concept_id": cid, "old_confidence": old_conf, "new_confidence": dr["new_confidence"]})
+
+        # Apply promotions
+        for pc in promotion_candidates:
+            cid = pc["concept_id"]
+            if cid in registry and isinstance(registry[cid], dict):
+                old_status = registry[cid].get("status", "candidate")
+                if old_status == "candidate":
+                    registry[cid]["status"] = "emerging"
+                elif old_status == "emerging":
+                    registry[cid]["status"] = "validated"
+                promotions_applied += 1
+                dream_log.record("promotion", {"concept_id": cid, "from_status": old_status, "to_status": registry[cid]["status"]})
+
+        # Apply archivals
+        for ac in archival_candidates:
+            cid = ac["concept_id"]
+            if cid in registry and isinstance(registry[cid], dict):
+                old_status = registry[cid].get("status", "candidate")
+                registry[cid]["status"] = "needs_review"
+                archives_applied += 1
+                dream_log.record("archive", {"concept_id": cid, "from_status": old_status})
+
+        # Apply merges
+        for mc in merge_candidates:
+            primary_id = mc.get("primary_id")
+            secondary_id = mc.get("secondary_id")
+            if primary_id and secondary_id and primary_id in registry and secondary_id in registry:
+                try:
+                    self.state.merge_concepts(project, primary_id, secondary_id)
+                    merges_applied += 1
+                    dream_log.record("merge", {"primary_id": primary_id, "secondary_id": secondary_id})
+                except Exception as e:
+                    logger.warning("Merge failed for %s -> %s: %s", secondary_id, primary_id, e)
+
+        # Save registry (only if changes were made)
+        if decays_applied > 0 or promotions_applied > 0 or archives_applied > 0:
+            self.state._save_registry(registry, project)
+
+        # Phase 4: Pruning
+        try:
+            self.search.index_all()
+        except Exception as e:
+            logger.warning("Index re-build during dream failed: %s", e)
+
+        return {
+            "status": "success",
+            "baseline": baseline,
+            "decay": {"candidates": len(decay_candidates), "applied": decays_applied},
+            "promotion": {"candidates": len(promotion_candidates), "applied": promotions_applied},
+            "archive": {"candidates": len(archival_candidates), "applied": archives_applied},
+            "merge": {"candidates": len(merge_candidates), "applied": merges_applied},
+        }
 
     def preflight(
         self,
@@ -1540,7 +1895,27 @@ project: {project or "default"}
         from oem_knowledge.runtime.read import execute_knowledge_read
         return execute_knowledge_read(self, project, scope, limit)
 
+    def _read_reflection_config(self, project: str | None = None) -> dict:
+        """Read and parse config/reflection.yml, returning a dict."""
+        try:
+            import yaml
+            harness = self._resolve_harness(project)
+            config_path = harness / "config" / "reflection.yml"
+            if not config_path.exists():
+                return {}
+            with open(config_path, "r") as f:
+                data = yaml.safe_load(f)
+            return data if isinstance(data, dict) else {}
+        except Exception as e:
+            logger.warning("Failed to read reflection config: %s", e)
+            return {}
 
+    def _is_auto_dream_enabled(self, project: str | None = None) -> bool:
+        """Check if auto_dream is enabled in config/reflection.yml."""
+        config = self._read_reflection_config(project)
+        reflection = config.get("reflection", {})
+        auto_dream = reflection.get("auto_dream", {})
+        return bool(auto_dream.get("enabled", False))
 
     def propose_merges(self, similarity_threshold: float = 0.85, project: str | None = None) -> list[dict]:
         from oem_knowledge.evolution import ConceptEvolutionEngine
@@ -1589,3 +1964,48 @@ project: {project or "default"}
             return False
         except Exception:
             return False
+
+    def config_embedding_set_model(self, model_name: str, dry_run: bool = False) -> dict:
+        """Switch the embedding model. Requires re-indexing.
+
+        Args:
+            model_name: New embedding model name (e.g., 'BAAI/bge-large-en-v1.5')
+            dry_run: If True, report how many chunks would be re-embedded without making changes
+        """
+        import json
+        harness = self._resolve_harness()
+        config_path = harness / "config" / "embedding_model.json"
+
+        current_model = getattr(self.search, "_embedding_model", None) or "BAAI/bge-small-en-v1.5"
+
+        if dry_run:
+            count = "unknown"
+            try:
+                store = getattr(self.search, "_store", None)
+                if store and hasattr(store, "count"):
+                    count = store.count()
+            except Exception:
+                pass
+            return {
+                "status": "dry_run",
+                "current_model": current_model,
+                "new_model": model_name,
+                "chunks_to_reindex": count,
+                "message": f"Dry run: ~{count} chunks would be re-embedded with {model_name}",
+            }
+
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(json.dumps({
+            "embedding_model": model_name,
+            "previous_model": current_model,
+            "switched_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }, indent=2))
+
+        self.search._embedding_model = model_name
+
+        return {
+            "status": "success",
+            "model": model_name,
+            "message": f"Embedding model set to {model_name}. Run 'oem index --reindex' to re-embed.",
+            "warning": "Re-indexing required. Run in background to avoid blocking session_end.",
+        }

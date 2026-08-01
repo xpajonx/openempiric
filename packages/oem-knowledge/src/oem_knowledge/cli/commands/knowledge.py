@@ -867,6 +867,52 @@ def _run_knowledge_command_impl(args):
         print(render_panel("Knowledge Health Scan", lines, status="stats"))
 
 
+    elif args.command == "dream":
+        res = eng.dream(project=project, force=getattr(args, "force", False))
+
+        if res.get("status") == "error":
+            print(render_panel("Dream Error", [res.get("message", res.get("error", "Unknown error"))], status="error"))
+            sys.exit(1)
+
+        if res.get("status") == "noop":
+            print(render_panel(
+                "Dream - No Action",
+                [res.get("reason", "Nothing to consolidate.")],
+                status="ok"
+            ))
+            return
+
+        lines = [
+            f"Total concepts: {res.get('baseline', {}).get('total_concepts', 0)}",
+            f"Total events: {res.get('baseline', {}).get('total_events', 0)}",
+            "",
+            "Decay:",
+            f"  Candidates: {res.get('decay', {}).get('candidates', 0)}",
+            f"  Applied: {res.get('decay', {}).get('applied', 0)}",
+            "",
+            "Promotion:",
+            f"  Candidates: {res.get('promotion', {}).get('candidates', 0)}",
+            f"  Applied: {res.get('promotion', {}).get('applied', 0)}",
+            "",
+            "Archive:",
+            f"  Candidates: {res.get('archive', {}).get('candidates', 0)}",
+            f"  Applied: {res.get('archive', {}).get('applied', 0)}",
+            "",
+            "Merge:",
+            f"  Candidates: {res.get('merge', {}).get('candidates', 0)}",
+            f"  Applied: {res.get('merge', {}).get('applied', 0)}",
+        ]
+
+        # Show status breakdown if available
+        by_status = res.get("baseline", {}).get("by_status", {})
+        if by_status:
+            lines.append("")
+            lines.append("Status breakdown:")
+            for status, count in sorted(by_status.items()):
+                lines.append(f"  {status}: {count}")
+
+        print(render_panel("Dream - Memory Consolidation", lines, status="ok"))
+
     elif args.command == "merge":
         registry = eng.state._load_registry(project)
         primary_id = args.primary_id

@@ -18,6 +18,38 @@ REFERENCE_TRACKING_WATERMARK_TS = 1782864000.0  # 2026-07-01T00:00:00Z
 REFERENCE_TRACKING_WATERMARK_ISO = "2026-07-01T00:00:00Z"
 
 
+def _is_command_log_event(summary: str) -> bool:
+    """Return True if the summary looks like a raw command log that should not be indexed."""
+    if not summary:
+        return False
+    patterns = [
+        r"^Command `.*` executed with exit code",
+        r"^Exit code:",
+        r"^Output:\s*\n?FAILED:",
+        r"^Command `.*`\s*\n?Output:",
+    ]
+    return any(re.search(p, summary) for p in patterns)
+
+
+def memory_quality_score(summary: str, evidence: str) -> float:
+    """Score memory quality 0.0-1.0. Higher = better."""
+    score = 0.0
+    if not summary:
+        return 0.0
+    # Length check: too short is suspicious
+    if len(summary) > 30:
+        score += 0.3
+    if len(summary) > 80:
+        score += 0.2
+    # Has evidence
+    if evidence and len(evidence) > 20:
+        score += 0.3
+    # Contains decision language
+    if re.search(r"\b(decided|chose|selected|picked|agreed|concluded)\b", summary, re.IGNORECASE):
+        score += 0.2
+    return min(score, 1.0)
+
+
 def _parse_timestamp(val) -> float | None:
     if val is None:
         return None
@@ -35,6 +67,53 @@ def _parse_timestamp(val) -> float | None:
         except Exception:
             pass
     return None
+
+
+def resolve_user_identity() -> str | None:
+    """Resolve the current user identity with precedence: OEM_USER_ID > git user.email.
+
+    Returns:
+        User identifier string or None if unidentifiable.
+    """
+    import os
+    import subprocess
+
+    # Precedence 1: explicit env var
+    oem_user = os.environ.get("OEM_USER_ID", "").strip()
+    if oem_user:
+        return oem_user
+
+    # Precedence 2: git user.email (machine-specific, known limitation)
+    try:
+        result = subprocess.run(
+            ["git", "config", "user.email"],
+            capture_output=True, text=True, timeout=5,
+        )
+        git_email = result.stdout.strip()
+        if git_email and result.returncode == 0:
+            # If OEM_USER_ID was not set but git email differs from env (edge case), warn
+            if oem_user and oem_user != git_email:
+                logger.warning(
+                    "User identity conflict: OEM_USER_ID=%s vs git user.email=%s. Using OEM_USER_ID.",
+                    oem_user, git_email,
+                )
+            return git_email
+    except Exception:
+        pass
+
+    return None
+
+
+def get_user_events_path() -> Path | None:
+    """Get the path to user-scoped events file.
+
+    Returns None if user identity cannot be resolved.
+    """
+    user_id = resolve_user_identity()
+    if not user_id:
+        return None
+    path = Path.home() / ".config" / "openempiric" / "user_events.jsonl"
+    return path
 
 
 class StateCorruptionError(ValueError):
@@ -231,34 +310,51 @@ class StateService:
 
         return {"status": "success", "updated": len(updated), "concept_ids": updated}
 
-    def _load_events(self, project: str | None = None) -> list[dict]:
+    def _load_events(self, project: str | None = None, include_user: bool = False) -> list[dict]:
         p = self.engine._events_path(project)
         sfs = self._sfs(project)
+        events: list[dict] = []
         try:
             with FileLock(p.with_suffix(".lock")):
-                if not sfs.exists(p):
-                    return []
-                events = []
-                try:
-                    content = sfs.read_text(p)
-                except OSError as e:
-                    logger.error("Failed to read events file at %s: %s", p, e)
-                    raise
-
-                for line_idx, line in enumerate(content.splitlines(), start=1):
-                    line = line.strip()
-                    if not line:
-                        continue
+                if sfs.exists(p):
                     try:
-                        ev_dict = json.loads(line)
-                        events.append(self.engine.event_migrator.upcast(ev_dict))
-                    except json.JSONDecodeError as e:
-                        logger.warning("Skipping corrupt event line %d in %s: %s", line_idx, p, e)
-                        continue
-                return events
+                        content = sfs.read_text(p)
+                    except OSError as e:
+                        logger.error("Failed to read events file at %s: %s", p, e)
+                        raise
+
+                    for line_idx, line in enumerate(content.splitlines(), start=1):
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            ev_dict = json.loads(line)
+                            events.append(self.engine.event_migrator.upcast(ev_dict))
+                        except json.JSONDecodeError as e:
+                            logger.warning("Skipping corrupt event line %d in %s: %s", line_idx, p, e)
+                            continue
         except LockTimeoutError:
             logger.error("Timed out acquiring state lock for %s", p)
             raise
+
+        if include_user:
+            user_path = get_user_events_path()
+            if user_path and user_path.exists():
+                try:
+                    with open(user_path, "r") as f:
+                        for line in f:
+                            line = line.strip()
+                            if line:
+                                try:
+                                    ev = json.loads(line)
+                                    ev["scope"] = "user"
+                                    events.append(ev)
+                                except json.JSONDecodeError:
+                                    continue
+                except OSError:
+                    pass
+
+        return events
 
     def append_event(self, event: dict | KnowledgeEvent, project: str | None = None):
         if isinstance(event, dict):
@@ -325,6 +421,31 @@ class StateService:
         except LockTimeoutError:
             logger.error("Timed out acquiring state lock for %s", p)
             raise
+
+    def load_events(
+        self,
+        project: str | None = None,
+        include_user: bool = False,
+    ) -> list[dict]:
+        """Public alias for _load_events. Satisfies EventStoreProtocol."""
+        return self._load_events(project, include_user=include_user)
+
+    def load_registry(
+        self,
+        project: str | None = None,
+        lock: bool = True,
+    ) -> dict:
+        """Public alias for _load_registry. Satisfies RegistryStoreProtocol."""
+        return self._load_registry(project, lock=lock)
+
+    def save_registry(
+        self,
+        registry: dict,
+        project: str | None = None,
+        lock: bool = False,
+    ) -> None:
+        """Public alias for _save_registry. Satisfies RegistryStoreProtocol."""
+        self._save_registry(registry, project, lock=lock)
 
     def _resolve_concept(
         self,
@@ -469,7 +590,7 @@ class StateService:
         cdata["status"] = new_status
         return cdata
 
-    def consolidate(self, project: str | None = None) -> dict:
+    def consolidate(self, project: str | None = None, threshold: float = 0.82) -> dict:
         concepts_dir = self.engine._concepts_dir(project)
         sfs = self.engine._sfs(project)
         if not sfs.exists(concepts_dir):
@@ -493,7 +614,7 @@ class StateService:
 
         from oem_knowledge.identity_resolver import SemanticIdentityResolver
         resolver = SemanticIdentityResolver(self.engine)
-        duplicates = resolver.scan_duplicates(project, threshold=0.82)
+        duplicates = resolver.scan_duplicates(project, threshold=threshold)
 
         if not duplicates:
             return {
@@ -605,6 +726,8 @@ class StateService:
         fitness_data = self.engine.fitness.calculate_fitness(project)
         events = self._load_events(project)
         for event in events:
+            if _is_command_log_event(event.get("summary", "")):
+                continue
             concept_candidates = event.get("concept_candidates", [])
             primary_term = (
                 concept_candidates[0]

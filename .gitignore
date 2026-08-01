@@ -91,3 +91,7 @@ init.sh
 
 # Local build-in-public drafts
 build-in-public/
+
+# Internal planning and release docs (not for GitHub)
+PLAN_OEM_MEMORY_IMPROVEMENTS.md
+RELEASE_NOTES.md

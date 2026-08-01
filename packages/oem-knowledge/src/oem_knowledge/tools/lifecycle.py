@@ -19,7 +19,7 @@ def _commit_session_from_tool(
     project_root: Path,
     conversation_text: str,
     session_id: str,
-    events: list[dict] | None = None,
+    events: list | None = None,
     extraction_mode: str = "auto",
     timeout_seconds: float | None = None,
 ) -> dict:
@@ -242,6 +242,60 @@ def register(mcp: object) -> None:
             }, indent=2)
 
     @mcp.tool()
+    def knowledge_add_memory(
+        memory_type: str,
+        content: str,
+        scope: str = "project",
+        confidence: int = 3,
+        evidence: str = "",
+        project: str = "",
+    ) -> str:
+        """Add an inline memory during active work without waiting for session end.
+
+        Args:
+            memory_type: Type of memory: 'decision', 'observation', 'preference', 'failure', 'workaround'
+            content: The memory content/summary
+            scope: Memory scope: 'project', 'user', or 'session'
+            confidence: Confidence rating 1-5. Auto-accepted if >= 3.
+            evidence: Supporting evidence or context for the memory
+            project: Project directory path. Defaults to current directory.
+        """
+        try:
+            project_root = resolve_active_project(project)
+            # Get session_id from active session state
+            session_id = ""
+            try:
+                state_dir = project_root / ".oem" / "state"
+                active_session_file = state_dir / "active_session.json"
+                if active_session_file.exists():
+                    import json as _json
+                    session_data = _json.loads(active_session_file.read_text())
+                    session_id = session_data.get("session_id", "")
+            except Exception:
+                pass
+            with KnowledgeEngine(str(project_root)) as eng:
+                result = eng.reflection.add_inline_memory(
+                    memory_type=memory_type,
+                    content=content,
+                    scope=scope,
+                    confidence=confidence,
+                    evidence=evidence,
+                    session_id=session_id,
+                    project=str(project_root),
+                )
+            result["project_root"] = str(project_root)
+            result["operation"] = "knowledge_add_memory"
+            return json.dumps(result, indent=2)
+        except ProjectResolutionError as e:
+            return handle_resolution_error("knowledge_add_memory", e)
+        except Exception as e:
+            return json.dumps({
+                "status": "error",
+                "operation": "knowledge_add_memory",
+                "message": str(e)
+            }, indent=2)
+
+    @mcp.tool()
     def knowledge_index(force: bool = False, project: str = "") -> str:
         """Re-index all markdown files in the project's .oem/ concept wiki/registry/skills trees.
 
@@ -287,7 +341,7 @@ def register(mcp: object) -> None:
         project: str = "",
         conversation_text: str = "",
         session_id: str = "",
-        events: list[dict] | None = None,
+        events: list | None = None,
         extraction_mode: str = "auto",
         timeout_seconds: float | None = None,
     ) -> str:
@@ -516,6 +570,69 @@ def register(mcp: object) -> None:
             }, indent=2)
 
     @mcp.tool()
+    def knowledge_export(project: str = "", output_path: str = "") -> str:
+        """Export project memory to a tar.gz archive for backup or transfer.
+
+        Args:
+            project: Project directory path. Defaults to current directory.
+            output_path: Path for the output .tar.gz archive. Required.
+        """
+        if not output_path:
+            return json.dumps({
+                "status": "error",
+                "operation": "knowledge_export",
+                "message": "output_path is required"
+            }, indent=2)
+        try:
+            project_root = resolve_active_project(project)
+            with KnowledgeEngine(str(project_root)) as eng:
+                result = eng.export_memory(output_path, str(project_root))
+            result["project_root"] = str(project_root)
+            result["operation"] = "knowledge_export"
+            return json.dumps(result, indent=2)
+        except ProjectResolutionError as e:
+            return handle_resolution_error("knowledge_export", e)
+        except Exception as e:
+            return json.dumps({
+                "status": "error",
+                "operation": "knowledge_export",
+                "message": str(e)
+            }, indent=2)
+
+    @mcp.tool()
+    def knowledge_import(project: str = "", input_path: str = "") -> str:
+        """Import project memory from a tar.gz archive, merging with existing memory.
+
+        Uses event_id dedup to avoid duplicates. Returns counts of imported
+        and skipped events.
+
+        Args:
+            project: Project directory path. Defaults to current directory.
+            input_path: Path to the .tar.gz archive to import. Required.
+        """
+        if not input_path:
+            return json.dumps({
+                "status": "error",
+                "operation": "knowledge_import",
+                "message": "input_path is required"
+            }, indent=2)
+        try:
+            project_root = resolve_active_project(project)
+            with KnowledgeEngine(str(project_root)) as eng:
+                result = eng.import_memory(input_path, str(project_root))
+            result["project_root"] = str(project_root)
+            result["operation"] = "knowledge_import"
+            return json.dumps(result, indent=2)
+        except ProjectResolutionError as e:
+            return handle_resolution_error("knowledge_import", e)
+        except Exception as e:
+            return json.dumps({
+                "status": "error",
+                "operation": "knowledge_import",
+                "message": str(e)
+            }, indent=2)
+
+    @mcp.tool()
     def knowledge_session_commit(
         project: str = "",
         conversation_text: str = "",
@@ -578,7 +695,7 @@ def register(mcp: object) -> None:
         project: str = "",
         conversation_text: str = "",
         session_id: str = "",
-        events: list[dict] | None = None,
+        events: list | None = None,
         extraction_mode: str = "auto",
         timeout_seconds: float | None = None,
     ) -> str:
@@ -619,4 +736,33 @@ def register(mcp: object) -> None:
                 "status": "error",
                 "operation": "knowledge_session_end",
                 "message": f"# Session End Failure\n\nError: {e}"
+            }, indent=2)
+
+    @mcp.tool()
+    def knowledge_dream(project: str = None, force: bool = False) -> str:
+        """Run the memory maintainer dream cycle (consolidation, decay, promotion, archive, merge).
+
+        Args:
+            project: Project path (None for auto-detect).
+            force: Run even with fewer than 2 concepts.
+
+        Returns:
+            Dict with status and per-phase results.
+        """
+        try:
+            project_root = resolve_active_project(project)
+            memory_root = project_root / ".oem"
+            with KnowledgeEngine(str(project_root)) as eng:
+                res = eng.dream(project=str(project_root), force=force)
+            res["project_root"] = str(project_root)
+            res["memory_root"] = str(memory_root)
+            res["operation"] = "knowledge_dream"
+            return json.dumps(res, indent=2)
+        except ProjectResolutionError as e:
+            return handle_resolution_error("knowledge_dream", e)
+        except Exception as e:
+            return json.dumps({
+                "status": "error",
+                "operation": "knowledge_dream",
+                "message": str(e)
             }, indent=2)

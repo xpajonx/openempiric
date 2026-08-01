@@ -64,6 +64,11 @@ PENALTY_SEARCH_LOG = -5.0
 PENALTY_SOURCE_DUMP = -6.0
 PENALTY_LARGE_LOW_DENSITY = -3.0
 PENALTY_GENERIC_ACTIVE_PROJECT_FOR_TECHNICAL = -4.0
+LOW_QUALITY_PENALTY = -8.0
+BOOST_TEMPORAL_MATCH = 2.0
+BOOST_EXACT_DECISION_PHRASE = 5.0
+BOOST_PREFERENCE = 4.0
+BOOST_USER_SCOPE = 3.0
 
 PENALTY_LARGE_CONCEPT = -3.0
 STATUS_BOOSTS = {
@@ -468,6 +473,14 @@ def classify_memory_type(document: str, title: str | None = None, snippet: str |
     if SESSION_HANDOFF_PATTERNS.search(clean_text) and TECHNICAL_DETAIL_TERMS.search(clean_text):
         return "technical_handoff"
 
+    # Preference patterns (user preferences, style, conventions)
+    if re.search(r"\b(prefer|like|always|never|don't|hate|style|convention)\b", clean_text, re.IGNORECASE):
+        return "preference"
+
+    # Episodic patterns (past experiences)
+    if re.search(r"\b(last time|previously|tried|attempted|before)\b", clean_text, re.IGNORECASE):
+        return "episodic"
+
     # Now check logs
     if SOURCE_DUMP_PATTERNS.search(clean_text):
         return "source_dump"
@@ -736,6 +749,20 @@ def _apply_boosts(
         if "identifier_with_term" not in boosts:
             boosts["identifier_with_term"] = BOOST_IDENTIFIER_WITH_TERM
             reasons.append(f"identifier with workaround/timeout/debug term +{BOOST_IDENTIFIER_WITH_TERM}")
+
+    # Part 6: Temporal match boost - when both query and document share temporal context
+    query_text = (query_targets.get("query_text") or "").lower()
+    temporal_pattern = r"\b(since|recently|recent|last|before|after|currently|today|yesterday|previous|earlier|later|now)\b"
+    doc_has_temporal = bool(re.search(temporal_pattern, text_lower))
+    query_has_temporal = bool(re.search(temporal_pattern, query_text))
+    if doc_has_temporal and query_has_temporal:
+        boosts["temporal_match"] = BOOST_TEMPORAL_MATCH
+        reasons.append(f"temporal match +{BOOST_TEMPORAL_MATCH}")
+
+    # Part 7: Exact decision phrase boost
+    if re.search(r"\b(we decided to)\b", text_lower):
+        boosts["exact_decision_phrase"] = BOOST_EXACT_DECISION_PHRASE
+        reasons.append(f"exact decision phrase +{BOOST_EXACT_DECISION_PHRASE}")
 
     # Split boosts to calculate relevance_score and final_score correctly
     type_boost_val = boosts.get(memory_type, 0.0) if memory_type in boosts else 0.0
