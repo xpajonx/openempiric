@@ -4,6 +4,7 @@ from unittest.mock import patch, MagicMock
 from pathlib import Path
 
 from oem_knowledge.engine import KnowledgeEngine
+from oem_knowledge.fs import LockTimeoutError
 from oem_knowledge.models import KnowledgeEvent
 from oem_knowledge.runtime import SessionState
 
@@ -307,3 +308,193 @@ def test_session_end_retry_after_materialization_failure_is_idempotent(temp_proj
     # Verify concept_001.md was preserved and concept_002.md was created
     assert concept_001_file.read_text(encoding="utf-8") == "SENTINEL"
     assert (wiki_dir / "concept_002.md").exists()
+
+def test_session_end_success_unlinks_active_session(temp_project):
+    project_dir, engine = temp_project
+    start_res = engine.session_start(project=str(project_dir))
+    session_file = project_dir / ".oem" / "state" / "active_session.json"
+    assert session_file.exists()
+    assert start_res["session_id"]
+
+    events = [
+        {"type": "observation", "concept_candidates": ["beta"], "evidence": "e1", "summary": "s1", "event_id": "evt1"},
+        {"type": "observation", "concept_candidates": ["beta"], "evidence": "e2", "summary": "s2", "event_id": "evt2"},
+        {"type": "observation", "concept_candidates": ["beta"], "evidence": "e3", "summary": "s3", "event_id": "evt3"},
+    ]
+
+    res = engine.session_end(project=str(project_dir), conversation_text="", events=events, extraction_mode="auto")
+
+    assert res["status"] == "success"
+    assert res["events_written"] == 3
+    assert not session_file.exists()
+
+
+def test_session_end_warn_unlinks_active_session(temp_project):
+    project_dir, engine = temp_project
+    start_res = engine.session_start(project=str(project_dir))
+    session_file = project_dir / ".oem" / "state" / "active_session.json"
+    assert session_file.exists()
+    assert start_res["session_id"]
+
+    reflect_result = {
+        "status": "warn",
+        "failed_step": None,
+        "canonical_events": [],
+        "knowledge_events": [],
+        "events_written": 0,
+        "warnings": [],
+        "events_rejected": 0,
+        "explainability": {},
+        "reflection": None,
+        "message": "Reflection degraded",
+        "suggestion": None,
+    }
+
+    with patch.object(engine.reflection, "reflect_session", return_value=reflect_result):
+        res = engine.session_end(project=str(project_dir), conversation_text="", events=[], extraction_mode="auto")
+
+    assert res["status"] == "warn"
+    assert res["events_written"] == 0
+    assert not session_file.exists()
+
+
+def test_session_end_partial_index_unlinks_active_session(temp_project):
+    project_dir, engine = temp_project
+    start_res = engine.session_start(project=str(project_dir))
+    session_file = project_dir / ".oem" / "state" / "active_session.json"
+    assert session_file.exists()
+    assert start_res["session_id"]
+
+    events = [
+        {"type": "observation", "concept_candidates": ["beta"], "evidence": "e1", "summary": "s1", "event_id": "evt1"},
+        {"type": "observation", "concept_candidates": ["beta"], "evidence": "e2", "summary": "s2", "event_id": "evt2"},
+        {"type": "observation", "concept_candidates": ["beta"], "evidence": "e3", "summary": "s3", "event_id": "evt3"},
+    ]
+    index_result = {
+        "status": "partial",
+        "error": "Indexing budget exceeded",
+        "new": 0, "updated": 0, "scanned": 1, "unchanged": 0, "failed": 0,
+        "new_chunks": 0, "updated_chunks": 0, "unchanged_chunks": 0, "failed_chunks": 0,
+        "failed_files": [],
+    }
+
+    with patch.object(engine.search, "index_all", return_value=index_result):
+        res = engine.session_end(project=str(project_dir), conversation_text="", events=events, extraction_mode="auto")
+
+    assert res["status"] == "partial"
+    assert res["failed_step"] == "indexing"
+    assert not session_file.exists()
+
+
+def test_session_start_after_end_gets_fresh_session_id(temp_project):
+    project_dir, engine = temp_project
+    res1 = engine.session_start(project=str(project_dir))
+    first_id = res1["session_id"]
+    session_file = project_dir / ".oem" / "state" / "active_session.json"
+    assert session_file.exists()
+
+    events = [
+        {"type": "observation", "concept_candidates": ["beta"], "evidence": "e1", "summary": "s1", "event_id": "evt1"},
+        {"type": "observation", "concept_candidates": ["beta"], "evidence": "e2", "summary": "s2", "event_id": "evt2"},
+        {"type": "observation", "concept_candidates": ["beta"], "evidence": "e3", "summary": "s3", "event_id": "evt3"},
+    ]
+    end_res = engine.session_end(project=str(project_dir), conversation_text="", events=events, extraction_mode="auto")
+    assert end_res["status"] == "success"
+    assert not session_file.exists()
+
+    res2 = engine.session_start(project=str(project_dir))
+    assert res2["session_id"]
+    assert res2["session_id"] != first_id
+
+
+def test_session_end_index_exception_unlinks_active_session(temp_project):
+    project_dir, engine = temp_project
+    start_res = engine.session_start(project=str(project_dir))
+    session_file = project_dir / ".oem" / "state" / "active_session.json"
+    assert session_file.exists()
+    assert start_res["session_id"]
+
+    events = [
+        {"type": "observation", "concept_candidates": ["beta"], "evidence": "e1", "summary": "s1", "event_id": "evt1"},
+        {"type": "observation", "concept_candidates": ["beta"], "evidence": "e2", "summary": "s2", "event_id": "evt2"},
+        {"type": "observation", "concept_candidates": ["beta"], "evidence": "e3", "summary": "s3", "event_id": "evt3"},
+    ]
+
+    with patch.object(engine.search, "index_all", side_effect=RuntimeError("boom")):
+        res = engine.session_end(project=str(project_dir), conversation_text="", events=events, extraction_mode="auto")
+
+    assert res["status"] == "partial"
+    assert res["failed_step"] == "indexing"
+    assert not session_file.exists()
+
+    # Each written event appears exactly once in the events log (no duplicates)
+    events_path = engine.layout(str(project_dir)).events_path
+    assert events_path.exists()
+    lines = events_path.read_text(encoding="utf-8").strip().splitlines()
+    event_ids = [json.loads(line)["event_id"] for line in lines if line.strip()]
+    assert len(set(event_ids)) == len(event_ids)
+
+
+def test_session_end_reflection_error_keeps_active_session(temp_project):
+    project_dir, engine = temp_project
+    start_res = engine.session_start(project=str(project_dir))
+    session_file = project_dir / ".oem" / "state" / "active_session.json"
+    assert session_file.exists()
+    assert start_res["session_id"]
+
+    with patch.object(engine.reflection, "reflect_session", return_value={"status": "error", "message": "reflection failed"}):
+        res = engine.session_end(project=str(project_dir), conversation_text="", events=[], extraction_mode="auto")
+
+    assert res["status"] == "error"
+    assert res["failed_step"] == "reflection"
+    assert session_file.exists()
+
+
+def test_session_end_index_error_keeps_active_session(temp_project):
+    project_dir, engine = temp_project
+    start_res = engine.session_start(project=str(project_dir))
+    session_file = project_dir / ".oem" / "state" / "active_session.json"
+    assert session_file.exists()
+    assert start_res["session_id"]
+
+    events = [
+        {"type": "observation", "concept_candidates": ["beta"], "evidence": "e1", "summary": "s1", "event_id": "evt1"},
+        {"type": "observation", "concept_candidates": ["beta"], "evidence": "e2", "summary": "s2", "event_id": "evt2"},
+        {"type": "observation", "concept_candidates": ["beta"], "evidence": "e3", "summary": "s3", "event_id": "evt3"},
+    ]
+    index_result = {"status": "error", "error": "index failed"}
+
+    with patch.object(engine.search, "index_all", return_value=index_result):
+        res = engine.session_end(project=str(project_dir), conversation_text="", events=events, extraction_mode="auto")
+
+    assert res["status"] == "error"
+    assert res["failed_step"] == "indexing"
+    assert session_file.exists()
+
+
+def test_session_end_lock_timeout_keeps_active_session(temp_project):
+    project_dir, engine = temp_project
+    start_res = engine.session_start(project=str(project_dir))
+    session_file = project_dir / ".oem" / "state" / "active_session.json"
+    assert session_file.exists()
+    assert start_res["session_id"]
+
+    reflect_result = {
+        "status": "success",
+        "failed_step": None,
+        "canonical_events": [],
+        "knowledge_events": [],
+        "events_written": 0,
+        "warnings": [],
+        "events_rejected": 0,
+        "explainability": {},
+        "reflection": None,
+        "message": "ok",
+        "suggestion": None,
+    }
+
+    with patch.object(engine.reflection, "reflect_session", return_value=reflect_result), \
+         patch.object(engine.state, "append_events", side_effect=LockTimeoutError("lock busy")):
+        res = engine.session_end(project=str(project_dir), conversation_text="", events=[], extraction_mode="auto")
+
+    assert session_file.exists()

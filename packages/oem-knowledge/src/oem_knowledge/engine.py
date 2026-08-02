@@ -1108,9 +1108,6 @@ class KnowledgeEngine:
 
                 if is_non_fatal:
                     # Close the session safely
-                    harness = self._resolve_harness(project)
-                    active_session_file = harness / "state" / "active_session.json"
-                    
                     try:
                         self.state.record_outcome(
                             "success_with_warnings" if status_val == "warn" else ("partial" if status_val == "partial" else "success"),
@@ -1120,38 +1117,7 @@ class KnowledgeEngine:
                     except Exception as e:
                         logger.warning("Outcome recording failed: %s", e)
 
-                    try:
-                        metrics_file = harness / "state" / "metrics.json"
-                        from oem_knowledge.tools.metrics import update_metrics_file
-                        update_metrics_file(metrics_file, {
-                            "sessions_completed": 1,
-                        })
-                    except Exception:
-                        pass
-
-                    session_state = None
-                    try:
-                        from oem_knowledge.runtime import SessionState
-                        session_state = SessionState.load(active_session_file)
-                        if session_state:
-                            for path_str in (session_state.context_path, session_state.temp_instructions):
-                                if path_str:
-                                    p = Path(path_str)
-                                    if p.exists():
-                                        try:
-                                            p.unlink()
-                                        except Exception:
-                                            pass
-                    except Exception:
-                        pass
-
-                    try:
-                        if active_session_file.exists():
-                            if session_state:
-                                session_state.status = "completed"
-                            active_session_file.unlink()
-                    except Exception:
-                        pass
+                    self._close_active_session(project)
 
                     # Update progress steps
                     if status_val == "warn":
@@ -1346,38 +1312,12 @@ project: {project or "default"}
                 with timer.phase("materialization", progress_callback):
                     mat_res = self.materialization.materialize_concepts(project)
                     if mat_res.get("status") == "error":
-                        harness = self._resolve_harness(project)
-                        active_session_file = harness / "state" / "active_session.json"
                         try:
                             self.state.record_outcome("partial", session_id=session_id, project=project)
                         except Exception:
                             pass
-                        try:
-                            metrics_file = harness / "state" / "metrics.json"
-                            from oem_knowledge.tools.metrics import update_metrics_file
-                            update_metrics_file(metrics_file, {"sessions_completed": 1})
-                        except Exception:
-                            pass
-                        session_state = None
-                        try:
-                            from oem_knowledge.runtime import SessionState
-                            session_state = SessionState.load(active_session_file)
-                            if session_state:
-                                for path_str in (session_state.context_path, session_state.temp_instructions):
-                                    if path_str:
-                                        p = Path(path_str)
-                                        if p.exists():
-                                            try:
-                                                p.unlink()
-                                            except Exception:
-                                                pass
-                        except Exception:
-                            pass
-                        try:
-                            if active_session_file.exists():
-                                active_session_file.unlink()
-                        except Exception:
-                            pass
+
+                        self._close_active_session(project)
 
                         progress.update_step("materialization", "failed")
                         progress.update_step("index", "skipped")
@@ -1632,7 +1572,43 @@ project: {project or "default"}
                 except Exception as e:
                     logger.warning("Dream phase failed (non-fatal): %s", e)
                     standard_res["dream"] = {"status": "failed", "error": str(e)}
+
+        # Close the active session on any terminal commit path
+        if ret_status in ("success", "warn", "partial", "empty"):
+            self._close_active_session(project)
         return standard_res
+
+    def _close_active_session(self, project) -> None:
+        """Remove the active session marker and temp files after a terminal
+        session_end commit. Outcomes are recorded by the caller; hard-error
+        and lock-timeout paths never reach this helper, preserving crash
+        recovery of failed sessions.
+        """
+        try:
+            harness = self._resolve_harness(project)
+        except Exception:
+            return
+        active_session_file = harness / "state" / "active_session.json"
+
+        try:
+            from oem_knowledge.runtime import SessionState
+            session_state = SessionState.load(active_session_file)
+            if session_state:
+                for path_str in (session_state.context_path, session_state.temp_instructions):
+                    if path_str:
+                        p = Path(path_str)
+                        if p.exists():
+                            try:
+                                p.unlink()
+                            except Exception:
+                                pass
+        except Exception:
+            pass
+
+        try:
+            self.session_files.unlink_active_session(project)
+        except Exception as e:
+            logger.warning("Failed to unlink active session file: %s", e)
 
     def session_commit(self, *args, **kwargs) -> dict:
         return self.session_end(*args, **kwargs)

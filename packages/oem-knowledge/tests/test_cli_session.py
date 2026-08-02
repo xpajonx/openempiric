@@ -57,3 +57,17 @@ def test_cli_session_end_no_index_and_index_budget_conflict_rejected(temp_projec
     assert excinfo.value.code != 0
     captured = capsys.readouterr()
     assert "Cannot specify both --no-index and --index-budget-seconds" in captured.out
+
+def test_session_end_command_unlinks_active_session(temp_project):
+    import json
+    engine = KnowledgeEngine(temp_project)
+    start_res = engine.session_start(project=temp_project)
+    session_file = temp_project / ".oem" / "state" / "active_session.json"
+    assert session_file.exists()
+    assert start_res["session_id"]
+
+    parser = _setup_parser()
+    args = parser.parse_args(["session-end", "--project", str(temp_project), "--chat", "decision: commit to the session-end cleanup plan", "--no-index"])
+    run_session_command(args)
+
+    assert not session_file.exists()

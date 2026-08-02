@@ -188,6 +188,7 @@ def test_session_end_closes_active_session_project_when_project_omitted(temp_pro
     res_end = json.loads(res_end_str.content[0].text)
     assert res_end["project_root"] == str(project_a.resolve())
     assert session_id not in SESSION_TO_PROJECT
+    assert not (project_a / ".oem" / "state" / "active_session.json").exists()
 
 
 def test_mcp_tools_never_default_to_oem_dev_repo(temp_projects, mock_mcp, clean_sessions):
