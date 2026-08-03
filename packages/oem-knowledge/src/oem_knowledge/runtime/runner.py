@@ -95,7 +95,10 @@ def _ensure_workspace_ready(eng: KnowledgeEngine, project: str | None, adapter, 
 
     # Optional - fail open
     try:
-        eng.warmup_if_needed()
+        warmup_res = eng.warmup_if_needed()
+        if warmup_res.get("status") != "success":
+            logging.warning("Embedding model not ready: %s", warmup_res.get("reason", "unknown"))
+            warnings.append("Vector search unavailable")
     except Exception as e:
         logging.warning("Embedding model warmup failed: %s", e)
         warnings.append("Vector search unavailable")

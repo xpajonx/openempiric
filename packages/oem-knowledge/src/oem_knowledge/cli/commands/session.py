@@ -110,11 +110,11 @@ def _run_session_command_impl(args):
         if getattr(args, "verbose", False):
             if no_index:
                 print(f"[session] search_index skipped after 0.00s budget")
-            elif res.get("status") == "partial" and res.get("failed_step") == "search_index":
+            elif res.get("status") == "partial" and res.get("failed_step") == "indexing":
                 print(f"[session] search_index skipped after {final_budget:.2f}s budget")
             timing_total = res.get("phase_timings", {}).get("total", commit_duration)
             print(f"[session] done in {timing_total:.2f}s")
-            if res.get("status") == "partial" and res.get("failed_step") == "search_index":
+            if res.get("status") == "partial" and res.get("failed_step") == "indexing":
                 print(f"[session] partial success: canonical memory saved; search index needs rebuild")
             sys.stdout.flush()
 
@@ -165,7 +165,7 @@ def _run_session_command_impl(args):
         if res.get("status") == "partial" and not getattr(args, "verbose", False):
             print("Session end: partial success")
             print("Canonical memory saved.")
-            if res.get("failed_step") == "search_index":
+            if res.get("failed_step") == "indexing":
                 print("Search indexing skipped after budget.")
                 proj_path = project or "."
                 print(f"Run `oem index --project {proj_path}`.")

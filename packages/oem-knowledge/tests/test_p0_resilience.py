@@ -329,7 +329,7 @@ def test_no_events_does_not_call_index_update(engine, tmp_path, monkeypatch):
     monkeypatch.delenv("OEM_MOCK_LLM", raising=False)
     
     mock_idx = MagicMock()
-    monkeypatch.setattr(engine.search, "index_all", mock_idx)
+    monkeypatch.setattr(engine, "index_isolated", mock_idx)
     
     res = engine.session_commit(
         project=str(tmp_path),

@@ -100,8 +100,8 @@ def test_search_fallback_logs_warning_on_primary_retrieval_failure(temp_project,
 def test_session_commit_reports_partial_if_index_update_partial(temp_project):
     engine = KnowledgeEngine(temp_project)
     
-    # Mock index_all to return partial status
-    with patch.object(engine.search, "index_all", return_value={"status": "partial", "error": "Mock partial error"}):
+    # Mock index_isolated to return partial status
+    with patch.object(engine, "index_isolated", return_value={"status": "partial", "error": "Mock partial error"}):
         res = engine.session_commit(
             str(temp_project),
             conversation_text="Hypothesis: AI safety is important",
@@ -113,8 +113,8 @@ def test_session_commit_reports_partial_if_index_update_partial(temp_project):
 def test_session_commit_reports_error_if_index_update_fails(temp_project):
     engine = KnowledgeEngine(temp_project)
     
-    # Mock index_all to return error status
-    with patch.object(engine.search, "index_all", return_value={"status": "error", "error": "Mock DB error"}):
+    # Mock index_isolated to return error status
+    with patch.object(engine, "index_isolated", return_value={"status": "error", "error": "Mock DB error"}):
         res = engine.session_commit(
             str(temp_project),
             conversation_text="Hypothesis: AI safety is important",

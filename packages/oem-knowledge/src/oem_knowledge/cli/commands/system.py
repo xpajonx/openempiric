@@ -1011,7 +1011,22 @@ def run_system_command(args):
             cmd_setup_grok(eng, project=project, repair=args.repair)
 
     elif args.command == "warmup":
-        res = eng.warmup()
+        try:
+            res = eng.warmup()
+        except (RuntimeError, ImportError) as exc:
+            print(
+                render_panel(
+                    "Model Warm-Up Failed",
+                    [
+                        "Status: error",
+                        f"Error: {exc}",
+                        "",
+                        "Please resolve the issue and try again.",
+                    ],
+                    status="error",
+                )
+            )
+            sys.exit(1)
         if res.get("status") == "error":
             print(
                 render_panel(

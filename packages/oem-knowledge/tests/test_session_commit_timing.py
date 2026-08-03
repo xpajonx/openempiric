@@ -51,14 +51,14 @@ def test_session_commit_no_index_skips_search_index(temp_project):
 def test_session_commit_index_budget_timeout_returns_partial(temp_project):
     engine = KnowledgeEngine(temp_project)
     
-    # We mock _index_all_impl to simulate budget exceed
+    # We mock index_isolated to simulate budget exceed
     def mock_index_all(*args, **kwargs):
         return {
             "status": "partial",
             "error": "Indexing budget exceeded"
         }
     
-    with patch.object(engine.search, "_index_all_impl", new=mock_index_all):
+    with patch.object(engine, "index_isolated", new=mock_index_all):
         res = engine.session_commit(
             str(temp_project),
             conversation_text="- Fix test timing budget",

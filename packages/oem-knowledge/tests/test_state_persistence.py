@@ -211,13 +211,35 @@ def test_get_events_concept_id_lookup(temp_project):
     assert len(results) == 1
     assert results[0]["event_id"] == "ev_cid_001"
 
-def test_resolve_auto_mode_hybrid_when_fastembed_available(temp_project):
+def test_resolve_auto_mode_hybrid_when_fastembed_available(temp_project, monkeypatch):
+    """Auto mode resolves to 'hybrid' only when fastembed is importable AND
+    embedding_cache_ready() is True; otherwise it resolves to 'bm25'."""
     engine = KnowledgeEngine(temp_project)
     fake_fastembed = MagicMock()
     fake_fastembed.TextEmbedding = MagicMock()
+
+    # (a) fastembed importable + embedding cache ready -> hybrid
     with patch.dict("sys.modules", {"fastembed": fake_fastembed}):
-        result = engine.search.resolve_retrieval_mode()
-        assert result == "hybrid"
+        with patch(
+            "oem_knowledge.engine.KnowledgeEngine.embedding_cache_ready",
+            return_value=True,
+        ):
+            result = engine.search.resolve_retrieval_mode()
+            assert result == "hybrid"
+
+    # (b) fastembed importable + embedding cache NOT ready -> bm25
+    with patch.dict("sys.modules", {"fastembed": fake_fastembed}):
+        with patch(
+            "oem_knowledge.engine.KnowledgeEngine.embedding_cache_ready",
+            return_value=False,
+        ):
+            result = engine.search.resolve_retrieval_mode()
+            assert result == "bm25"
+
+    # (c) fastembed NOT importable -> bm25 (None in sys.modules raises ImportError)
+    monkeypatch.setitem(sys.modules, "fastembed", None)
+    result = engine.search.resolve_retrieval_mode()
+    assert result == "bm25"
 
 def test_resolve_auto_mode_bm25_without_fastembed(temp_project):
     engine = KnowledgeEngine(temp_project)

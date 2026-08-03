@@ -121,9 +121,11 @@ class SearchService:
         if configured == "auto":
             try:
                 from fastembed import TextEmbedding  # noqa: F401
-                return "hybrid"
             except ImportError:
                 return "bm25"
+            if self.engine.embedding_cache_ready():
+                return "hybrid"
+            return "bm25"
         return configured
 
     def embed(self, texts: list[str]) -> list[list[float]]:
@@ -430,14 +432,20 @@ class SearchService:
 
         # 3. Embedding phase
         t_embed_start = time.time()
+        retrieval_mode = self.resolve_retrieval_mode()
+        stats["effective_retrieval_mode"] = retrieval_mode
+        stats["model_available"] = self.engine.embedding_cache_ready() or self.model is not None
         embeddings = []
         if chunks_to_upsert and store is not None:
             if budget_seconds is not None and (time.time() - start_index_time) >= budget_seconds:
                 stats["status"] = "partial"
                 stats["error"] = "Indexing budget exceeded"
                 return stats
-            retrieval_mode = self.resolve_retrieval_mode()
             if retrieval_mode == "hybrid":
+                if not stats["model_available"]:
+                    stats["status"] = "partial"
+                    stats["error"] = "Embedding model is not available in the local cache. Run `oem warmup`, then re-index."
+                    return stats
                 try:
                     texts = [c["text"] for c in chunks_to_upsert]
                     embeddings = self.embed(texts)

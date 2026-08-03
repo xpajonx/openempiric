@@ -2,6 +2,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
+from unittest.mock import patch
 import pytest
 from oem_knowledge.engine import KnowledgeEngine
 
@@ -156,10 +157,11 @@ This has keywords like deletableitem.""", encoding="utf-8")
 
 
 def test_retrieval_mode_resolves_to_bm25_by_default(temp_project):
-    """Verify that auto retrieval mode resolves to bm25 by default."""
+    """Verify that auto retrieval mode resolves to bm25 when the embedding cache is not ready."""
     engine, _ = temp_project
     assert engine.search.get_retrieval_mode() == "auto"
-    assert engine.search.resolve_retrieval_mode() == "bm25"
+    with patch("oem_knowledge.engine.KnowledgeEngine.embedding_cache_ready", return_value=False):
+        assert engine.search.resolve_retrieval_mode() == "bm25"
 
 
 def test_incremental_indexing_statistics(temp_project):

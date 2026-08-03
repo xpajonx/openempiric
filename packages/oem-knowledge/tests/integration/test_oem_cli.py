@@ -194,10 +194,25 @@ def test_oem_doctor_user_project(tmp_proj):
 
 
 def test_oem_warmup_failure(tmp_proj):
-    """Verify that 'oem warmup' fails with exit code 1 when fastembed is not installed."""
-    from unittest.mock import PropertyMock
-    with patch("oem_knowledge.engine.KnowledgeEngine.model", new_callable=PropertyMock) as mock_model:
-        mock_model.return_value = None
+    """Verify that 'oem warmup' exits with code 1 when the embedding model download fails."""
+    with patch(
+        "oem_knowledge.engine.KnowledgeEngine.warmup",
+        side_effect=RuntimeError(
+            "Embedding model download failed. Check network access and retry `oem warmup`."
+        ),
+    ):
+        with patch.object(sys, "argv", ["oem", "warmup", "--project", tmp_proj]):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+            assert exc_info.value.code == 1
+
+
+def test_oem_warmup_failure_import_error(tmp_proj):
+    """Verify that 'oem warmup' exits with code 1 when fastembed cannot be imported."""
+    with patch(
+        "oem_knowledge.engine.KnowledgeEngine.warmup",
+        side_effect=ImportError("No module named fastembed"),
+    ):
         with patch.object(sys, "argv", ["oem", "warmup", "--project", tmp_proj]):
             with pytest.raises(SystemExit) as exc_info:
                 main()

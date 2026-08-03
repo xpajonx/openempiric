@@ -162,3 +162,24 @@ Write for a future collaborator (or a future version of yourself) who needs to u
 - Describe **root causes**, not just symptoms.
 - Compare **alternatives**, not just the chosen path.
 - Measure **outcomes**, not just effort.
+
+---
+
+## Session finalization guarantees
+
+Session finalization (`session_end` / `oem session end`) is built around three guarantees: it never downloads an embedding model, it never hangs, and it never loses knowledge.
+
+- **No embedding-model downloads.** Finalization never downloads an embedding model. Only an explicit `oem warmup` does.
+- **Bounded indexing.** Finalization indexing runs spawn-isolated in a subprocess with a hard wall-clock budget (default 10 seconds). Exceeding the budget yields a `partial` result with error `"Indexing budget exceeded"`; run `oem index --project <dir>` to rebuild the derived search index.
+- **Events are persisted first.** Events and memory are always written before indexing begins, so a partial index never loses knowledge — it only leaves the derived search index stale until rebuilt.
+- **Broken cache fails fast.** A corrupt or unavailable embedding cache makes indexing fail fast as `partial` — it never hangs and never triggers a download. Run `oem warmup` to restore the cache.
+
+### Recovering a stale session
+
+If a previous session ended without cleanly unlinking its active session file:
+
+1. Back up `.oem/state/active_session.json`.
+2. Dry-run first: `uv run oem recover --abort --project <dir> --dry-run`.
+3. Then run `uv run oem recover --abort --project <dir>`.
+
+Never delete `events.jsonl` or `concept_registry.json`, and never delete the fastembed cache.

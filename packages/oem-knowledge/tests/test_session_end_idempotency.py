@@ -378,7 +378,7 @@ def test_session_end_partial_index_unlinks_active_session(temp_project):
         "failed_files": [],
     }
 
-    with patch.object(engine.search, "index_all", return_value=index_result):
+    with patch.object(engine, "index_isolated", return_value=index_result):
         res = engine.session_end(project=str(project_dir), conversation_text="", events=events, extraction_mode="auto")
 
     assert res["status"] == "partial"
@@ -420,7 +420,7 @@ def test_session_end_index_exception_unlinks_active_session(temp_project):
         {"type": "observation", "concept_candidates": ["beta"], "evidence": "e3", "summary": "s3", "event_id": "evt3"},
     ]
 
-    with patch.object(engine.search, "index_all", side_effect=RuntimeError("boom")):
+    with patch.object(engine, "index_isolated", side_effect=RuntimeError("boom")):
         res = engine.session_end(project=str(project_dir), conversation_text="", events=events, extraction_mode="auto")
 
     assert res["status"] == "partial"
@@ -464,7 +464,7 @@ def test_session_end_index_error_keeps_active_session(temp_project):
     ]
     index_result = {"status": "error", "error": "index failed"}
 
-    with patch.object(engine.search, "index_all", return_value=index_result):
+    with patch.object(engine, "index_isolated", return_value=index_result):
         res = engine.session_end(project=str(project_dir), conversation_text="", events=events, extraction_mode="auto")
 
     assert res["status"] == "error"

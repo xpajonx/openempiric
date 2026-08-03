@@ -6,6 +6,7 @@ import math
 import os
 import re
 import sys
+import threading
 import time
 import warnings
 from collections import Counter
@@ -30,6 +31,7 @@ def apply_oem_process_env_defaults() -> None:
 
 from oem_knowledge.fs import FileLock, SecureFileSystem
 from oem_knowledge.project_layout import ProjectLayout
+from oem_knowledge.services.embedding_worker import _worker_main
 from contextlib import contextmanager
 from typing import Callable
 
@@ -149,6 +151,8 @@ def find_harness_root(path: str | Path) -> Path | None:
 class KnowledgeEngine:
     def __init__(self, project_path: str | Path | None = None):
         self._model = None
+        self._model_lock = threading.RLock()
+        self._local_load_failed = False
         self.project_path = Path(project_path).resolve() if project_path else None
         self._db_dir: Path | None = None
 
@@ -419,26 +423,53 @@ class KnowledgeEngine:
 
     @property
     def model(self):
-        if self._model is None:
-            import sys
+        with self._model_lock:
+            if self._model is None and not self._local_load_failed:
+                self._load_local_model()
+            return self._model
+
+    def _load_local_model(self):
+        """Load the embedding model from the local cache only. Never downloads.
+        The failure is memoized so a broken cache cannot trigger repeated attempts."""
+        with self._model_lock:
+            if self._model is not None:
+                return self._model
+            if self._local_load_failed:
+                return None
             try:
                 from fastembed import TextEmbedding
-            except ImportError as e:
-                import logging
-                logging.warning(
-                    "[OEM] fastembed is not installed. Hybrid search is disabled. "
-                    "Install it with 'uv tool install \"git+https://github.com/xpajonx/openempiric.git#subdirectory=packages/oem-knowledge[semantic]\"'."
-                )
-                return None
-
+            except ImportError:
+                raise
             cache_path = str(Path.home() / ".cache" / "fastembed")
             try:
                 self._model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5", cache_dir=cache_path, local_files_only=True)
-            except Exception:
-                print("\n[OEM] Embedding model 'BAAI/bge-small-en-v1.5' not found in cache.", file=sys.stderr)
-                print("[OEM] Downloading model (~67 MB)...", file=sys.stderr)
+            except Exception as e:
+                import logging
+                logging.warning("[OEM] Embedding model 'BAAI/bge-small-en-v1.5' not available in local cache (%s). Run `oem warmup` to download it.", e)
+                self._local_load_failed = True
+                return None
+            self._local_load_failed = False
+            return self._model
+
+    def _download_model(self):
+        """Explicit download path used only by warmup(). This is the only place
+        in the package allowed to construct fastembed with local_files_only=False."""
+        with self._model_lock:
+            try:
+                from fastembed import TextEmbedding
+            except ImportError:
+                self._local_load_failed = True
+                return None
+            cache_path = str(Path.home() / ".cache" / "fastembed")
+            try:
                 self._model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5", cache_dir=cache_path, local_files_only=False)
-        return self._model
+            except Exception as e:
+                logging.warning("[OEM] Embedding model download failed: %s", e)
+                self._model = None
+                self._local_load_failed = True
+                raise
+            self._local_load_failed = False
+            return self._model
 
     def layout(self, project: str | None = None) -> ProjectLayout:
         """Return a ProjectLayout for the resolved .oem directory.
@@ -585,27 +616,44 @@ class KnowledgeEngine:
         return (harness / "state").is_dir()
 
     def warmup(self) -> dict:
-        import sys
-        print("[OEM] Warming up embedding model 'BAAI/bge-small-en-v1.5'...", file=sys.stderr)
-        model = self.model
-        if model is None:
-            print("[OEM] Warmup failed: fastembed is not installed.", file=sys.stderr)
-            return {
-                "status": "error",
-                "message": "fastembed is not installed. Install it with 'uv tool install \"git+https://github.com/xpajonx/openempiric.git#subdirectory=packages/oem-knowledge[semantic]\"'.",
-            }
-        print("[OEM] Embedding model ready (cached globally, one-time per machine).", file=sys.stderr)
-        return {"status": "success", "model": "BAAI/bge-small-en-v1.5"}
+        with self._model_lock:
+            if self._model is not None:
+                print("[OEM] Embedding model ready (cached globally, one-time per machine).", file=sys.stderr)
+                return {"status": "success", "model": "BAAI/bge-small-en-v1.5"}
+            print("[OEM] Warming up embedding model 'BAAI/bge-small-en-v1.5'...", file=sys.stderr)
+            try:
+                from fastembed import TextEmbedding  # noqa: F401
+            except ImportError:
+                raise
+            try:
+                model = self._download_model()
+            except Exception as e:
+                raise RuntimeError("Embedding model download failed. Check network access and retry `oem warmup`.") from e
+            if model is None:
+                raise RuntimeError("Embedding model download failed. Check network access and retry `oem warmup`.")
+            print("[OEM] Embedding model ready (cached globally, one-time per machine).", file=sys.stderr)
+            return {"status": "success", "model": "BAAI/bge-small-en-v1.5"}
 
     def warmup_if_needed(self) -> dict:
-        """Warm up embedding model if not already cached/loaded."""
-        try:
-            from fastembed import TextEmbedding
-            cache_path = str(Path.home() / ".cache" / "fastembed")
-            TextEmbedding(model_name="BAAI/bge-small-en-v1.5", cache_dir=cache_path, local_files_only=True)
-            return {"status": "success", "cached": True}
-        except Exception:
-            return self.warmup()
+        """Warm up embedding model if already cached locally. Never downloads."""
+        with self._model_lock:
+            try:
+                from fastembed import TextEmbedding  # noqa: F401
+            except ImportError:
+                return {"status": "skipped", "reason": "fastembed_unavailable"}
+            if self._model is None and not self._local_load_failed:
+                self._load_local_model()
+            if self._model is not None:
+                return {"status": "success"}
+            cache_dir = Path.home() / ".cache" / "fastembed"
+            known_paths = (
+                cache_dir / "models--qdrant--bge-small-en-v1.5-onnx-q",
+                cache_dir / "bge-small-en-v1.5",
+                cache_dir / "fast-bge-small-en-v1.5",
+            )
+            if not any(p.exists() for p in known_paths):
+                return {"status": "skipped", "reason": "local_cache_missing"}
+            return {"status": "skipped", "reason": "local_cache_invalid"}
 
 
     def restore_session_state(self, project: str | None = None) -> dict:
@@ -838,6 +886,39 @@ class KnowledgeEngine:
             "warnings": warnings,
             "suggestion": "Use knowledge_read when you need orientation, then knowledge_search for specific memory."
         }
+
+    def index_isolated(self, project_dir: str | None = None, budget_s: float = 10.0) -> dict:
+        """Run semantic indexing in a spawn-isolated subprocess with a hard wall-clock bound.
+
+        The embedding phase is a single non-interruptible call, so the subprocess
+        terminate() is the only hard guarantee; the worker's own budget_seconds
+        checks provide graceful early partials.
+        """
+        import multiprocessing
+
+        ctx = multiprocessing.get_context("spawn")
+        queue = ctx.Queue()
+        target_dir = str(project_dir or self.project_path or "")
+        proc = ctx.Process(target=_worker_main, args=(target_dir, float(budget_s), queue))
+        proc.start()
+        proc.join(float(budget_s))
+        if proc.is_alive():
+            proc.terminate()
+            proc.join(5.0)
+            return {
+                "status": "partial",
+                "error": "Indexing budget exceeded",
+                "scanned": 0, "new": 0, "updated": 0, "unchanged": 0, "failed": 0,
+                "new_chunks": 0, "updated_chunks": 0, "unchanged_chunks": 0,
+                "failed_chunks": 0, "failed_files": 0, "deletes": 0, "timings": {},
+            }
+        try:
+            result = queue.get(timeout=5.0)
+        except Exception:
+            result = {"status": "error", "error": "isolated index produced no result"}
+        if result.get("status") == "error":
+            result["status"] = "partial"
+        return result
 
     def session_end(
         self,
@@ -1398,21 +1479,23 @@ project: {project or "default"}
                 )
             else:
                 progress.update_step("index", "running")
-                if not update_index or index_budget_seconds == 0:
+                if not update_index:
                     progress.update_step("index", "success")
+                    warnings.append("Search indexing skipped (update_index disabled); run `oem index --project ...` to build the derived search index.")
+                elif index_budget_seconds == 0:
+                    index_failed_reason = "Indexing budget skipped"
+                    failed_step = "indexing"
+                    status = "partial"
                     warnings.append("Search indexing skipped after budget; run `oem index --project ...` to rebuild derived search index.")
+                    progress.update_step("index", "failed")
                 else:
                     with timer.phase("search_index", progress_callback):
                         try:
-                            def index_progress(current, total):
-                                mode_str = "embeddings" if self.search.resolve_retrieval_mode() == "hybrid" else "files"
-                                progress.update_step("index", "running", detail=f"{current} / {total} {mode_str}")
-                            
-                            idx_res = self.search.index_all(
-                                progress_callback=index_progress,
-                                budget_seconds=index_budget_seconds
+                            idx_res = self.index_isolated(
+                                project_dir=str(self.project_path or ""),
+                                budget_s=float(index_budget_seconds or 10.0),
                             )
-                            
+
                             if idx_res.get("status") == "error":
                                 progress.update_step("index", "failed")
                                 timer.timings["total"] = time.perf_counter() - start_time
@@ -1915,31 +1998,91 @@ project: {project or "default"}
         try:
             from fastembed.common.utils import define_cache_dir
             from pathlib import Path
-            
+
             # Check both the custom cache dir we use and the default fastembed one
             cache_dirs = [
                 Path.home() / ".cache" / "fastembed",
                 Path(define_cache_dir(None))
             ]
-            
+
             for cache_dir in cache_dirs:
-                # Check HuggingFace model cache directory (standard/preferred)
-                hf_dir = cache_dir / "models--qdrant--bge-small-en-v1.5-onnx-q"
-                if hf_dir.is_dir() and any(hf_dir.iterdir()):
+                if self._validate_fastembed_cache_dir(cache_dir):
                     return True
-                    
-                # Check GCS fallback directories
-                gcs_dir = cache_dir / "bge-small-en-v1.5"
-                if gcs_dir.is_dir() and any(gcs_dir.iterdir()):
-                    return True
-                    
-                fast_gcs_dir = cache_dir / "fast-bge-small-en-v1.5"
-                if fast_gcs_dir.is_dir() and any(fast_gcs_dir.iterdir()):
-                    return True
-                    
+
             return False
         except Exception:
             return False
+
+    def _validate_fastembed_cache_dir(self, cache_dir: Path) -> bool:
+        """Strictly validate a fastembed cache directory: broken or partial
+        caches must be detected and rejected."""
+        # HuggingFace layout
+        hf_dir = cache_dir / "models--qdrant--bge-small-en-v1.5-onnx-q"
+        if hf_dir.is_dir():
+            refs_main = hf_dir / "refs" / "main"
+            if not refs_main.is_file():
+                return False
+            try:
+                snapshot_id = refs_main.read_text().strip().splitlines()
+            except OSError:
+                return False
+            snapshot_id = next((line.strip() for line in snapshot_id if line.strip()), "")
+            if not snapshot_id:
+                return False
+            snap_dir = hf_dir / "snapshots" / snapshot_id
+            if not snap_dir.is_dir():
+                return False
+            meta_path = snap_dir / "files_metadata.json"
+            if not meta_path.is_file():
+                return False
+            try:
+                with open(meta_path, "r", encoding="utf-8") as f:
+                    meta = json.load(f)
+            except (OSError, ValueError):
+                return False
+            if isinstance(meta, list):
+                if not meta or not all(isinstance(e, dict) and e.get("path") for e in meta):
+                    return False
+                meta = {e.get("path"): e for e in meta}
+            if not isinstance(meta, dict):
+                return False
+            if len(meta) == 0:
+                return False
+            has_onnx = False
+            has_tokenizer = False
+            for path, entry in meta.items():
+                if isinstance(entry, dict):
+                    blob_id = entry.get("blob")
+                elif isinstance(entry, str):
+                    blob_id = entry
+                else:
+                    return False
+                if not blob_id:
+                    return False
+                blob_candidates = [
+                    hf_dir / "blobs" / blob_id,
+                    hf_dir / "blobs" / blob_id[:2] / blob_id[2:],
+                ]
+                if not any(p.is_file() for p in blob_candidates):
+                    return False
+                if path.endswith("model_optimized.onnx"):
+                    has_onnx = True
+                if path.endswith("tokenizer.json"):
+                    has_tokenizer = True
+            if not (has_onnx and has_tokenizer):
+                return False
+            return True
+
+        # Legacy GCS layouts
+        for legacy_dir_name in ("bge-small-en-v1.5", "fast-bge-small-en-v1.5"):
+            gcs_dir = cache_dir / legacy_dir_name
+            if gcs_dir.is_dir():
+                onnx = gcs_dir / "model.onnx"
+                tokenizer = gcs_dir / "tokenizer.json"
+                if onnx.is_file() and tokenizer.is_file() and onnx.stat().st_size > 0 and tokenizer.stat().st_size > 0:
+                    return True
+
+        return False
 
     def config_embedding_set_model(self, model_name: str, dry_run: bool = False) -> dict:
         """Switch the embedding model. Requires re-indexing.
