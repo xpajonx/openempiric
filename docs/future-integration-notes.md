@@ -33,3 +33,12 @@ The runtime supervisor runs during active agent execution, acting as an overseer
   - Compiles the final dynamic instruction and knowledge context payload before the agent runs.
   - Monitors the agent process and handles recovery (via `oem recover`) if the agent crashes or terminates unexpectedly.
   - Invokes reflection and commits new learnings upon successful termination.
+
+## OpenCode remember skill and dream subagent (Wave 1)
+
+- Packaged assets: `src/oem_knowledge/skills/remember/SKILL.md` and `src/oem_knowledge/agent/dream.md` ship in the wheel (package-data) and are installed by `oem setup opencode`.
+- Install locations (XDG-resolved): `skills/remember/SKILL.md` and `agent/dream.md` under the OpenCode config dir.
+- Ownership policy: a file is OEM-managed only when `openempiric-manifest.json` records its path AND the recorded sha256 matches the file. Verified-managed files upgrade on any setup run. Marker-only or tampered files are preserved on normal setup and even under `--repair`; `--force-assets` replaces user-owned files (regular files get a `.oem.bak` backup; symlinks are replaced without backup).
+- The dream subagent is OpenCode-only and hidden; it is activated by delegation (`plan` -> dream_start, `orchestrator` -> dream_end) and routes through the remember skill. It is never registered as a visible agent and no `agent` key is written to opencode.jsonc.
+- Onboarding: after running `oem setup opencode`, restart the OpenCode client so the skill and agent directories are picked up. The remember skill then activates on memory language; the dream agent is available for explicit delegation.
+- The tracked `instructions/memory-start.md` and `instructions/memory-start-agy.md` are canonical copies of `OEM_MEMORY_INSTRUCTIONS` and must be kept in sync with `src/oem_knowledge/runtime/instructions.py`.

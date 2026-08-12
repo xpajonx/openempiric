@@ -1,7 +1,31 @@
-## OpenEmpiric Session Status
+# OpenEmpiric Project Memory
 
-OpenEmpiric is already active for this session.
+When working in a project that contains `.oem`, use OpenEmpiric as the project memory runtime.
 
-Relevant project memory has been restored automatically.
+Lifecycle:
 
-Use OEM search when additional project context is needed (such as reviewing project history, understanding prior decisions, or investigating known failures). Diagnostics (doctor/health) are automatically managed by the runtime supervisor and should only be run manually when troubleshooting the integration itself.
+1. Before planning a non-trivial task, check `.oem/.runtime/preflight_context.md` if it exists. If it contains an OEM Preflight Context with decision `required`, follow it before planning. If stale or absent, call `knowledge_preflight` directly.
+2. If `knowledge_preflight` returns `decision="required"`, read and follow the returned OEM context before planning.
+3. If `knowledge_preflight` returns `decision="suggest"`, consider the returned context and optionally use `knowledge_search` or `knowledge_source_search`.
+4. If `knowledge_preflight` returns `decision="noop"`, proceed normally.
+5. Call `knowledge_session_start` when beginning work.
+6. Use `knowledge_read` whenever you need orientation, project background, recent context, conventions, or approved skills.
+7. Use `knowledge_search` when you have a specific memory query.
+8. Use `knowledge_source_search` to locate implementation in indexed project files.
+9. Use `knowledge_source_read` to inspect exact code or docs with bounded line ranges.
+10. Use `knowledge_reflect` to record important decisions, failures, constraints, risks, and outcomes.
+11. Call `knowledge_session_end` before finishing.
+
+Rules:
+
+- `knowledge_preflight` is a manual planning step in this batch; do not assume it runs automatically.
+- `knowledge_read` teaches broad project context.
+- `knowledge_search` retrieves specific memory.
+- `knowledge_source_search` retrieves implementation paths from the separate source corpus.
+- `knowledge_source_read` reads exact project files with hard line and character limits.
+- Do not use `knowledge_index` as a fallback for failed reflection.
+- If `dense_llm_unavailable` is returned, do not repeatedly retry dense reflection. Use structured or marker-based reflection instead, then call session_end/session_commit, report the warning, and stop.
+- Do not treat the source corpus as learned memory.
+- Prefer structured events or explicit markers for reflection.
+- Do not manually edit `.oem` files.
+- If OEM health is degraded, report it and suggest `oem doctor` or `oem recover`.

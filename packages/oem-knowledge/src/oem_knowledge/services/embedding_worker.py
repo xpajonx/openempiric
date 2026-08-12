@@ -18,6 +18,12 @@ def run_isolated_index(project_dir: str, budget_s: float = 10.0) -> dict:
         from oem_knowledge.engine import KnowledgeEngine
         with KnowledgeEngine(project_dir) as eng:
             result = eng.search.index_all(progress_callback=None, budget_seconds=budget_s)
+            try:
+                user_res = eng.search.index_user_events()
+            except Exception as exc:
+                user_res = {"status": "partial", "reason": str(exc)}
+            if isinstance(result, dict):
+                result["user_events"] = user_res
         if not isinstance(result, dict):
             result = {"status": "error", "error": f"unexpected result type: {type(result).__name__}"}
         return result

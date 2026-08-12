@@ -11,6 +11,20 @@ from pathlib import Path
 from typing import Any
 
 
+def _sha256_bytes(data: bytes) -> str:
+    import hashlib
+    return hashlib.sha256(data).hexdigest()
+
+
+def prefix_checksum(file_path: Path, offset: int) -> str | None:
+    """SHA-256 of the first `offset` bytes of a file, or None when unreadable."""
+    try:
+        with open(file_path, "rb") as f:
+            return _sha256_bytes(f.read(offset))
+    except OSError:
+        return None
+
+
 class CommitRollbackError(Exception):
     """Raised when a pipeline phase fails, triggering rollback."""
     def __init__(self, phase: str, original_error: Exception):
@@ -76,13 +90,21 @@ class CommitIntentLog:
     
     def write_intent(self, phase: str, **extra: Any) -> None:
         self.intent_path.parent.mkdir(parents=True, exist_ok=True)
+        existing = self.read_intent() or {}
         intent = {
+            "intent_id": existing.get("intent_id"),
             "phase": phase,
             "timestamp": time.time(),
             **extra,
         }
-        with open(self.intent_path, "w") as f:
+        if not intent["intent_id"]:
+            import uuid
+            intent["intent_id"] = uuid.uuid4().hex[:12]
+        import uuid
+        tmp_path = self.intent_path.with_name(f"intent.{uuid.uuid4().hex}.tmp")
+        with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(intent, f)
+        os.replace(tmp_path, self.intent_path)
     
     def read_intent(self) -> dict | None:
         if not self.intent_path.exists():
@@ -96,7 +118,19 @@ class CommitIntentLog:
     def clear_intent(self) -> None:
         if self.intent_path.exists():
             self.intent_path.unlink()
-    
+
+    def quarantine(self, reason: str) -> Path | None:
+        """Rename the intent file to a quarantine name; returns the new path."""
+        if not self.intent_path.exists():
+            return None
+        ts = time.strftime("%Y%m%d-%H%M%S")
+        quarantine_path = self.intent_path.with_name(f"intent.quarantine-{ts}.json")
+        try:
+            os.replace(self.intent_path, quarantine_path)
+            return quarantine_path
+        except OSError:
+            return None
+
     def has_uncompleted_intent(self) -> bool:
         intent = self.read_intent()
         if intent is None:
@@ -144,9 +178,10 @@ class CommitPipeline:
         """Record byte offset before appending to events.jsonl."""
         self.staging.record_byte_offset("append_events", events_path)
     
-    def rollback_events(self, events_path: Path) -> None:
+    def rollback_events(self, events_path: Path, offset: int | None = None) -> None:
         """Truncate events.jsonl to pre-append byte offset on failure."""
-        offset = self.staging.get_byte_offset("append_events")
+        if offset is None:
+            offset = self.staging.get_byte_offset("append_events")
         if offset is not None and events_path.exists():
             with open(events_path, "r+b") as f:
                 f.truncate(offset)
@@ -157,29 +192,88 @@ class CommitPipeline:
         self.intent_log.clear_intent()
     
     def recover_from_crash(self, events_path: Path | None = None) -> dict:
-        """Check for uncompleted intent and attempt recovery.
-        
-        Returns:
-            dict with recovery info: {'recovered': bool, 'last_phase': str, 'action': str}
+        """Check for an uncompleted intent and attempt bounded recovery.
+
+        Rules:
+        - No intent file -> noop.
+        - Malformed intent file -> quarantined (malformed_intent).
+        - phase 'complete' -> cleared (cleared_stale).
+        - phase 'append_events': compare events file size against the recorded
+          byte offset plus expected_bytes. Size == offset -> no_partial_write.
+          Size == offset + expected_bytes -> events_committed (keep events).
+          Any other size: verify the prefix checksum; match -> roll back by
+          truncation; mismatch -> quarantine events + intent.
+        - phase 'failed' -> quarantined (failed_intent).
+        - other phases -> cleared (cleared_intent_will_retry).
+
+        Returns {"recovered": bool, "action": str, "last_phase": str, "quarantine_path": str | None, "warning": str | None}.
         """
         intent = self.intent_log.read_intent()
         if intent is None:
-            return {"recovered": False, "action": "no_intent"}
-        
+            if self.intent_log.intent_path.exists():
+                qpath = self.intent_log.quarantine("malformed_intent")
+                return {
+                    "recovered": False, "action": "quarantined_malformed_intent",
+                    "last_phase": "unknown", "quarantine_path": str(qpath) if qpath else None,
+                    "warning": "Malformed commit intent quarantined.",
+                }
+            return {"recovered": False, "action": "no_intent", "last_phase": "", "quarantine_path": None, "warning": None}
+
         phase = intent.get("phase", "unknown")
         if phase == "complete":
             self.intent_log.clear_intent()
-            return {"recovered": True, "last_phase": "complete", "action": "cleared_stale"}
-        
-        # If crashed during append_events, roll back to recorded offset
+            return {"recovered": True, "action": "cleared_stale", "last_phase": "complete", "quarantine_path": None, "warning": None}
+
         if phase == "append_events" and events_path is not None:
-            self.rollback_events(events_path)
+            offset = intent.get("byte_offset")
+            expected = intent.get("expected_bytes")
+            if offset is None:
+                offset = self.staging.get_byte_offset("append_events")
+            try:
+                actual_size = events_path.stat().st_size if events_path.exists() else 0
+            except OSError:
+                actual_size = 0
+            if offset is not None and actual_size == offset and expected is not None and expected == 0:
+                self.intent_log.clear_intent()
+                return {"recovered": True, "action": "no_partial_write", "last_phase": "append_events", "quarantine_path": None, "warning": None}
+            if offset is not None and expected is not None and actual_size == offset + expected:
+                recorded = intent.get("prefix_checksum")
+                actual = prefix_checksum(events_path, offset) if events_path.exists() else None
+                if recorded is None or actual == recorded:
+                    self.intent_log.clear_intent()
+                    return {"recovered": True, "action": "events_committed", "last_phase": "append_events", "quarantine_path": None, "warning": None}
+                qpath = self.intent_log.quarantine("checksum_mismatch")
+                return {
+                    "recovered": False, "action": "quarantined_checksum_mismatch",
+                    "last_phase": "append_events", "quarantine_path": str(qpath) if qpath else None,
+                    "warning": "Append prefix checksum mismatch; events and intent quarantined for manual review.",
+                }
+            if offset is not None:
+                recorded = intent.get("prefix_checksum")
+                actual = prefix_checksum(events_path, offset) if events_path.exists() else None
+                if recorded is None or actual == recorded:
+                    self.rollback_events(events_path, offset)
+                    self.intent_log.clear_intent()
+                    return {"recovered": True, "action": "rolled_back_events", "last_phase": "append_events", "quarantine_path": None, "warning": None}
+                qpath = self.intent_log.quarantine("checksum_mismatch")
+                return {
+                    "recovered": False, "action": "quarantined_checksum_mismatch",
+                    "last_phase": "append_events", "quarantine_path": str(qpath) if qpath else None,
+                    "warning": "Append prefix checksum mismatch; events and intent quarantined for manual review.",
+                }
             self.intent_log.clear_intent()
-            return {"recovered": True, "last_phase": "append_events", "action": "rolled_back_events"}
-        
-        # For other phases, clear intent and let next session restart
+            return {"recovered": True, "action": "cleared_intent_will_retry", "last_phase": phase, "quarantine_path": None, "warning": None}
+
+        if phase == "failed":
+            qpath = self.intent_log.quarantine("failed_intent")
+            return {
+                "recovered": False, "action": "quarantined_failed_intent",
+                "last_phase": intent.get("last_phase", "unknown"), "quarantine_path": str(qpath) if qpath else None,
+                "warning": "Failed commit intent quarantined.",
+            }
+
         self.intent_log.clear_intent()
-        return {"recovered": False, "last_phase": phase, "action": "cleared_intent_will_retry"}
+        return {"recovered": False, "action": "cleared_intent_will_retry", "last_phase": phase, "quarantine_path": None, "warning": None}
     
     def get_phase_timings(self) -> dict[str, float]:
         return dict(self.timings)

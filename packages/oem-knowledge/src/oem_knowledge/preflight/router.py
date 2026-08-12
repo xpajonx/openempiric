@@ -616,7 +616,27 @@ def _extract_memory_title(document: str, metadata: dict[str, Any], fallback: str
     return fallback
 
 
-def _load_memory_matches(task: str, layout: ProjectLayout, warnings: list[str]) -> list[MemoryMetadata]:
+def _load_memory_matches(task: str, layout: ProjectLayout, warnings: list[str], retriever=None) -> list[MemoryMetadata]:
+    if retriever is not None:
+        try:
+            results = retriever(task, MEMORY_ROW_LIMIT) or []
+        except Exception as exc:
+            warnings.append(f"Memory retrieval failed: {exc}")
+            return []
+        items = []
+        for r in results:
+            meta = r.get("metadata") or {}
+            document = r.get("document", "") or ""
+            title = _extract_memory_title(document, meta, r.get("id", ""))
+            snippet = document.split("\n\n", 1)[-1][:PARAGRAPH_CHAR_LIMIT].strip() if document else None
+            source_path = str(meta.get("source_path") or meta.get("source") or "").strip() or None
+            items.append(MemoryMetadata(
+                id=r.get("id"),
+                title=title,
+                source_path=source_path,
+                snippet=snippet,
+            ))
+        return items
     db_path = layout.vector_db_path / "vectors.db"
     if not db_path.exists():
         warnings.append(f"Memory index unavailable at {db_path}.")
@@ -755,6 +775,7 @@ def run_preflight(
     include_candidates: bool = False,
     write_audit: bool = True,
     budget: ContextBudget | None = None,
+    retriever=None,
 ) -> PreflightResult:
     budget = budget or ContextBudget()
     warnings: list[str] = []
@@ -784,7 +805,7 @@ def run_preflight(
     try:
         skills = _load_skills(layout, include_candidates, warnings)
         concepts = _load_concepts(layout, warnings)
-        memory_items = _load_memory_matches(task, layout, warnings)
+        memory_items = _load_memory_matches(task, layout, warnings, retriever=retriever)
 
         matched_skills = []
         for skill in skills:

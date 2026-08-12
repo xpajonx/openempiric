@@ -135,3 +135,37 @@ class TestCommitPipeline:
         pipeline = CommitPipeline(tmp_path)
         with pytest.raises(ValueError, match="Unknown phase"):
             pipeline.start_phase("nonexistent_phase")
+
+
+class TestExtendedIntent:
+    def test_intent_has_intent_id_and_is_stable_across_phases(self, tmp_path):
+        from oem_knowledge.runtime.commit_pipeline import CommitIntentLog
+        log = CommitIntentLog(tmp_path / ".staging" / "intent.json")
+        log.write_intent("reflect")
+        first = log.read_intent()
+        log.write_intent("append_events", session_id="sess-1")
+        second = log.read_intent()
+        assert first["intent_id"]
+        assert second["intent_id"] == first["intent_id"]
+        assert second["session_id"] == "sess-1"
+
+    def test_intent_write_is_atomic(self, tmp_path, monkeypatch):
+        from oem_knowledge.runtime.commit_pipeline import CommitIntentLog
+        import os
+        calls = []
+        real_replace = os.replace
+        def fake_replace(src, dst):
+            calls.append((src, dst))
+            return real_replace(src, dst)
+        monkeypatch.setattr(os, "replace", fake_replace)
+        log = CommitIntentLog(tmp_path / ".staging" / "intent.json")
+        log.write_intent("reflect")
+        assert calls, "write_intent must write atomically via os.replace"
+        assert not list((tmp_path / ".staging").glob("*.tmp"))
+
+    def test_no_temp_files_left_after_write(self, tmp_path):
+        from oem_knowledge.runtime.commit_pipeline import CommitIntentLog
+        log = CommitIntentLog(tmp_path / ".staging" / "intent.json")
+        log.write_intent("reflect")
+        log.write_intent("complete")
+        assert not list((tmp_path / ".staging").glob("*.tmp"))

@@ -19,11 +19,14 @@ from oem_knowledge.memory_ranking import (
     extract_query_targets,
     build_ranking_debug_report,
 )
+from oem_knowledge.retrieval import normalize_record_fields, parse_iso_window, record_in_window
 
 if TYPE_CHECKING:
     from oem_knowledge.engine import KnowledgeEngine
 
 logger = logging.getLogger(__name__)
+
+USER_EVENTS_SOURCE = "user_events.jsonl"
 
 
 class SearchService:
@@ -236,10 +239,10 @@ class SearchService:
             return "high"
         return "medium"
 
-    def index_all(self, force: bool = False, progress_callback=None, budget_seconds: float | None = None) -> dict:
+    def index_all(self, force: bool = False, progress_callback=None, budget_seconds: float | None = None, quiet: bool = False) -> dict:
         from oem_knowledge.fs import LockTimeoutError
         try:
-            return self._index_all_impl(force, progress_callback, budget_seconds)
+            return self._index_all_impl(force, progress_callback, budget_seconds, quiet)
         except LockTimeoutError as e:
             logger.error("Lock acquisition failure during indexing: %s", e)
             return {
@@ -248,7 +251,7 @@ class SearchService:
                 "failed_files": [],
             }
 
-    def _index_all_impl(self, force: bool = False, progress_callback=None, budget_seconds: float | None = None) -> dict:
+    def _index_all_impl(self, force: bool = False, progress_callback=None, budget_seconds: float | None = None, quiet: bool = False) -> dict:
         harness = self.engine._resolve_harness()
         wiki_dir = harness / "wiki"
         
@@ -275,7 +278,8 @@ class SearchService:
             first_key = next(iter(registry.keys()))
             if os.path.isabs(first_key):
                 is_migration = True
-                print("\n[OEM] Migrating search index registry to relative paths (one-time full re-index)...")
+                if not quiet:
+                    print("\n[OEM] Migrating search index registry to relative paths (one-time full re-index)...")
                 force = True
 
         stats = {
@@ -411,6 +415,7 @@ class SearchService:
                             "linked_concepts": ",".join(c["linked_concepts"]),
                             "created_at": str(mtime),
                             "updated_at": str(mtime),
+                            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(mtime)),
                             "importance": imp,
                             "memory_type": doc_memory_type,
                         }
@@ -521,18 +526,19 @@ class SearchService:
 
         # Output the print instrumentation
         total_chunks = stats["new_chunks"] + stats["updated_chunks"] + stats["unchanged_chunks"]
-        print(f"\nIndex Profile:")
-        print(f"  Files scanned:       {stats['scanned']}")
-        print(f"  Chunks total:        {total_chunks}")
-        print(f"  New chunks:          {stats['new_chunks']}")
-        print(f"  Updated chunks:      {stats['updated_chunks']}")
-        print(f"  Unchanged chunks:    {stats['unchanged_chunks']}")
-        print(f"  Deletes:             {stats['deletes']}")
-        print(f"  Count phase:         {stats['count_time_s']:.2f}s")
-        print(f"  Chunk phase:         {stats['chunk_time_s']:.2f}s")
-        print(f"  Embedding phase:     {stats['embed_time_s']:.2f}s")
-        print(f"  SQLite write phase:  {stats['write_time_s']:.2f}s")
-        print(f"  Total:               {total_time:.2f}s")
+        if not quiet:
+            print(f"\nIndex Profile:")
+            print(f"  Files scanned:       {stats['scanned']}")
+            print(f"  Chunks total:        {total_chunks}")
+            print(f"  New chunks:          {stats['new_chunks']}")
+            print(f"  Updated chunks:      {stats['updated_chunks']}")
+            print(f"  Unchanged chunks:    {stats['unchanged_chunks']}")
+            print(f"  Deletes:             {stats['deletes']}")
+            print(f"  Count phase:         {stats['count_time_s']:.2f}s")
+            print(f"  Chunk phase:         {stats['chunk_time_s']:.2f}s")
+            print(f"  Embedding phase:     {stats['embed_time_s']:.2f}s")
+            print(f"  SQLite write phase:  {stats['write_time_s']:.2f}s")
+            print(f"  Total:               {total_time:.2f}s")
 
         if write_error:
             stats["status"] = "error"
@@ -571,6 +577,9 @@ class SearchService:
                 "event_type": event.get("event_type", event.get("type", "observation")),
                 "importance": "medium",
                 "created_at": str(event.get("timestamp", event.get("created_at", time.time()))),
+                "scope": "project",
+                "memory_type": event.get("event_type", event.get("type", "observation")),
+                "timestamp": str(event.get("timestamp", event.get("created_at", time.time()))),
             }
             chunks_to_upsert.append((chunk_id, document, meta))
         if chunks_to_upsert:
@@ -594,17 +603,104 @@ class SearchService:
             total += count
         return {"per_concept": results, "total": total}
 
-    def _collect_raw_candidates(self, query: str, hybrid: bool = True) -> list[dict]:
+    def index_user_events(self, project: str | None = None, budget_seconds: float | None = None) -> dict:
+        """Index identity-scoped user events from the global user store.
+
+        Idempotent by event_id (chunk id `user#<event_id>`). Stale user
+        chunks are removed first (source-level sweep). Command-log-like,
+        malformed, or missing-id records are rejected. Budget-bounded and
+        exception-safe: never raises.
+        """
+        from oem_knowledge.services.state import _is_command_log_event
+        start = time.time()
+        stats = {"status": "success", "indexed": 0, "rejected": 0, "reason": None}
+        # The user events path is identity-independent; existence is the gate
+        # (writes already required a resolved identity). Avoids a git subprocess
+        # probe on every session/index path.
+        user_path = Path.home() / ".config" / "openempiric" / "user_events.jsonl"
+        if user_path is None or not user_path.exists():
+            stats["reason"] = "no_user_events"
+            return stats
+        events = []
+        rejected = 0
+        with open(user_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    ev = json.loads(line)
+                except (json.JSONDecodeError, TypeError):
+                    rejected += 1
+                    continue
+                if not isinstance(ev, dict):
+                    rejected += 1
+                    continue
+                ev_id = ev.get("event_id") or ev.get("id")
+                if not ev_id:
+                    rejected += 1
+                    continue
+                summary = str(ev.get("summary") or ev.get("evidence") or "")
+                if _is_command_log_event(summary):
+                    rejected += 1
+                    continue
+                memory_type = ev.get("event_type") or ev.get("type") or "observation"
+                timestamp = str(ev.get("timestamp") or "")
+                events.append((
+                    f"user#{ev_id}",
+                    f"Type: {memory_type}\n{summary}",
+                    {
+                        "source": USER_EVENTS_SOURCE,
+                        "scope": "user",
+                        "memory_type": memory_type,
+                        "timestamp": timestamp,
+                        "created_at": timestamp,
+                        "project": str(ev.get("project", "") or ""),
+                        "session_id": str(ev.get("session_id", "") or ""),
+                        "provenance": "user_events",
+                    },
+                ))
+        if budget_seconds is not None and (time.time() - start) >= budget_seconds:
+            stats["status"] = "partial"
+            stats["reason"] = "Indexing budget exceeded"
+            stats["rejected"] = rejected
+            return stats
+        try:
+            store = self.vector_store
+            store.delete_by_source(USER_EVENTS_SOURCE)
+        except Exception as e:
+            stats["status"] = "partial"
+            stats["reason"] = f"user chunk cleanup failed: {e}"
+            return stats
+        if not events:
+            stats["rejected"] = rejected
+            return stats
+        try:
+            if self.resolve_retrieval_mode() == "hybrid":
+                embeddings = self.embed([e[1] for e in events])
+            else:
+                embeddings = [None] * len(events)
+            store.upsert_batch([(cid, doc, meta, emb) for (cid, doc, meta), emb in zip(events, embeddings)])
+            stats["indexed"] = len(events)
+            stats["rejected"] = rejected
+        except Exception as e:
+            stats["status"] = "partial"
+            stats["reason"] = f"user events indexing failed: {e}"
+        return stats
+
+    def _collect_raw_candidates(self, query: str, hybrid: bool = True, auto_index: bool = True) -> list[dict]:
         """Collect raw candidates from vector search with retrieval scores (no ranking applied)."""
         store = self.vector_store
         if store.count() == 0:
+            if not auto_index:
+                return []
             harness = self.engine._resolve_harness()
             wiki_dir = harness / "wiki"
             has_md_files = (wiki_dir.exists() and any(wiki_dir.glob("*.md"))) or any(harness.glob("*.md"))
             if has_md_files:
                 import logging
                 logging.info("[OEM] Vector database is empty. Auto-indexing existing wiki concepts...")
-                self.index_all(force=True)
+                self.index_all(force=True, quiet=True)
             else:
                 return []
 
@@ -733,6 +829,7 @@ class SearchService:
                         "content_hash": "",
                         "linked_concepts": "",
                         "importance": imp,
+                        "scope": "project",
                     },
                     "score": final_score,
                 })
@@ -741,9 +838,17 @@ class SearchService:
 
     def search(self, query: str, k: int = 3, hybrid: bool = True,
                scope: str | None = None, memory_type: str | None = None,
-               since: str | None = None, until: str | None = None) -> list[dict]:
+               since: str | None = None, until: str | None = None,
+               record_references: bool = True, auto_index: bool = True) -> list[dict]:
+        """Search indexed memory with normalized metadata filters.
+
+        Filters are applied AFTER metadata normalization (fields promoted from
+        metadata to top level). A record missing `scope` counts as project
+        scope. Invalid since/until returns an empty result with a logged
+        warning (the MCP tool surfaces a controlled error before this point).
+        """
         try:
-            candidates = self._collect_raw_candidates(query, hybrid)
+            candidates = self._collect_raw_candidates(query, hybrid, auto_index=auto_index)
             if not candidates:
                 return []
             candidates.sort(key=lambda x: x["score"], reverse=True)
@@ -760,46 +865,47 @@ class SearchService:
                     continue
                 if r.get("score", 0.0) <= 0.0:
                     continue
-                filtered_ranked.append(r)
-            # Apply filter parameters
+                filtered_ranked.append(normalize_record_fields(r))
+            # Scope filter (missing scope counts as project for backward compatibility)
             if scope:
-                filtered_ranked = [r for r in filtered_ranked if r.get("scope", "project") == scope]
+                filtered_ranked = [
+                    r for r in filtered_ranked
+                    if r.get("scope") == scope or (r.get("scope") is None and scope == "project")
+                ]
+            # Memory type filter (authoritative index-time type, classify fallback)
             if memory_type:
                 filtered_ranked = [r for r in filtered_ranked if r.get("memory_type") == memory_type]
+            # Temporal window filter (strict on invalid input)
             if since or until:
-                from datetime import datetime, timezone
-                try:
-                    since_dt = datetime.fromisoformat(since.replace("Z", "+00:00")) if since else None
-                    until_dt = datetime.fromisoformat(until.replace("Z", "+00:00")) if until else None
-                    def _in_window(r):
-                        ts = r.get("timestamp") or r.get("created_at") or r.get("updated_at")
-                        if not ts:
-                            return True
-                        try:
-                            dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
-                        except (ValueError, TypeError):
-                            return True
-                        if since_dt and dt < since_dt:
-                            return False
-                        if until_dt and dt > until_dt:
-                            return False
-                        return True
-                    filtered_ranked = [r for r in filtered_ranked if _in_window(r)]
-                except Exception:
-                    pass
+                since_dt, until_dt, win_err = parse_iso_window(since, until)
+                if win_err:
+                    logger.warning("Invalid search window (%s): returning no results for since=%r until=%r", win_err, since, until)
+                    filtered_ranked = []
+                else:
+                    filtered_ranked = [
+                        r for r in filtered_ranked
+                        if record_in_window(
+                            r.get("timestamp") or r.get("created_at") or r.get("updated_at"),
+                            since_dt, until_dt,
+                        )
+                    ]
             results = filtered_ranked[:k]
-            try:
-                concept_ids = self.engine.state.concept_ids_from_retrieval_results(results)
-                self.engine.state.record_concept_references(concept_ids, source="search")
-            except Exception as ref_err:
-                logger.warning("Failed to record concept references for search results: %s", ref_err)
+            if record_references:
+                try:
+                    concept_ids = self.engine.state.concept_ids_from_retrieval_results(results)
+                    self.engine.state.record_concept_references(concept_ids, source="search")
+                except Exception as ref_err:
+                    logger.warning("Failed to record concept references for search results: %s", ref_err)
             return results
         except Exception as e:
             import logging
             logging.warning("Vector database search failed, falling back to registry-only: %s", e)
-            return self._search_registry_fallback(query, k)
+            return self._search_registry_fallback(query, k, scope, memory_type, since, until, record_references=record_references)
 
-    def _search_registry_fallback(self, query: str, k: int = 3) -> list[dict]:
+    def _search_registry_fallback(self, query: str, k: int = 3, scope: str | None = None,
+                                  memory_type: str | None = None,
+                                  since: str | None = None, until: str | None = None,
+                                  record_references: bool = True) -> list[dict]:
         candidates = self._collect_raw_fallback_candidates(query)
         if not candidates:
             return []
@@ -818,12 +924,33 @@ class SearchService:
             if r.get("score", 0.0) <= 0.0:
                 continue
             filtered_ranked.append(r)
+        if scope:
+            filtered_ranked = [
+                r for r in filtered_ranked
+                if r.get("scope") == scope or (r.get("scope") is None and scope == "project")
+            ]
+        if memory_type:
+            filtered_ranked = [r for r in filtered_ranked if r.get("memory_type") == memory_type]
+        if since or until:
+            since_dt, until_dt, win_err = parse_iso_window(since, until)
+            if win_err:
+                logger.warning("Invalid search window (%s): returning no results for since=%r until=%r", win_err, since, until)
+                filtered_ranked = []
+            else:
+                filtered_ranked = [
+                    r for r in filtered_ranked
+                    if record_in_window(
+                        r.get("timestamp") or r.get("created_at") or r.get("updated_at"),
+                        since_dt, until_dt,
+                    )
+                ]
         results = filtered_ranked[:k]
-        try:
-            concept_ids = self.engine.state.concept_ids_from_retrieval_results(results)
-            self.engine.state.record_concept_references(concept_ids, source="search")
-        except Exception as ref_err:
-            logger.warning("Failed to record concept references for fallback search results: %s", ref_err)
+        if record_references:
+            try:
+                concept_ids = self.engine.state.concept_ids_from_retrieval_results(results)
+                self.engine.state.record_concept_references(concept_ids, source="search")
+            except Exception as ref_err:
+                logger.warning("Failed to record concept references for fallback search results: %s", ref_err)
 
         return results
 

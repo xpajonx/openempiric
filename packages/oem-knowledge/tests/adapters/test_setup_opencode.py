@@ -307,3 +307,84 @@ def test_run_opencode_aborts_if_config_invalid_without_mutating_config(temp_home
             
     # Config file must not be modified or setup by run
     assert jsonc_file.read_text(encoding="utf-8") == invalid_content
+
+
+def test_setup_installs_remember_skill_and_dream_agent(temp_home, tmp_proj):
+    opencode_dir = temp_home / ".config" / "opencode"
+    with patch("pathlib.Path.home", return_value=temp_home):
+        with patch.object(sys, "argv", ["oem", "setup", "opencode"]):
+            main()
+    skill = opencode_dir / "skills" / "remember" / "SKILL.md"
+    agent = opencode_dir / "agent" / "dream.md"
+    assert skill.exists()
+    assert agent.exists()
+    assert "source_type: oem_opencode_skill" in skill.read_text(encoding="utf-8")
+    assert "source_type: oem_opencode_agent" in agent.read_text(encoding="utf-8")
+    data = json.loads((opencode_dir / "opencode.jsonc").read_text(encoding="utf-8"))
+    assert "agent" not in data
+    assert "plugins" not in data
+
+
+def test_setup_preserves_user_modified_skill(temp_home, tmp_proj):
+    opencode_dir = temp_home / ".config" / "opencode"
+    skill = opencode_dir / "skills" / "remember" / "SKILL.md"
+    skill.parent.mkdir(parents=True, exist_ok=True)
+    skill.write_text("my custom skill content", encoding="utf-8")
+    with patch("pathlib.Path.home", return_value=temp_home):
+        with patch.object(sys, "argv", ["oem", "setup", "opencode"]):
+            main()
+    assert skill.read_text(encoding="utf-8") == "my custom skill content"
+
+
+def test_setup_repair_upgrades_verified_managed_skill(temp_home, tmp_proj):
+    opencode_dir = temp_home / ".config" / "opencode"
+    skill = opencode_dir / "skills" / "remember" / "SKILL.md"
+    skill.parent.mkdir(parents=True, exist_ok=True)
+    old_content = "<!-- generated_by: openempiric --> old version"
+    skill.write_text(old_content, encoding="utf-8")
+    import hashlib
+    manifest_path = opencode_dir / "openempiric-manifest.json"
+    manifest_path.write_text(json.dumps({
+        "schema_version": 1,
+        "assets": {"skills/remember/SKILL.md": {"sha256": hashlib.sha256(old_content.encode("utf-8")).hexdigest()}},
+    }), encoding="utf-8")
+    with patch("pathlib.Path.home", return_value=temp_home):
+        with patch.object(sys, "argv", ["oem", "setup", "opencode", "--repair"]):
+            main()
+    assert "source_type: oem_opencode_skill" in skill.read_text(encoding="utf-8")
+
+
+def test_setup_force_assets_replaces_user_file_with_backup(temp_home, tmp_proj):
+    opencode_dir = temp_home / ".config" / "opencode"
+    skill = opencode_dir / "skills" / "remember" / "SKILL.md"
+    skill.parent.mkdir(parents=True, exist_ok=True)
+    skill.write_text("user content", encoding="utf-8")
+    with patch("pathlib.Path.home", return_value=temp_home):
+        with patch.object(sys, "argv", ["oem", "setup", "opencode", "--force-assets"]):
+            main()
+    assert "source_type: oem_opencode_skill" in skill.read_text(encoding="utf-8")
+    assert (opencode_dir / "skills" / "remember" / "SKILL.md.oem.bak").exists()
+
+
+def test_setup_writes_asset_manifest(temp_home, tmp_proj):
+    opencode_dir = temp_home / ".config" / "opencode"
+    with patch("pathlib.Path.home", return_value=temp_home):
+        with patch.object(sys, "argv", ["oem", "setup", "opencode"]):
+            main()
+    manifest = opencode_dir / "openempiric-manifest.json"
+    assert manifest.exists()
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    assert "skills/remember/SKILL.md" in data["assets"]
+    assert "agent/dream.md" in data["assets"]
+    assert data["assets"]["agent/dream.md"]["sha256"]
+
+
+def test_setup_repair_preserves_spoofed_marker_file(temp_home, tmp_proj):
+    opencode_dir = temp_home / ".config" / "opencode"
+    skill = opencode_dir / "skills" / "remember" / "SKILL.md"
+    skill.parent.mkdir(parents=True, exist_ok=True)
+    skill.write_text("<!-- generated_by: openempiric --> user content with marker", encoding="utf-8")
+    with patch("pathlib.Path.home", return_value=temp_home):
+        with patch.object(sys, "argv", ["oem", "setup", "opencode", "--repair"]):
+            main()
+    assert "user content with marker" in skill.read_text(encoding="utf-8")

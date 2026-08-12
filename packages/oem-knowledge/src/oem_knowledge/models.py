@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from typing import Literal
+from typing import Literal, TypedDict
 from pydantic import BaseModel, Field
 
 
@@ -181,5 +181,19 @@ class SkillPromotionEvent(BaseModel):
     previous_status: str | None = None
     new_status: str
     notes: str | None = None
+
+
+class RetrievalRecord(TypedDict, total=False):
+    """Normalized internal memory-record shape shared by search and preflight (contract, Wave 0)."""
+    id: str
+    document: str
+    metadata: dict
+    scope: str
+    memory_type: str
+    timestamp: str
+    source: str
+    project: str
+    session_id: str
+    provenance: dict
 
 

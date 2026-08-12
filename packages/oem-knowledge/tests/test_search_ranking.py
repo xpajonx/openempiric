@@ -924,3 +924,28 @@ def test_memory_type_stored_in_metadata():
     doc2 = "Command `npm install` executed with exit code 0"
     assert classify_memory_type(document=doc2) in ("command_log", "search_log", "observation")
 
+
+class TestExplicitIndexTimeMemoryType:
+    def test_metadata_memory_type_is_authoritative(self):
+        from oem_knowledge.memory_ranking import rank_search_result
+        candidate = {
+            "id": "evt-1",
+            "document": "Adopted spawn-isolated indexing with 10s budget",
+            "score": 1.0,
+            "metadata": {"memory_type": "decision", "source": "events.jsonl"},
+        }
+        result = rank_search_result("spawn-isolated indexing", candidate)
+        assert result["memory_type"] == "decision"
+        assert result["ranking_boosts"].get("decision") == 4.0
+
+    def test_unknown_metadata_type_falls_back_to_classification(self):
+        from oem_knowledge.memory_ranking import rank_search_result
+        candidate = {
+            "id": "evt-2",
+            "document": "Decision: use SQLite for event storage",
+            "score": 1.0,
+            "metadata": {"memory_type": "banana", "source": "events.jsonl"},
+        }
+        result = rank_search_result("SQLite", candidate)
+        assert result["memory_type"] == "decision"
+

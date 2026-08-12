@@ -171,6 +171,15 @@ def register(mcp: object) -> None:
             until: ISO 8601 timestamp -- only return entries before this date. Optional.
         """
         try:
+            from oem_knowledge.retrieval import parse_iso_window
+            _, _, win_err = parse_iso_window(since, until)
+            if win_err:
+                return json.dumps({
+                    "status": "error",
+                    "operation": "knowledge_search",
+                    "message": f"Invalid since/until filter: {win_err}",
+                    "suggestion": "Use ISO 8601 timestamps (e.g. 2026-07-01T10:00:00Z).",
+                }, indent=2)
             project_root = resolve_active_project(project)
             memory_root = project_root / ".oem"
             with KnowledgeEngine(str(project_root)) as eng:

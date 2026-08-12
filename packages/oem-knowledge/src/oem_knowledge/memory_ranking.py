@@ -4,6 +4,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from oem_knowledge.retrieval import KNOWN_MEMORY_TYPES
+
 # ============================================================================
 # Stopwords, generic words, and helper (module-level)
 # ============================================================================
@@ -782,7 +784,14 @@ def rank_search_result(query: str, candidate: dict[str, Any], registry: dict[str
     snippet = candidate.get("snippet") or candidate.get("metadata", {}).get("snippet", "")
 
     base_score = float(candidate.get("score", 0.0))
-    memory_type = classify_memory_type(document, title, snippet)
+    memory_type = None
+    metadata = candidate.get("metadata")
+    if isinstance(metadata, dict):
+        meta_type = metadata.get("memory_type")
+        if isinstance(meta_type, str) and meta_type in KNOWN_MEMORY_TYPES:
+            memory_type = meta_type
+    if memory_type is None:
+        memory_type = classify_memory_type(document, title, snippet)
 
     final_score, relevance_score, importance_boost, eligible_for_type_boost, reasons, boosts, penalties = _apply_boosts(
         base_score, query_targets, document, memory_type

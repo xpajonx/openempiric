@@ -1,3 +1,11 @@
+"""Result contract for OEM operations.
+
+Allowed statuses: success, partial, warn, empty, error.
+Caller precedence when multiple signals disagree: error > partial > warn > empty > success.
+`failed_step` names the phase that failed (e.g. "reflection", "indexing").
+Recovery metadata (`recovered`, `recovery_action`, `recovery_warning`) is additive:
+it must never alter existing fields or status precedence.
+"""
 from __future__ import annotations
 from typing import Any
 

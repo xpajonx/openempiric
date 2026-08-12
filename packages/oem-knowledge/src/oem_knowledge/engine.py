@@ -847,6 +847,15 @@ class KnowledgeEngine:
             session_state.save(active_session_file)
 
         warnings = []
+        recovery = {"recovered": False, "action": "no_intent", "warning": None}
+        try:
+            from oem_knowledge.runtime.commit_pipeline import CommitPipeline
+            commit_pipeline = CommitPipeline(harness)
+            if commit_pipeline.intent_log.has_uncompleted_intent():
+                recovery = commit_pipeline.recover_from_crash(self._events_path(project))
+                warnings.append(f"Session commit recovery: {recovery.get('action')}")
+        except Exception as e:
+            warnings.append(f"Commit recovery check failed: {e}")
         try:
             from oem_knowledge.instructions import (
                 discover_instruction_sources,
@@ -884,6 +893,7 @@ class KnowledgeEngine:
             "project": str(self.project_path or project or ""),
             "message": "OEM session started.",
             "warnings": warnings,
+            **({"recovered": recovery.get("recovered"), "recovery_action": recovery.get("action"), "recovery_warning": recovery.get("warning")} if recovery.get("action") != "no_intent" else {}),
             "suggestion": "Use knowledge_read when you need orientation, then knowledge_search for specific memory."
         }
 
@@ -951,6 +961,9 @@ class KnowledgeEngine:
         failed_step = None
         status = "success"
         message = ""
+
+        from oem_knowledge.runtime.commit_pipeline import CommitPipeline, prefix_checksum
+        commit_pipeline = CommitPipeline(self._resolve_harness(project))
 
         try:
             progress.update_step("transcript", "running")
@@ -1313,7 +1326,43 @@ class KnowledgeEngine:
             with timer.phase("append_events", progress_callback):
                 canonical_events = res.get("canonical_events", [])
                 t_append_start = time.perf_counter()
+                events_path = self._events_path(project)
+                commit_pipeline.record_appended_bytes(events_path)
+                _offset = commit_pipeline.staging.get_byte_offset("append_events")
+                try:
+                    _prefix = prefix_checksum(events_path, _offset) if _offset else None
+                except Exception:
+                    _prefix = None
+                try:
+                    from oem_knowledge.models import KnowledgeEvent
+                    _expected = 0
+                    for _ev in canonical_events:
+                        _model = _ev if isinstance(_ev, KnowledgeEvent) else KnowledgeEvent(**_ev)
+                        _expected += len(_model.model_dump_json()) + 1
+                except Exception:
+                    _expected = None
+                commit_pipeline.intent_log.write_intent(
+                    "append_events",
+                    session_id=session_id,
+                    project=str(self.project_path or project or ""),
+                    byte_offset=_offset,
+                    expected_bytes=_expected,
+                    prefix_checksum=_prefix,
+                )
                 self.state.append_events(canonical_events, project)
+                try:
+                    _actual_delta = self._events_path(project).stat().st_size - _offset
+                    commit_pipeline.intent_log.write_intent(
+                        "append_events",
+                        session_id=session_id,
+                        project=str(self.project_path or project or ""),
+                        byte_offset=_offset,
+                        expected_bytes=_actual_delta,
+                        prefix_checksum=_prefix,
+                    )
+                except Exception:
+                    pass
+                commit_pipeline.complete_phase("append_events", {})
                 append_events_time = time.perf_counter() - t_append_start
             timer.timings["append_events"] = append_events_time
 
@@ -1650,7 +1699,10 @@ project: {project or "default"}
 
             if auto_dream_enabled:
                 try:
-                    dream_result = self.dream(project=project)
+                    _remaining = None
+                    if index_budget_seconds is not None:
+                        _remaining = max(0.0, float(index_budget_seconds) - (time.perf_counter() - start_time))
+                    dream_result = self.dream(project=project, index_budget_seconds=_remaining)
                     standard_res["dream"] = dream_result
                 except Exception as e:
                     logger.warning("Dream phase failed (non-fatal): %s", e)
@@ -1658,6 +1710,10 @@ project: {project or "default"}
 
         # Close the active session on any terminal commit path
         if ret_status in ("success", "warn", "partial", "empty"):
+            try:
+                commit_pipeline.complete_pipeline()
+            except Exception:
+                pass
             self._close_active_session(project)
         return standard_res
 
@@ -1696,7 +1752,7 @@ project: {project or "default"}
     def session_commit(self, *args, **kwargs) -> dict:
         return self.session_end(*args, **kwargs)
 
-    def dream(self, project: str | None = None, force: bool = False) -> dict:
+    def dream(self, project: str | None = None, force: bool = False, index_budget_seconds: float | None = None) -> dict:
         """Run the memory maintainer dream cycle.
         
         Four phases:
@@ -1824,11 +1880,19 @@ project: {project or "default"}
         if decays_applied > 0 or promotions_applied > 0 or archives_applied > 0:
             self.state._save_registry(registry, project)
 
-        # Phase 4: Pruning
+        # Phase 4: Pruning (bounded when a budget is supplied; skipped at zero)
+        index_res = {"status": "success"}
         try:
-            self.search.index_all()
+            if index_budget_seconds is not None and index_budget_seconds <= 0:
+                index_res = {"status": "skipped", "reason": "index budget exhausted"}
+                logger.warning("Dream re-index skipped: budget exhausted (index_budget_seconds=%s)", index_budget_seconds)
+            else:
+                index_res = self.search.index_all(budget_seconds=index_budget_seconds)
+                if index_res.get("status") == "partial":
+                    logger.warning("Dream re-index partial: %s", index_res.get("error", "budget exceeded"))
         except Exception as e:
             logger.warning("Index re-build during dream failed: %s", e)
+            index_res = {"status": "error", "error": str(e)}
 
         return {
             "status": "success",
@@ -1837,6 +1901,7 @@ project: {project or "default"}
             "promotion": {"candidates": len(promotion_candidates), "applied": promotions_applied},
             "archive": {"candidates": len(archival_candidates), "applied": archives_applied},
             "merge": {"candidates": len(merge_candidates), "applied": merges_applied},
+            "index": index_res,
         }
 
     def preflight(
@@ -1866,6 +1931,7 @@ project: {project or "default"}
             session_id=session_id,
             write_audit=write_audit,
             budget=budget,
+            retriever=lambda q, k: self.search.search(q, k=k, record_references=False, auto_index=False),
         )
         concept_ids: list[str] = []
         try:

@@ -308,6 +308,12 @@ class ReflectionService:
                     with open(user_path, "a") as f:
                         import json
                         f.write(json.dumps(normalized) + "\n")
+                    # Keep user memory searchable immediately (best-effort, non-fatal)
+                    try:
+                        if self.engine is not None and hasattr(self.engine, "search"):
+                            self.engine.search.index_user_events()
+                    except Exception:
+                        pass
                 else:
                     # Fallback to project events if user identity unknown
                     if self.engine is not None and hasattr(self.engine, 'state') and hasattr(self.engine.state, 'append_event'):

@@ -5,6 +5,14 @@ import pytest
 from pathlib import Path
 
 
+@pytest.fixture(autouse=True)
+def _reset_identity_cache():
+    from oem_knowledge.services import state
+    state._GIT_IDENTITY_CACHE.update({"checked": False, "value": None})
+    yield
+    state._GIT_IDENTITY_CACHE.update({"checked": False, "value": None})
+
+
 class TestResolveUserIdentity:
     """Tests for user identity resolution."""
 

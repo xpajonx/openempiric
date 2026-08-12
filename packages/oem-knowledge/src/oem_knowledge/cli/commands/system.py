@@ -100,7 +100,7 @@ def _remove_plugins_from_jsonc(text: str, plugin_path_str: str, remove_key: bool
     return text
 
 
-def cmd_setup_opencode(eng, project: str | None = None, repair: bool = False, dry_run: bool = False, wsl_distro: str | None = None) -> None:
+def cmd_setup_opencode(eng, project: str | None = None, repair: bool = False, dry_run: bool = False, wsl_distro: str | None = None, force_assets: bool = False) -> None:
     print("OEM OpenCode Setup\n")
 
     if dry_run:
@@ -139,6 +139,10 @@ def cmd_setup_opencode(eng, project: str | None = None, repair: bool = False, dr
                 lines.append(f"  args:    {cmd.get('args')}")
                 lines.append(f"  timeout: {cmd.get('timeout')}ms")
 
+        lines.append("")
+        lines.append("Managed assets that would be installed:")
+        lines.append("  skills/remember/SKILL.md  (remember skill, OpenCode)")
+        lines.append("  agent/dream.md            (dream memory subagent, OpenCode only)")
         print(render_panel("Dry-Run Summary", lines, status="info"))
         print("Run without --dry-run to apply.")
         return
@@ -149,6 +153,12 @@ def cmd_setup_opencode(eng, project: str | None = None, repair: bool = False, dr
         opencode_dir = Path(xdg_config) / "opencode"
     else:
         opencode_dir = Path.home() / ".config" / "opencode"
+    from oem_knowledge.opencode_assets import validate_opencode_dir
+    try:
+        validate_opencode_dir(opencode_dir)
+    except ValueError as e:
+        print(f"✗ {e}")
+        sys.exit(1)
         
     # Resolve plugin dir via OPENCODE_PLUGINS_DIR if set, otherwise opencode_dir / plugins
     env_plugins_dir = os.environ.get("OPENCODE_PLUGINS_DIR")
@@ -159,12 +169,14 @@ def cmd_setup_opencode(eng, project: str | None = None, repair: bool = False, dr
         
     instructions_dir = opencode_dir / "instructions"
     skills_dir = opencode_dir / "skills"
+    agents_dir = opencode_dir / "agent"
     
     # Create directories
     try:
         plugins_dir.mkdir(parents=True, exist_ok=True)
         instructions_dir.mkdir(parents=True, exist_ok=True)
         skills_dir.mkdir(parents=True, exist_ok=True)
+        agents_dir.mkdir(parents=True, exist_ok=True)
     except Exception as e:
         print(f"✗ Failed to create directories under ~/.config/opencode/: {e}")
         sys.exit(1)
@@ -245,6 +257,61 @@ def cmd_setup_opencode(eng, project: str | None = None, repair: bool = False, dr
             inst_installed = True  # Already present and valid
     except Exception as e:
         print(f"✗ Failed to install instructions/memory-start.md: {e}")
+        
+    # 3b. Install OpenCode assets (remember skill + dream subagent)
+    assets_ok = True
+    asset_lines = []
+    try:
+        from oem_knowledge.opencode_assets import (
+            ASSET_DEFINITIONS,
+            load_package_asset,
+            write_managed_asset,
+            write_asset_manifest,
+            ASSET_MANIFEST_NAME,
+        )
+        manifest_path = opencode_dir / ASSET_MANIFEST_NAME
+        asset_manifest = {}
+        if manifest_path.exists():
+            try:
+                _data = json.loads(manifest_path.read_text(encoding="utf-8"))
+                if isinstance(_data, dict) and isinstance(_data.get("assets"), dict):
+                    asset_manifest = _data
+            except Exception:
+                pass
+        installed_assets = []
+        opencode_root = opencode_dir.resolve()
+        for definition in ASSET_DEFINITIONS:
+            try:
+                content = load_package_asset(definition["package_path"])
+            except Exception as e:
+                assets_ok = False
+                asset_lines.append(f"✗ Failed to load {definition['package_path']}: {e}")
+                continue
+            dest = (opencode_dir / definition["dest_rel"]).resolve()
+            if not dest.is_relative_to(opencode_root):
+                assets_ok = False
+                asset_lines.append(f"✗ Refusing asset path outside opencode dir: {dest}")
+                continue
+            result = write_managed_asset(
+                dest, content,
+                manifest_key=definition["dest_rel"],
+                repair=repair,
+                force_assets=force_assets,
+                manifest=asset_manifest,
+            )
+            if result["status"] in ("installed", "upgraded", "force_replaced", "skipped"):
+                installed_assets.append(dict(definition, content=content))
+            if result["status"] == "failed":
+                assets_ok = False
+            asset_lines.append(f"{'✓' if result['status'] != 'failed' else '✗'} {result['message']}")
+        try:
+            write_asset_manifest(opencode_dir, installed_assets)
+        except Exception as e:
+            assets_ok = False
+            asset_lines.append(f"✗ Failed to write asset manifest: {e}")
+    except Exception as e:
+        assets_ok = False
+        asset_lines.append(f"✗ Failed to install OpenCode assets: {e}")
         
     # 4. Validate and update opencode.jsonc non-destructively
     config_verified = False
@@ -517,6 +584,8 @@ def cmd_setup_opencode(eng, project: str | None = None, repair: bool = False, dr
         lines = []
         lines.append("✓ OpenCode MCP registered" if mcp_verified else "✗ OpenCode MCP registration failed")
         lines.append("✓ OEM instructions active" if inst_installed else "✗ OEM instructions activation failed")
+        lines.append("✓ OpenCode assets installed" if assets_ok else "! OpenCode assets: partial/failed")
+        lines.extend(asset_lines)
         lines.append("! OEM hook runtime unavailable")
         if plugin_skipped_user_file:
             lines.append("  Existing user-owned plugin file preserved.")
@@ -528,6 +597,8 @@ def cmd_setup_opencode(eng, project: str | None = None, repair: bool = False, dr
         lines = []
         lines.append("✓ Plugin file installed")
         lines.append("✓ Instructions installed")
+        lines.append("✓ OpenCode assets installed" if assets_ok else "! OpenCode assets: partial/failed")
+        lines.extend(asset_lines)
         lines.append("✓ MCP registered" if mcp_verified else f"✗ MCP registration failed: {mcp_error}")
         lines.append("✓ OpenCode config valid" if config_verified else "✗ OpenCode config validation failed")
         if plugin_installed and config_verified:
@@ -1004,7 +1075,7 @@ def run_system_command(args):
         if args.setup_target == "opencode":
             wsl_distro = getattr(args, "wsl_distro", None)
             dry_run = getattr(args, "dry_run", False)
-            cmd_setup_opencode(eng, project=project, repair=args.repair, dry_run=dry_run, wsl_distro=wsl_distro)
+            cmd_setup_opencode(eng, project=project, repair=args.repair, dry_run=dry_run, wsl_distro=wsl_distro, force_assets=getattr(args, "force_assets", False))
         elif args.setup_target == "codex-app":
             cmd_setup_codex_app(eng, project=project, repair=args.repair)
         elif args.setup_target == "grok":

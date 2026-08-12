@@ -309,6 +309,10 @@ def register(mcp: object) -> None:
             start = time.time()
             with KnowledgeEngine(str(project_root)) as eng:
                 s = eng.search.index_all(force=force)
+                try:
+                    eng.search.index_user_events()
+                except Exception:
+                    pass
             duration = time.time() - start
             lines = [
                 f"Files Scanned: {s.get('scanned', 0)}",

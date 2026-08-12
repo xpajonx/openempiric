@@ -529,6 +529,11 @@ def _setup_parser() -> argparse.ArgumentParser:
         "--wsl-distro", type=str, default=None,
         help="Explicit WSL distro name (required when multiple distros exist)",
     )
+    setup_opencode.add_argument(
+        "--force-assets",
+        action="store_true",
+        help="Replace user-owned remember/dream asset files (regular files get a .oem.bak backup; symlinks are replaced without backup)",
+    )
     setup_codex = setup_sub.add_parser(
         "codex-app", help="Integrate Codex App with OEM through the WSL bridge"
     )

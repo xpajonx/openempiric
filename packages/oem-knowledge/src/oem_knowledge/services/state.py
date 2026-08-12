@@ -13,6 +13,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_GIT_IDENTITY_CACHE: dict[str, object] = {"checked": False, "value": None}
+
 
 REFERENCE_TRACKING_WATERMARK_TS = 1782864000.0  # 2026-07-01T00:00:00Z
 REFERENCE_TRACKING_WATERMARK_ISO = "2026-07-01T00:00:00Z"
@@ -72,16 +74,22 @@ def _parse_timestamp(val) -> float | None:
 def resolve_user_identity() -> str | None:
     """Resolve the current user identity with precedence: OEM_USER_ID > git user.email.
 
+    The git probe is cached per process (it spawns a subprocess); the env var
+    is re-read every call so tests and runtime changes stay responsive.
+
     Returns:
         User identifier string or None if unidentifiable.
     """
     import os
     import subprocess
 
-    # Precedence 1: explicit env var
+    # Precedence 1: explicit env var (uncached)
     oem_user = os.environ.get("OEM_USER_ID", "").strip()
     if oem_user:
         return oem_user
+
+    if _GIT_IDENTITY_CACHE.get("checked"):
+        return _GIT_IDENTITY_CACHE.get("value")
 
     # Precedence 2: git user.email (machine-specific, known limitation)
     try:
@@ -91,12 +99,7 @@ def resolve_user_identity() -> str | None:
         )
         git_email = result.stdout.strip()
         if git_email and result.returncode == 0:
-            # If OEM_USER_ID was not set but git email differs from env (edge case), warn
-            if oem_user and oem_user != git_email:
-                logger.warning(
-                    "User identity conflict: OEM_USER_ID=%s vs git user.email=%s. Using OEM_USER_ID.",
-                    oem_user, git_email,
-                )
+            _GIT_IDENTITY_CACHE.update({"checked": True, "value": git_email})
             return git_email
     except Exception:
         pass
