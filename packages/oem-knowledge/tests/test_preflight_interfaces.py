@@ -16,11 +16,95 @@ from oem_knowledge.engine import KnowledgeEngine
 from oem_knowledge.runtime.instructions import OEM_MEMORY_INSTRUCTIONS
 from oem_knowledge.server import mount_tools
 from oem_knowledge.source_classifier import SourceType, classify_source
+from oem_knowledge.preflight.audit import summarize_audit_events
 
 
 def _write_skill(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content.strip() + "\n", encoding="utf-8")
+
+
+def test_audit_summary_handles_malformed_sorted_and_truncated(tmp_path: Path) -> None:
+    path = tmp_path / "events.jsonl"
+    path.write_text(
+        "\n".join([
+            json.dumps({"decision": "zeta", "rejected_memory_count": 2,
+                        "rejection_reasons": {"z": 2, "a": 1}, "timestamp": "2024-02-01T00:00:00Z"}),
+            json.dumps({"decision": "alpha", "rejected_memory_count": 1,
+                        "rejection_reasons": {"a": 3}, "timestamp": "bad"}),
+            "not json", "[]", "",
+            json.dumps({"decision": "later"}),
+        ]) + "\n", encoding="utf-8")
+    summary = summarize_audit_events(path, max_lines=4)
+    assert summary["event_count"] == 2
+    assert summary["malformed_line_count"] == 2
+    assert summary["empty_line_count"] == 0
+    assert summary["decision_counts"] == {"alpha": 1, "zeta": 1}
+    assert summary["rejection_reason_counts"] == {"a": 4, "z": 2}
+    assert summary["rejected_memory_count"] == 3
+    assert summary["first_timestamp"] == "2024-02-01T00:00:00+00:00"
+    assert summary["truncated"] is True
+    assert summarize_audit_events(tmp_path / "missing.jsonl")["exists"] is False
+
+
+def test_audit_summary_counts_empty_lines_and_unknown_decision(tmp_path: Path) -> None:
+    path = tmp_path / "events.jsonl"
+    path.write_text(
+        "\n" + json.dumps({"decision": "custom"}) + "\n" + json.dumps({}) + "\n",
+        encoding="utf-8",
+    )
+
+    summary = summarize_audit_events(path)
+
+    assert summary["event_count"] == 2
+    assert summary["empty_line_count"] == 1
+    assert summary["malformed_line_count"] == 0
+    assert summary["decision_counts"] == {"custom": 1, "unknown": 1}
+
+
+def test_audit_report_does_not_create_missing_audit(preflight_project: Path, capsys) -> None:
+    audit_path = preflight_project / ".oem" / "preflight" / "preflight_events.jsonl"
+    assert not audit_path.exists()
+
+    with patch.object(
+        sys,
+        "argv",
+        [
+            "oem",
+            "preflight",
+            "--project",
+            str(preflight_project),
+            "--audit-report",
+            "--no-audit",
+            "--json",
+        ],
+    ):
+        main()
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["operation"] == "preflight_audit_report"
+    assert payload["audit"]["exists"] is False
+    assert not audit_path.exists()
+
+
+def test_audit_report_cli_json_and_text(preflight_project: Path, capsys) -> None:
+    audit = preflight_project / ".oem" / "preflight" / "preflight_events.jsonl"
+    audit.parent.mkdir(parents=True)
+    audit.write_text(json.dumps({"decision": "required"}) + "\n", encoding="utf-8")
+    with patch.object(sys, "argv", ["oem", "preflight", "ignored", "--project", str(preflight_project), "--audit-report", "--json", "--no-audit"]):
+        main()
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["operation"] == "preflight_audit_report"
+    with patch.object(sys, "argv", ["oem", "preflight", "--project", str(preflight_project), "--audit-report"]):
+        main()
+    assert "Preflight Audit Report" in capsys.readouterr().out
+
+
+def test_preflight_without_task_or_report_exits_two(preflight_project: Path) -> None:
+    with patch.object(sys, "argv", ["oem", "preflight", "--project", str(preflight_project)]):
+        with pytest.raises(SystemExit) as exc:
+            main()
+    assert exc.value.code == 2
 
 
 @pytest.fixture

@@ -12,6 +12,7 @@ from oem_knowledge.memory_ranking import (
     build_ranking_debug_report,
     extract_query_targets,
     rank_search_results,
+    summarize_ranking_reports,
 )
 
 # ── Golden queries ──────────────────────────────────────────────────────────
@@ -59,6 +60,68 @@ def _write_json(path: Path, payload) -> None:
 def _write_skill(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content.strip() + "\n", encoding="utf-8")
+
+
+class TestRankingReportSummary:
+    def test_totals_and_rates(self):
+        summary = summarize_ranking_reports([
+            {
+                "raw_candidates": [{"id": "a"}, {"id": "b"}],
+                "reranked_candidates": [{"id": "b"}],
+                "returned_count": 1,
+                "used_fallback": True,
+            },
+            {
+                "raw_candidates": [],
+                "reranked_candidates": [],
+                "returned_count": 0,
+                "used_fallback": False,
+            },
+        ])
+
+        assert summary == {
+            "report_count": 2,
+            "raw_candidate_total": 2,
+            "reranked_candidate_total": 1,
+            "returned_total": 1,
+            "fallback_count": 1,
+            "fallback_rate": 0.5,
+            "empty_raw_count": 1,
+            "empty_raw_rate": 0.5,
+            "empty_returned_count": 1,
+            "empty_returned_rate": 0.5,
+        }
+
+    def test_expected_id_recall_and_top1(self):
+        summary = summarize_ranking_reports([
+            {
+                "raw_candidates": [{"id": "expected-1"}],
+                "reranked_candidates": [{"id": "expected-1"}],
+                "returned_count": 1,
+            },
+            {
+                "raw_candidates": [{"id": "expected-2"}],
+                "reranked_candidates": [{"id": "other"}, {"id": "expected-2"}],
+                "returned_count": 2,
+            },
+        ], ["expected-1", "expected-2"])
+
+        assert summary["raw_recall_count"] == 2
+        assert summary["raw_recall_rate"] == 1.0
+        assert summary["reranked_top1_count"] == 1
+        assert summary["reranked_top1_rate"] == 0.5
+
+    def test_empty_input_rates_are_zero(self):
+        summary = summarize_ranking_reports([])
+        assert summary["report_count"] == 0
+        assert summary["fallback_rate"] == 0.0
+        assert summary["empty_raw_rate"] == 0.0
+        assert summary["empty_returned_rate"] == 0.0
+
+    @pytest.mark.parametrize("expected_ids", [[""], ["  "], [1], ["a", "b"]])
+    def test_invalid_expected_ids(self, expected_ids):
+        with pytest.raises(ValueError):
+            summarize_ranking_reports([{"raw_candidates": [], "reranked_candidates": []}], expected_ids)
 
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────

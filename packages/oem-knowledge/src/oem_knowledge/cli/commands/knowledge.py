@@ -77,6 +77,38 @@ def _run_knowledge_command_impl(args):
     eng = KnowledgeEngine(project)
     import atexit; atexit.register(eng.close)
 
+    if args.command == "preflight" and getattr(args, "audit_report", False):
+        from oem_knowledge.engine import find_harness_root
+        from oem_knowledge.preflight.audit import summarize_audit_events
+        from oem_knowledge.project_layout import ProjectLayout
+
+        requested = Path(project or ".").resolve()
+        project_root = find_harness_root(requested) or requested
+        layout = ProjectLayout(project_root / ".oem")
+        summary = summarize_audit_events(layout.preflight_events_path)
+        payload = {
+            "status": "success",
+            "operation": "preflight_audit_report",
+            "project_root": str(project_root),
+            "memory_root": str(layout.root),
+            "audit": summary,
+        }
+        if getattr(args, "json", False):
+            print(json.dumps(payload, indent=2))
+        else:
+            print(render_panel("Preflight Audit Report", [
+                f"Events: {summary['event_count']}",
+                f"Malformed lines: {summary['malformed_line_count']}",
+                f"Empty lines: {summary['empty_line_count']}",
+                f"Rejected memories: {summary['rejected_memory_count']}",
+                f"Truncated: {'yes' if summary['truncated'] else 'no'}",
+            ], status="ok"))
+        return
+
+    if args.command == "preflight" and not getattr(args, "task", ""):
+        print("oem preflight requires a task or --audit-report", file=sys.stderr)
+        sys.exit(2)
+
     if args.command in ("status", "stats"):
         s = eng.search.stats()
         lines = [

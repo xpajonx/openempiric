@@ -934,3 +934,60 @@ def rank_search_results(query: str, candidates: list[dict[str, Any]], registry: 
         )
     )
     return ranked
+
+
+def summarize_ranking_reports(
+    reports: list[dict[str, Any]], expected_ids: list[str] | None = None
+) -> dict[str, Any]:
+    """Summarize ranking debug reports for tests and evaluation harnesses.
+
+    The summary uses the report's stable ``id`` fields rather than display
+    position or titles.  When expected IDs are provided, each report must
+    have one expected ID and recall/top-1 metrics are included.
+    """
+    report_count = len(reports)
+    if expected_ids is not None:
+        if len(expected_ids) != report_count:
+            raise ValueError("expected_ids must have the same length as reports")
+        if any(not isinstance(expected_id, str) or not expected_id.strip() for expected_id in expected_ids):
+            raise ValueError("expected_ids must contain only nonblank strings")
+
+    raw_counts = [int(report.get("raw_candidate_count", len(report.get("raw_candidates", [])))) for report in reports]
+    reranked_counts = [int(report.get("reranked_candidate_count", len(report.get("reranked_candidates", [])))) for report in reports]
+    returned_counts = [int(report.get("returned_count", len(report.get("reranked_candidates", [])))) for report in reports]
+    fallback_count = sum(bool(report.get("used_fallback", False)) for report in reports)
+    empty_raw_count = sum(count == 0 for count in raw_counts)
+    empty_returned_count = sum(count == 0 for count in returned_counts)
+
+    def rate(count: int) -> float:
+        return count / report_count if report_count else 0.0
+
+    summary: dict[str, Any] = {
+        "report_count": report_count,
+        "raw_candidate_total": sum(raw_counts),
+        "reranked_candidate_total": sum(reranked_counts),
+        "returned_total": sum(returned_counts),
+        "fallback_count": fallback_count,
+        "fallback_rate": rate(fallback_count),
+        "empty_raw_count": empty_raw_count,
+        "empty_raw_rate": rate(empty_raw_count),
+        "empty_returned_count": empty_returned_count,
+        "empty_returned_rate": rate(empty_returned_count),
+    }
+
+    if expected_ids is not None:
+        raw_recall_count = 0
+        reranked_top1_count = 0
+        for report, expected_id in zip(reports, expected_ids):
+            raw_ids = {candidate.get("id") for candidate in report.get("raw_candidates", [])}
+            reranked_candidates = report.get("reranked_candidates", [])
+            if expected_id in raw_ids:
+                raw_recall_count += 1
+            if reranked_candidates and reranked_candidates[0].get("id") == expected_id:
+                reranked_top1_count += 1
+        summary["raw_recall_count"] = raw_recall_count
+        summary["raw_recall_rate"] = rate(raw_recall_count)
+        summary["reranked_top1_count"] = reranked_top1_count
+        summary["reranked_top1_rate"] = rate(reranked_top1_count)
+
+    return summary

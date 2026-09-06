@@ -137,7 +137,7 @@ def _setup_parser() -> argparse.ArgumentParser:
         "preflight",
         help="[User] Run deterministic OEM preflight before non-trivial planning",
     )
-    preflight_p.add_argument("task", type=str)
+    preflight_p.add_argument("task", type=str, nargs="?", default="")
     preflight_p.add_argument("--project", type=str, default="")
     preflight_p.add_argument(
         "--limit",
@@ -154,6 +154,11 @@ def _setup_parser() -> argparse.ArgumentParser:
         "--no-audit",
         action="store_true",
         help="Do not append .oem/preflight/preflight_events.jsonl",
+    )
+    preflight_p.add_argument(
+        "--audit-report",
+        action="store_true",
+        help="Show the read-only preflight audit summary",
     )
 
     index_p = sub.add_parser("index", help="[Advanced] Rebuild derived search index for the project")

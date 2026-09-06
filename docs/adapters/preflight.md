@@ -83,6 +83,20 @@ If created in a future batch, it must be:
 
 ## Current instruction rule
 
+### Read-only audit report
+
+`oem preflight --audit-report [--json]` reads the existing
+`.oem/preflight/preflight_events.jsonl` stream without running preflight,
+writing, or indexing. The report is primary: it ignores a supplied task and
+`--no-audit`. JSON output has `status: "success"`,
+`operation: "preflight_audit_report"`, `project_root`, `memory_root`, and an
+`audit` summary containing `exists`, event and malformed/empty line counts,
+sorted decision and rejection-reason maps, rejected-memory totals, timestamp
+bounds, and `truncated`.
+
+The ranking summary is a test/evaluation helper, not a replacement for the
+normalized preflight contract.
+
 Batch 2 instructions should say:
 
 - before planning non-trivial tasks, call `knowledge_preflight`
