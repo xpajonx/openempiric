@@ -86,6 +86,8 @@ export interface ReflectionMetrics {
   fallback_extractions: number;
   empty_reflections: number;
   file_observations: number;
+  noise_events_filtered: number;
+  telemetry_events_skipped: number;
 }
 
 export interface RuntimeMetrics {

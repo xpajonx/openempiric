@@ -21,16 +21,55 @@ REFERENCE_TRACKING_WATERMARK_ISO = "2026-07-01T00:00:00Z"
 
 
 def _is_command_log_event(summary: str) -> bool:
-    """Return True if the summary looks like a raw command log that should not be indexed."""
+    """Return True when text is shaped like an operational command/tool log."""
     if not summary:
         return False
     patterns = [
+        r"^Command\s+(?:execution|failed|succeeded):",
+        r"^Tool\s+(?:call|result|execution):",
+        r"^MCP\s+(?:call|result|tool):",
+        r"^Exit code:", r"^Output:\s*\n?FAILED:",
         r"^Command `.*` executed with exit code",
-        r"^Exit code:",
-        r"^Output:\s*\n?FAILED:",
         r"^Command `.*`\s*\n?Output:",
     ]
-    return any(re.search(p, summary) for p in patterns)
+    return any(re.search(p, summary, re.IGNORECASE) for p in patterns)
+
+
+def is_ingestion_noise_event(event: dict) -> bool:
+    """Return whether an event is operational/generated noise, not durable memory."""
+    if not isinstance(event, dict):
+        return True
+    if event.get("ingestion_eligible") is False:
+        return True
+    event_type = (event.get("event_type") or event.get("type") or "").lower()
+    source = (event.get("source") or "").lower()
+    source_type = (event.get("source_type") or "").lower()
+    summary = str(event.get("summary") or "")
+    evidence = str(event.get("evidence") or "")
+    path = str(event.get("source_path") or event.get("path") or event.get("report_path") or "").replace("\\", "/").lower()
+    if event_type in {"telemetry", "command_log", "search_log"}:
+        return True
+    if source_type in {"oem_session_report", "oem_runtime_log", "oem_generated", "openempiric_generated"} or source_type.startswith("oem_"):
+        return True
+    if any(marker in path.replace("\\", "/") for marker in (".oem/sessions", ".oem/session_reports", ".oem/reports", ".oem/.runtime", ".oem/state")):
+        return True
+    command_log = _is_command_log_event(summary) or _is_command_log_event(evidence)
+    durable = {"failure", "decision", "outcome", "validation", "hypothesis", "experiment", "risk", "deprecation"}
+    runtime = source in {"opencode_hook", "orchestrator", "agent_runtime_signal"} and (source_type == "agent_runtime_signal" or source == "orchestrator")
+    recursive = re.search(r"session end / commit complete|session end completed|extracted knowledge events:|graph & index updates:|session duration:|tool calls:|^report:", f"{summary}\n{evidence}", re.IGNORECASE) is not None
+    if runtime:
+        if event_type == "failure":
+            return command_log
+        if event_type in durable:
+            return False
+        return True
+    if recursive and source in {"opencode_hook", "orchestrator", "agent_runtime_signal"}:
+        return True
+    if command_log:
+        if source == "opencode_hook" and event_type == "failure":
+            return True
+        return event_type not in durable
+    return False
 
 
 def memory_quality_score(summary: str, evidence: str) -> float:
@@ -729,7 +768,7 @@ class StateService:
         fitness_data = self.engine.fitness.calculate_fitness(project)
         events = self._load_events(project)
         for event in events:
-            if _is_command_log_event(event.get("summary", "")):
+            if is_ingestion_noise_event(event):
                 continue
             concept_candidates = event.get("concept_candidates", [])
             primary_term = (

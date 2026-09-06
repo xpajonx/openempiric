@@ -49,6 +49,13 @@ def test_source_classifier_marks_clean_reports_as_not_ingestion_eligible():
     assert is_ingestion_eligible(".oem/reports/clean-20260609-120000.md") is False
 
 
+def test_source_classifier_marks_sessions_as_session_reports():
+    classification = classify_source(".oem/sessions/session-2026-09-06.md")
+    assert classification.source_type == SourceType.OEM_SESSION_REPORT
+    assert classification.ingestion_eligible is False
+    assert is_ingestion_eligible(".oem/sessions/session-2026-09-06.md") is False
+
+
 def test_reflection_excludes_oem_generated_files(engine, tmp_path):
     concepts_dir = engine._concepts_dir(str(tmp_path))
     old_time = time.time() - 3600

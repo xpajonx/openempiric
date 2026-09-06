@@ -200,7 +200,7 @@ def classify_source(
                 source_path,
             )
 
-        if oem_parts[0] in {"session_reports", "reports"}:
+        if oem_parts[0] in {"session_reports", "reports", "sessions"}:
             return _classification(
                 SourceType.OEM_SESSION_REPORT,
                 False,

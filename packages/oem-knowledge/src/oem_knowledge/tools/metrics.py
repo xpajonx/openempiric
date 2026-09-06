@@ -37,6 +37,8 @@ def update_metrics_file(metrics_file: Path, updates: dict):
             "fallback_extractions": 0,
             "empty_reflections": 0,
             "file_observations": 0,
+            "noise_events_filtered": 0,
+            "telemetry_events_skipped": 0,
         },
         "runtime": {
             "sessions_started": 0,
@@ -73,6 +75,10 @@ def update_metrics_file(metrics_file: Path, updates: dict):
         data["reflection"]["empty_reflections"] += updates["empty_reflections"]
     if "file_observations" in updates:
         data["reflection"]["file_observations"] += updates["file_observations"]
+    if "noise_events_filtered" in updates:
+        data["reflection"]["noise_events_filtered"] += updates["noise_events_filtered"]
+    if "telemetry_events_skipped" in updates:
+        data["reflection"]["telemetry_events_skipped"] += updates["telemetry_events_skipped"]
     if "sessions_started" in updates:
         data["runtime"]["sessions_started"] += updates["sessions_started"]
     if "sessions_completed" in updates:

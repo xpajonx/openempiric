@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 from oem_knowledge.markdown.frontmatter import parse_frontmatter
 from oem_knowledge.source_classifier import classify_source
+from oem_knowledge.services.state import is_ingestion_noise_event
 
 logger = logging.getLogger(__name__)
 
@@ -542,6 +543,8 @@ class ReflectionService:
         structured_events_found = 0
         fallback_extraction_used = False
         fallback_extractions_count = 0
+        noise_events_filtered = 0
+        telemetry_events_skipped = 0
 
         excluded_oem_generated_paths: set[str] = set()
 
@@ -742,6 +745,8 @@ class ReflectionService:
                 "generated_concepts": [],
                 "top_sources": [],
                 "session_markers_detected": session_markers_detected,
+                "noise_events_filtered": noise_events_filtered,
+                "telemetry_events_skipped": telemetry_events_skipped,
             }
 
         reflection_status = {
@@ -759,22 +764,14 @@ class ReflectionService:
             }
 
         if telemetry:
-            duration = telemetry.get("duration_sec", 0)
-            tool_calls = telemetry.get("total_tool_calls", 0)
-            knowledge_events.append({
-                "type": "telemetry",
-                "concept": "Session Metrics",
-                "evidence": f"Session duration: {duration}s, Tool calls: {tool_calls}",
-                "confidence": 1,
-                "source": "orchestrator",
-            })
+            telemetry_events_skipped += 1
 
         # Process any structured/pending events
         if structured_enabled:
             for ev in all_events:
                 norm_ev = self._validate_and_normalize_event(ev, warnings_list)
                 if norm_ev:
-                    knowledge_events.append({
+                    candidate = {
                         "type": norm_ev["event_type"],
                         "concept": norm_ev["concept_candidates"][0] if norm_ev["concept_candidates"] else "General Learning",
                         "evidence": norm_ev["evidence"],
@@ -786,7 +783,11 @@ class ReflectionService:
                         "summary": norm_ev["summary"],
                         "source_type": "agent_runtime_signal",
                         "ingestion_eligible": True,
-                    })
+                    }
+                    if is_ingestion_noise_event(candidate):
+                        noise_events_filtered += 1
+                    else:
+                        knowledge_events.append(candidate)
                     structured_events_found += 1
                 else:
                     events_rejected += 1
@@ -799,6 +800,8 @@ class ReflectionService:
                     "mode": resolved_mode,
                     "events_written": 0,
                     "events_rejected": 0,
+                    "noise_events_filtered": noise_events_filtered,
+                    "telemetry_events_skipped": telemetry_events_skipped,
                     "warnings": ["Structured mode requires 'events' parameter to be a list."],
                     "suggestion": "Pass a valid list of event dictionaries.",
                     "report_path": None,
@@ -836,6 +839,8 @@ class ReflectionService:
                         "mode": resolved_mode,
                         "events_written": 0,
                         "events_rejected": 0,
+                        "noise_events_filtered": noise_events_filtered,
+                        "telemetry_events_skipped": telemetry_events_skipped,
                         "warnings": warnings_list,
                         "suggestion": "Use explicit markers or pass structured events.",
                         "report_path": None,
@@ -898,6 +903,8 @@ class ReflectionService:
                         "mode": resolved_mode,
                         "events_written": 0,
                         "events_rejected": 0,
+                        "noise_events_filtered": noise_events_filtered,
+                        "telemetry_events_skipped": telemetry_events_skipped,
                         "message": "Session closed with partial reflection; LLM extraction timed out.",
                         "suggestion": "Retry with structured events or explicit markers.",
                         "warnings": ["LLM extraction timed out before producing validated events."],
@@ -943,6 +950,9 @@ class ReflectionService:
             if ev.get("ingestion_eligible") is not None:
                 canonical_event["ingestion_eligible"] = ev["ingestion_eligible"]
 
+            if is_ingestion_noise_event(canonical_event):
+                noise_events_filtered += 1
+                continue
             canonical_events.append(canonical_event)
 
         canonical_events.sort(key=lambda e: _SOURCE_PRIORITY.get(e.get("source", ""), 99))
@@ -993,6 +1003,8 @@ class ReflectionService:
                 marker in conversation_text.lower()
                 for marker in ["session start", "session end"]
             ),
+            "noise_events_filtered": noise_events_filtered,
+            "telemetry_events_skipped": telemetry_events_skipped,
         }
 
         if llm_skipped:
@@ -1014,6 +1026,8 @@ class ReflectionService:
             "mode": resolved_mode,
             "events_written": len(canonical_events),
             "events_rejected": events_rejected,
+            "noise_events_filtered": noise_events_filtered,
+            "telemetry_events_skipped": telemetry_events_skipped,
             "warnings": warnings_list,
             "suggestion": suggestion_val,
             "report_path": None,
@@ -1030,12 +1044,14 @@ class ReflectionService:
             "mode": "skip",
             "events_written": 0,
             "events_rejected": 0,
+            "noise_events_filtered": 0,
+            "telemetry_events_skipped": 0,
             "warnings": [],
             "suggestion": "Concept extraction skipped (--no-extract).",
             "report_path": None,
             "knowledge_events": [],
             "canonical_events": [],
-            "explainability": {},
+            "explainability": {"noise_events_filtered": 0, "telemetry_events_skipped": 0},
             "reflection_time": 0.0,
             "reflection": {"extraction_skipped": True},
         }
@@ -1143,6 +1159,8 @@ project: {project or "default"}
                 "structured_events": structured_events_found,
                 "fallback_extractions": 1 if fallback_extraction_used else 0,
                 "file_observations": file_observations_count,
+                "noise_events_filtered": res.get("explainability", {}).get("noise_events_filtered", 0),
+                "telemetry_events_skipped": res.get("explainability", {}).get("telemetry_events_skipped", 0),
                 "empty_reflections": 1 if structured_events_found == 0 and not fallback_extraction_used and file_observations_count == 0 else 0,
                 "reflections": 1,
             })
@@ -1161,6 +1179,8 @@ project: {project or "default"}
             "mode": res.get("mode"),
             "events_written": len(canonical_events),
             "events_rejected": res.get("events_rejected", 0),
+            "noise_events_filtered": res.get("noise_events_filtered", 0),
+            "telemetry_events_skipped": res.get("telemetry_events_skipped", 0),
             "warnings": res.get("warnings", []),
             "suggestion": None,
             "report_path": str(report_file),

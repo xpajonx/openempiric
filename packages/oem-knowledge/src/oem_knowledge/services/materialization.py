@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 from oem_knowledge.markdown.frontmatter import parse_frontmatter
 from oem_knowledge.source_classifier import SourceType, classify_source
+from oem_knowledge.services.state import is_ingestion_noise_event
 
 logger = logging.getLogger(__name__)
 
@@ -221,6 +222,8 @@ class MaterializationService:
                 "materialized": [],
                 "skipped_oem_generated_events": 0,
                 "skipped_oem_generated_event_details": [],
+                "skipped_ingestion_noise_events": 0,
+                "skipped_ingestion_noise_event_details": [],
                 "suspicious_concepts": [],
             }
 
@@ -235,6 +238,8 @@ class MaterializationService:
                 "materialized": [],
                 "skipped_oem_generated_events": 0,
                 "skipped_oem_generated_event_details": [],
+                "skipped_ingestion_noise_events": 0,
+                "skipped_ingestion_noise_event_details": [],
                 "suspicious_concepts": [],
             }
 
@@ -248,6 +253,7 @@ class MaterializationService:
             fitness_data = self.engine.fitness.calculate_fitness(project, lock=False)
             materialized_log = []
             skipped_oem_generated_event_details = []
+            skipped_ingestion_noise_event_details = []
             suspicious_concepts = []
 
             # Derive already processed session IDs from the registry, skipping metadata/non-concept keys
@@ -284,6 +290,9 @@ class MaterializationService:
                 registry_updated = True
 
                 for event in knowledge_events:
+                    if is_ingestion_noise_event(event):
+                        skipped_ingestion_noise_event_details.append({"session_id": session_id, "event_id": event.get("event_id") or event.get("id"), "reason": "ingestion_noise"})
+                        continue
                     event_id = event.get("event_id") or event.get("id")
                     if event_id:
                         already_materialized = False
@@ -511,6 +520,8 @@ source_event_ids: {json.dumps(cdata.get("source_event_ids", []))}
             "materialized": materialized_log,
             "skipped_oem_generated_events": len(skipped_oem_generated_event_details),
             "skipped_oem_generated_event_details": skipped_oem_generated_event_details,
+            "skipped_ingestion_noise_events": len(skipped_ingestion_noise_event_details),
+            "skipped_ingestion_noise_event_details": skipped_ingestion_noise_event_details,
             "suspicious_concepts": suspicious_concepts,
         }
 

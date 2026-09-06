@@ -1429,6 +1429,8 @@ project: {project or "default"}
                     "fallback_extractions": 1 if fallback_extraction_used else 0,
                     "file_observations": file_observations_count,
                     "empty_reflections": 1 if structured_events_found == 0 and not fallback_extraction_used and file_observations_count == 0 else 0,
+                    "noise_events_filtered": res.get("explainability", {}).get("noise_events_filtered", 0),
+                    "telemetry_events_skipped": res.get("explainability", {}).get("telemetry_events_skipped", 0),
                     "reflections": 1,
                 })
             except Exception as e:

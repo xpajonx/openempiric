@@ -1,6 +1,7 @@
 import pytest
 import shutil
 import json
+import sqlite3
 import sys
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -111,3 +112,240 @@ def test_mcp_source_tools(temp_project):
     assert read_res["status"] == "success"
     assert read_res["operation"] == "knowledge_source_read"
     assert "def test_function():" in read_res["content"]
+
+
+class _SourceTestModel:
+    def __init__(self, dimension=4, fail=False):
+        self.dimension = dimension
+        self.fail = fail
+        self.calls = []
+
+    def embed(self, texts):
+        self.calls.append(list(texts))
+        if self.fail:
+            raise RuntimeError("fake_embedding_failure")
+        return [[float(index + 1)] * self.dimension for index, _ in enumerate(texts)]
+
+
+class _SemanticSourceTestModel:
+    def embed(self, texts):
+        vectors = []
+        for text in texts:
+            lowered = text.lower()
+            if "semantic target" in lowered or "get_target" in lowered or "semantic query" in lowered:
+                vectors.append([1.0, 0.0, 0.0, 0.0])
+            else:
+                vectors.append([0.0, 1.0, 0.0, 0.0])
+        return vectors
+
+
+class _WrongDimensionModel:
+    dimension = 4
+
+    def embed(self, texts):
+        return [[0.0] * (self.dimension + 1 if index == 0 else self.dimension) for index, _ in enumerate(texts)]
+
+
+class _NonFiniteModel:
+    dimension = 4
+
+    def embed(self, texts):
+        return [[float("nan")] * self.dimension for _ in texts]
+
+
+class _EmptyVectorModel:
+    dimension = 4
+
+    def embed(self, texts):
+        return [[] for _ in texts]
+
+
+def _hybrid_engine(project, model):
+    engine = KnowledgeEngine(project)
+    engine.init_project(str(project))
+    engine.search.set_retrieval_mode("hybrid")
+    engine._model = model
+    engine._local_load_failed = False
+    return engine
+
+
+def _write_source_file(project, name, content):
+    path = project / "src" / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    return path
+
+
+def test_source_embeddings_use_separate_store(tmp_path):
+    _write_source_file(tmp_path, "target.py", "def target():\n    return 1\n")
+    model = _SourceTestModel()
+    with _hybrid_engine(tmp_path, model) as engine:
+        stats = engine.source.index()
+        assert stats["status"] == "success"
+        assert stats["embedding_status"] == "ready"
+        with sqlite3.connect(engine.layout().source_index_db_path) as connection:
+            tables = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )
+            }
+            assert "source_embeddings" in tables
+            assert connection.execute("SELECT COUNT(*) FROM source_embeddings").fetchone()[0] > 0
+        assert engine.search.vector_store.all_chunks() == []
+
+
+def test_source_embedding_generation_and_content_invalidation(tmp_path):
+    source = _write_source_file(tmp_path, "target.py", "def target():\n    return 1\n")
+    model_a = _SourceTestModel(dimension=4)
+    with _hybrid_engine(tmp_path, model_a) as engine:
+        engine.source.index()
+        first_call_count = len(model_a.calls)
+        with sqlite3.connect(engine.layout().source_index_db_path) as connection:
+            first_rows = connection.execute(
+                "SELECT embedding_model, embedding_dimension, content_hash "
+                "FROM source_embeddings"
+            ).fetchall()
+        engine.source.index()
+        assert len(model_a.calls) == first_call_count + 1
+        source.write_text("def target():\n    return 2\n", encoding="utf-8")
+        engine.source.index()
+        with sqlite3.connect(engine.layout().source_index_db_path) as connection:
+            current_hash = connection.execute(
+                "SELECT content_hash FROM source_chunks WHERE rel_path = 'src/target.py'"
+            ).fetchone()[0]
+            assert connection.execute(
+                "SELECT COUNT(*) FROM source_embeddings WHERE content_hash = ?",
+                (current_hash,),
+            ).fetchone()[0] == 1
+        engine.config_embedding_set_model("test/model-b")
+        model_b = _SourceTestModel(dimension=3)
+        engine._model = model_b
+        engine._local_load_failed = False
+        engine.source.index()
+        with sqlite3.connect(engine.layout().source_index_db_path) as connection:
+            generations = set(
+                connection.execute(
+                    "SELECT embedding_model, embedding_dimension FROM source_embeddings"
+                ).fetchall()
+            )
+        assert (first_rows[0][0], first_rows[0][1]) in generations
+        assert ("test/model-b", 3) in generations
+        manifest = json.loads(engine.layout().source_manifest_path.read_text(encoding="utf-8"))
+        assert manifest["embedding"]["model"] == "test/model-b"
+        assert manifest["embedding"]["dimension"] == 3
+
+
+def test_source_embedding_failure_keeps_bm25_and_writes_no_partial_rows(tmp_path):
+    _write_source_file(tmp_path, "target.py", "def target():\n    return 1\n")
+    with _hybrid_engine(tmp_path, _SourceTestModel(fail=True)) as engine:
+        stats = engine.source.index()
+        assert stats["status"] == "success"
+        assert stats["embedding_status"] == "bm25_fallback"
+        assert any(item.startswith("source_embedding_fallback:") for item in stats["warnings"])
+        with sqlite3.connect(engine.layout().source_index_db_path) as connection:
+            assert connection.execute("SELECT COUNT(*) FROM source_embeddings").fetchone()[0] == 0
+
+
+def _assert_malformed_embedding_batch_falls_back_to_bm25(tmp_path, model):
+    _write_source_file(tmp_path, "target.py", "def target():\n    return 1\n")
+    _write_source_file(tmp_path, "second.py", "def second():\n    return 2\n")
+    with _hybrid_engine(tmp_path, model) as engine:
+        stats = engine.source.index()
+        assert stats["embedding_status"] == "bm25_fallback"
+        assert any(item.startswith("source_embedding_fallback:") for item in stats["warnings"])
+        with sqlite3.connect(engine.layout().source_index_db_path) as connection:
+            assert connection.execute("SELECT COUNT(*) FROM source_embeddings").fetchone()[0] == 0
+
+
+def test_wrong_dimension_batch_falls_back_to_bm25(tmp_path):
+    _assert_malformed_embedding_batch_falls_back_to_bm25(tmp_path, _WrongDimensionModel())
+
+
+def test_non_finite_embedding_falls_back_to_bm25(tmp_path):
+    _assert_malformed_embedding_batch_falls_back_to_bm25(tmp_path, _NonFiniteModel())
+
+
+def test_empty_vector_embedding_falls_back_to_bm25(tmp_path):
+    _assert_malformed_embedding_batch_falls_back_to_bm25(tmp_path, _EmptyVectorModel())
+
+
+def test_corrupted_stored_embedding_falls_back_to_bm25(tmp_path):
+    _write_source_file(tmp_path, "target.py", "def target():\n    return 1\n")
+    with _hybrid_engine(tmp_path, _SourceTestModel()) as engine:
+        assert engine.source.index()["embedding_status"] == "ready"
+        with sqlite3.connect(engine.layout().source_index_db_path) as connection:
+            before_count = connection.execute(
+                "SELECT COUNT(*) FROM source_embeddings"
+            ).fetchone()[0]
+            connection.execute("UPDATE source_embeddings SET embedding = 'NOT_VALID_JSON'")
+            connection.commit()
+        stats = engine.source.index()
+        assert stats["embedding_status"] == "bm25_fallback"
+        assert any(item.startswith("source_embedding_fallback:") for item in stats["warnings"])
+        with sqlite3.connect(engine.layout().source_index_db_path) as connection:
+            assert connection.execute("SELECT COUNT(*) FROM source_embeddings").fetchone()[0] == before_count
+
+
+def test_manifest_os_replace_failure_preserves_previous(tmp_path):
+    _write_source_file(tmp_path, "target.py", "def target():\n    return 1\n")
+    with _hybrid_engine(tmp_path, _SourceTestModel()) as engine:
+        first = engine.source.index()
+        manifest_path = engine.layout().source_manifest_path
+        previous = json.loads(manifest_path.read_text(encoding="utf-8"))
+        with patch(
+            "oem_knowledge.services.source_corpus.os.replace",
+            side_effect=OSError("replace failed"),
+        ):
+            with pytest.raises(OSError, match="replace failed"):
+                engine.source.index()
+        current = json.loads(manifest_path.read_text(encoding="utf-8"))
+        assert first["embedding_status"] == "ready"
+        assert current["embedding"]["status"] == previous["embedding"]["status"]
+
+
+def test_hybrid_source_search_preserves_exact_and_adds_dense_diagnostics(tmp_path):
+    _write_source_file(
+        tmp_path,
+        "target.py",
+        "def get_target():\n    # semantic target\n    return 1\n",
+    )
+    _write_source_file(tmp_path, "decoy.py", "def unrelated():\n    # semantic decoy\n    return 0\n")
+    with _hybrid_engine(tmp_path, _SemanticSourceTestModel()) as engine:
+        stats = engine.source.index()
+        assert stats["embedding_status"] == "ready"
+        semantic = engine.source.search("semantic query", k=2)
+        assert semantic["status"] == "success"
+        assert semantic["results"][0]["metadata"]["rel_path"] == "src/target.py"
+        diagnostics = semantic["results"][0]["metadata"]["source_diagnostics"]
+        assert diagnostics["retrieval_mode"] == "hybrid"
+        assert diagnostics["dense_available"] is True
+        assert diagnostics["dense_score"] > 0.25
+        exact = engine.source.search("get_target", k=2)
+        assert exact["status"] == "success"
+        assert exact["results"][0]["metadata"]["rel_path"] == "src/target.py"
+
+
+def test_hybrid_source_search_falls_back_without_downloading(tmp_path):
+    _write_source_file(tmp_path, "target.py", "def get_target():\n    return 1\n")
+    with _hybrid_engine(tmp_path, _SourceTestModel()) as engine:
+        engine.source.index()
+        with patch.object(engine.search, "embed", side_effect=RuntimeError("query_embedding_failure")):
+            with patch.object(engine, "_download_model", side_effect=AssertionError("download forbidden")):
+                result = engine.source.search("get_target", k=1)
+        assert result["status"] == "success"
+        assert result["warnings"] == ["source_dense_fallback:embedding_unavailable"]
+        diagnostics = result["results"][0]["metadata"]["source_diagnostics"]
+        assert diagnostics["dense_available"] is False
+        assert diagnostics["dense_fallback_reason"] == "embedding_unavailable"
+
+
+def test_removed_source_files_remove_all_embedding_generations(tmp_path):
+    source = _write_source_file(tmp_path, "target.py", "def target():\n    return 1\n")
+    with _hybrid_engine(tmp_path, _SourceTestModel()) as engine:
+        engine.source.index()
+        source.unlink()
+        engine.source.index()
+        with sqlite3.connect(engine.layout().source_index_db_path) as connection:
+            assert connection.execute("SELECT COUNT(*) FROM source_chunks").fetchone()[0] == 0
+            assert connection.execute("SELECT COUNT(*) FROM source_embeddings").fetchone()[0] == 0

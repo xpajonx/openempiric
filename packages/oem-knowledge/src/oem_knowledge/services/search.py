@@ -619,7 +619,7 @@ class SearchService:
         malformed, or missing-id records are rejected. Budget-bounded and
         exception-safe: never raises.
         """
-        from oem_knowledge.services.state import _is_command_log_event
+        from oem_knowledge.services.state import is_ingestion_noise_event
         start = time.time()
         stats = {"status": "success", "indexed": 0, "rejected": 0, "reason": None}
         # The user events path is identity-independent; existence is the gate
@@ -649,7 +649,7 @@ class SearchService:
                     rejected += 1
                     continue
                 summary = str(ev.get("summary") or ev.get("evidence") or "")
-                if _is_command_log_event(summary):
+                if not summary or is_ingestion_noise_event(ev):
                     rejected += 1
                     continue
                 memory_type = ev.get("event_type") or ev.get("type") or "observation"

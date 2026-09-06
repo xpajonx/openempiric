@@ -104,6 +104,8 @@ class ReflectionMetrics(BaseModel):
     fallback_extractions: int = 0
     empty_reflections: int = 0
     file_observations: int = 0
+    noise_events_filtered: int = 0
+    telemetry_events_skipped: int = 0
 
 
 class RuntimeMetrics(BaseModel):
@@ -195,5 +197,4 @@ class RetrievalRecord(TypedDict, total=False):
     project: str
     session_id: str
     provenance: dict
-
 

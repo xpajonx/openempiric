@@ -307,6 +307,7 @@ BOOST_EXACT_PATH_QUERY = 100.0
 PENALTY_METADATA_ONLY = 10.0
 MIN_POSITIVE_RESULT_SCORE = 0.0
 WEAK_RESULT_MIN_SCORE = 5.0
+SOURCE_DENSE_EVIDENCE_THRESHOLD = 0.25
 SCORE_TIE_EPSILON = 1e-9
 
 # BM25 normalization parameters (used in _bm25_scores)
@@ -574,6 +575,9 @@ class _SourceIndexStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA synchronous=NORMAL")
+        self.conn.execute("PRAGMA busy_timeout=5000")
         self._ensure_schema()
 
     def _ensure_schema(self) -> None:
@@ -612,6 +616,26 @@ class _SourceIndexStore:
             self.conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_source_chunks_rel_path ON source_chunks(rel_path)"
             )
+            self.conn.execute("""CREATE TABLE IF NOT EXISTS source_embeddings (
+                chunk_id TEXT NOT NULL, embedding_generation TEXT NOT NULL,
+                embedding_model TEXT NOT NULL, embedding_dimension INTEGER NOT NULL,
+                content_hash TEXT NOT NULL, embedding TEXT NOT NULL, created_at TEXT NOT NULL,
+                PRIMARY KEY(chunk_id, embedding_generation)
+            )""")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_source_embeddings_model_dim ON source_embeddings(embedding_model, embedding_dimension)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_source_embeddings_chunk ON source_embeddings(chunk_id)")
+
+    def upsert_embeddings(self, rows: list[dict[str, Any]]) -> None:
+        with self.conn:
+            self.conn.executemany("""INSERT OR REPLACE INTO source_embeddings
+                (chunk_id, embedding_generation, embedding_model, embedding_dimension, content_hash, embedding, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)""", [(
+                r["chunk_id"], r["embedding_generation"], r["embedding_model"], r["embedding_dimension"],
+                r["content_hash"], r["embedding"], r["created_at"]) for r in rows])
+
+    def load_embeddings(self, model: str, dimension: int) -> dict[tuple[str, str], list[float]]:
+        rows = self.conn.execute("SELECT chunk_id, content_hash, embedding FROM source_embeddings WHERE embedding_model=? AND embedding_dimension=?", (model, dimension)).fetchall()
+        return {(r["chunk_id"], r["content_hash"]): json.loads(r["embedding"]) for r in rows}
 
     def replace_file(self, file_record: dict[str, Any], chunks: list[dict[str, Any]]) -> None:
         rel_path = file_record["rel_path"]
@@ -663,6 +687,11 @@ class _SourceIndexStore:
         if not rel_paths:
             return
         with self.conn:
+            self.conn.executemany(
+                "DELETE FROM source_embeddings WHERE chunk_id IN ("
+                "SELECT id FROM source_chunks WHERE rel_path = ?)",
+                [(item,) for item in rel_paths],
+            )
             self.conn.executemany("DELETE FROM source_chunks WHERE rel_path = ?", [(item,) for item in rel_paths])
             self.conn.executemany("DELETE FROM source_files WHERE rel_path = ?", [(item,) for item in rel_paths])
 
@@ -1348,7 +1377,102 @@ class SourceCorpusService:
             "max_read_characters": int(config["max_read_characters"]),
         }
 
+        embedding_status = None
+        embedding_failure = None
+        embedding_manifest = previous_manifest.get("embedding") if isinstance(previous_manifest, dict) else None
         if not dry_run:
+            # Embeddings are deliberately a second transaction after text indexing.
+            try:
+                mode = self.engine.search.resolve_retrieval_mode() if self.engine is not None else "bm25"
+                if mode == "hybrid":
+                    if store is None:
+                        raise RuntimeError("source_store_unavailable")
+                    model_name = self.engine.resolve_embedding_model()
+                    current_chunks = store.iter_chunks()
+                    if current_chunks:
+                        active = previous_manifest.get("embedding", {}) if isinstance(previous_manifest, dict) else {}
+                        active_model = active.get("model")
+                        try:
+                            active_dimension = int(active.get("dimension") or 0)
+                        except (TypeError, ValueError):
+                            active_dimension = 0
+                        existing_rows = store.conn.execute(
+                            "SELECT chunk_id, content_hash, embedding_dimension "
+                            "FROM source_embeddings WHERE embedding_model = ?",
+                            (model_name,),
+                        ).fetchall()
+                        existing_dimensions = {
+                            (row["chunk_id"], row["content_hash"]): int(row["embedding_dimension"])
+                            for row in existing_rows
+                        }
+                        probe = self.engine.search.embed([current_chunks[0]["document"]])
+                        if len(probe) != 1 or not probe[0]:
+                            raise ValueError("invalid_embedding_probe")
+                        observed_dimension = len(probe[0])
+                        if observed_dimension <= 0:
+                            raise ValueError("invalid_embedding_dimension")
+                        dimension = observed_dimension
+                        missing = [
+                            chunk
+                            for chunk in current_chunks
+                            if existing_dimensions.get((chunk["id"], chunk["content_hash"])) != dimension
+                        ]
+                        if active_model != model_name or active_dimension != dimension:
+                            missing = current_chunks
+                        if missing:
+                            vectors = self.engine.search.embed([chunk["document"] for chunk in missing])
+                            if len(vectors) != len(missing) or not vectors:
+                                raise ValueError("invalid_embedding_batch")
+                            if any(not vector or len(vector) != dimension for vector in vectors):
+                                raise ValueError("inconsistent_embedding_dimensions")
+                            if any(
+                                not math.isfinite(float(value))
+                                for vector in vectors
+                                for value in vector
+                            ):
+                                raise ValueError("non_finite_embedding")
+                            now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                            generation = f"{model_name}:{dimension}"
+                            rows_to_write = [
+                                {
+                                    "chunk_id": chunk["id"],
+                                    "embedding_generation": generation,
+                                    "embedding_model": model_name,
+                                    "embedding_dimension": dimension,
+                                    "content_hash": chunk["content_hash"],
+                                    "embedding": json.dumps([float(value) for value in vector]),
+                                    "created_at": now,
+                                }
+                                for chunk, vector in zip(missing, vectors)
+                            ]
+                            store.upsert_embeddings(rows_to_write)
+                        generation = f"{model_name}:{dimension}"
+                        stored = store.load_embeddings(model_name, dimension)
+                        if not all(
+                            (chunk["id"], chunk["content_hash"]) in stored
+                            for chunk in current_chunks
+                        ):
+                            raise ValueError("incomplete_embedding_generation")
+                        count = store.conn.execute(
+                            "SELECT COUNT(*) FROM source_embeddings "
+                            "WHERE embedding_generation = ?",
+                            (generation,),
+                        ).fetchone()[0]
+                        embedding_manifest = {
+                            "active_generation": generation,
+                            "model": model_name,
+                            "dimension": dimension,
+                            "status": "ready",
+                            "embedded_chunks": count,
+                        }
+                        embedding_status = "ready"
+                    else:
+                        embedding_status = "no_chunks"
+                else:
+                    embedding_status = "bm25"
+            except Exception as exc:
+                embedding_status = "bm25_fallback"
+                embedding_failure = re.sub(r"[^a-zA-Z0-9_.-]", "_", str(exc))[:80] or "embedding_unavailable"
             manifest = {
                 "version": "1.0.1",
                 "corpus": "source",
@@ -1356,12 +1480,25 @@ class SourceCorpusService:
                 "summary": summary,
                 "files": manifest_files,
             }
+            if embedding_manifest:
+                manifest["embedding"] = embedding_manifest
             manifest_path = self._manifest_path()
             manifest_path.parent.mkdir(parents=True, exist_ok=True)
-            manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+            temporary = manifest_path.with_name(manifest_path.name + ".tmp")
+            try:
+                temporary.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+                os.replace(temporary, manifest_path)
+            finally:
+                if temporary.exists():
+                    temporary.unlink()
 
         stats["summary"] = summary
         stats["warnings"] = []
+        if embedding_status:
+            stats["embedding_status"] = embedding_status
+        if embedding_failure:
+            stats["embedding_failure"] = embedding_failure
+            stats["warnings"].append(f"source_embedding_fallback:{embedding_failure}")
         if dry_run:
             stats["warnings"].append("dry_run_no_files_written")
         return stats
@@ -1497,6 +1634,11 @@ class SourceCorpusService:
     def search(self, query: str, k: int = 5) -> dict[str, Any]:
         project_root = self._project_root()
         query_cleaned = query.strip().strip("'\"")
+        warnings: list[str] = []
+        retrieval_mode = self.engine.search.resolve_retrieval_mode() if self.engine is not None else "bm25"
+        dense_vectors: dict[tuple[str, str], list[float]] = {}
+        query_vector: list[float] | None = None
+        dense_reason = None
         
         # Path safety/traversal check
         if "/" in query_cleaned or "\\" in query_cleaned or ".." in query_cleaned:
@@ -1530,8 +1672,33 @@ class SourceCorpusService:
         store = _SourceIndexStore(self._db_path())
         try:
             rows = store.iter_chunks()
+            if retrieval_mode == "hybrid":
+                embedding = manifest.get("embedding", {})
+                model_name = self.engine.resolve_embedding_model()
+                dimension = int(embedding.get("dimension", 0))
+                if (
+                    embedding.get("status") != "ready"
+                    or embedding.get("model") != model_name
+                    or dimension <= 0
+                ):
+                    dense_reason = "embedding_generation_unavailable"
+                else:
+                    dense_vectors = store.load_embeddings(model_name, dimension)
+                    if not dense_vectors:
+                        dense_reason = "embedding_content_stale"
+                    else:
+                        query_vector = self.engine.search.embed([query])[0]
+                        if len(query_vector) != dimension:
+                            dense_vectors = {}
+                            dense_reason = "embedding_dimension_mismatch"
+        except Exception:
+            dense_vectors = {}
+            dense_reason = "embedding_unavailable"
         finally:
             store.close()
+        dense_available = bool(dense_vectors and query_vector)
+        if retrieval_mode == "hybrid" and not dense_available:
+            warnings.append(f"source_dense_fallback:{dense_reason or 'embedding_unavailable'}")
 
         # Check if the query is an exact path query
         is_exact_path_query = False
@@ -1580,9 +1747,20 @@ class SourceCorpusService:
             rel_path = row["rel_path"]
             document = row["document"]
             normalized_base_score = normalized_base_scores[idx]
+            dense_score = 0.0
+            if dense_available:
+                vector = dense_vectors.get((row["id"], row["content_hash"]))
+                if vector is not None:
+                    dense_score = min(1.0, max(0.0, self.engine.search.cosine_similarity(query_vector, vector)))
+            combined_score = 0.35 * normalized_base_score + 0.65 * dense_score if dense_available else normalized_base_score
 
             matched_identifiers = _matched_source_identifiers(identifiers, document)
             matched_identifier_count = len(matched_identifiers)
+            dense_evidence = (
+                dense_available
+                and dense_score >= SOURCE_DENSE_EVIDENCE_THRESHOLD
+                and (not identifiers or matched_identifier_count > 0)
+            )
 
             source_type = _classify_source_result(rel_path, document, matched_identifiers)
 
@@ -1634,6 +1812,7 @@ class SourceCorpusService:
             
             has_boost_evidence = (
                 normalized_base_score > 0.0
+                or dense_evidence
                 or matched_identifier_count > 0
                 or has_symbol_def
                 or (is_exact_path_query and rel_path == potential_path)
@@ -1749,12 +1928,17 @@ class SourceCorpusService:
 
             total_boost = sum(boosts.values())
             total_penalty = sum(penalties.values())
-            final_score = round(normalized_base_score + total_boost - total_penalty, 4)
+            final_score = round(combined_score + total_boost - total_penalty, 4)
 
             metadata["source_type"] = source_type
             metadata["source_diagnostics"] = {
                 "source_type": source_type,
                 "base_score": round(normalized_base_score, 4),
+                "retrieval_mode": retrieval_mode,
+                "dense_available": dense_available,
+                "bm25_score": round(normalized_base_score, 4),
+                "dense_score": round(dense_score, 4),
+                "dense_evidence": dense_evidence,
                 "final_score": final_score,
                 "ranking_reason": reasons,
                 "ranking_boosts": boosts,
@@ -1767,6 +1951,8 @@ class SourceCorpusService:
                     "test_intent": test_intent,
                 }
             }
+            if dense_reason:
+                metadata["source_diagnostics"]["dense_fallback_reason"] = dense_reason
             metadata["rel_path"] = rel_path
             metadata["start_line"] = row["start_line"]
             metadata["end_line"] = row["end_line"]
@@ -1839,6 +2025,7 @@ class SourceCorpusService:
                 or any("symbol definition" in reason for reason in diag["ranking_reason"])
                 or any("path match" in reason for reason in diag["ranking_reason"])
                 or diag.get("exact_path_query", False)
+                or diag.get("dense_evidence", False)
             )
 
             # Exclude zero or negative scores
@@ -1863,14 +2050,14 @@ class SourceCorpusService:
             return {
                 "status": "no_relevant_source_results",
                 "results": [],
-                "warnings": [],
+                "warnings": warnings,
                 "project_root": str(project_root),
             }
 
         return {
             "status": "success",
             "results": filtered_ranked[: max(1, int(k))],
-            "warnings": [],
+            "warnings": warnings,
             "project_root": str(project_root),
         }
 
