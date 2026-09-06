@@ -36,6 +36,7 @@ from contextlib import contextmanager
 from typing import Callable
 
 logger = logging.getLogger(__name__)
+DEFAULT_EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
 
 class PhaseTimer:
     def __init__(self):
@@ -428,6 +429,21 @@ class KnowledgeEngine:
                 self._load_local_model()
             return self._model
 
+    def resolve_embedding_model(self) -> str:
+        """Return the configured model, failing safe for invalid configuration."""
+        path = self._resolve_harness() / "config" / "embedding_model.json"
+        if not path.exists():
+            return DEFAULT_EMBEDDING_MODEL
+        try:
+            value = json.loads(path.read_text(encoding="utf-8")).get("embedding_model")
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        except Exception as exc:
+            logger.warning("Invalid embedding model configuration %s: %s; using default %s", path, exc, DEFAULT_EMBEDDING_MODEL)
+            return DEFAULT_EMBEDDING_MODEL
+        logger.warning("Invalid embedding model configuration %s; using default %s", path, DEFAULT_EMBEDDING_MODEL)
+        return DEFAULT_EMBEDDING_MODEL
+
     def _load_local_model(self):
         """Load the embedding model from the local cache only. Never downloads.
         The failure is memoized so a broken cache cannot trigger repeated attempts."""
@@ -440,12 +456,12 @@ class KnowledgeEngine:
                 from fastembed import TextEmbedding
             except ImportError:
                 raise
+            model_name = self.resolve_embedding_model()
             cache_path = str(Path.home() / ".cache" / "fastembed")
             try:
-                self._model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5", cache_dir=cache_path, local_files_only=True)
+                self._model = TextEmbedding(model_name=model_name, cache_dir=cache_path, local_files_only=True)
             except Exception as e:
-                import logging
-                logging.warning("[OEM] Embedding model 'BAAI/bge-small-en-v1.5' not available in local cache (%s). Run `oem warmup` to download it.", e)
+                logging.warning("[OEM] Embedding model '%s' not available in local cache (%s). Run `oem warmup` to download it.", model_name, e)
                 self._local_load_failed = True
                 return None
             self._local_load_failed = False
@@ -460,9 +476,10 @@ class KnowledgeEngine:
             except ImportError:
                 self._local_load_failed = True
                 return None
+            model_name = self.resolve_embedding_model()
             cache_path = str(Path.home() / ".cache" / "fastembed")
             try:
-                self._model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5", cache_dir=cache_path, local_files_only=False)
+                self._model = TextEmbedding(model_name=model_name, cache_dir=cache_path, local_files_only=False)
             except Exception as e:
                 logging.warning("[OEM] Embedding model download failed: %s", e)
                 self._model = None
@@ -617,10 +634,11 @@ class KnowledgeEngine:
 
     def warmup(self) -> dict:
         with self._model_lock:
+            model_name = self.resolve_embedding_model()
             if self._model is not None:
                 print("[OEM] Embedding model ready (cached globally, one-time per machine).", file=sys.stderr)
-                return {"status": "success", "model": "BAAI/bge-small-en-v1.5"}
-            print("[OEM] Warming up embedding model 'BAAI/bge-small-en-v1.5'...", file=sys.stderr)
+                return {"status": "success", "model": model_name}
+            print(f"[OEM] Warming up embedding model '{model_name}'...", file=sys.stderr)
             try:
                 from fastembed import TextEmbedding  # noqa: F401
             except ImportError:
@@ -632,7 +650,7 @@ class KnowledgeEngine:
             if model is None:
                 raise RuntimeError("Embedding model download failed. Check network access and retry `oem warmup`.")
             print("[OEM] Embedding model ready (cached globally, one-time per machine).", file=sys.stderr)
-            return {"status": "success", "model": "BAAI/bge-small-en-v1.5"}
+            return {"status": "success", "model": model_name}
 
     def warmup_if_needed(self) -> dict:
         """Warm up embedding model if already cached locally. Never downloads."""
@@ -646,10 +664,11 @@ class KnowledgeEngine:
             if self._model is not None:
                 return {"status": "success"}
             cache_dir = Path.home() / ".cache" / "fastembed"
+            slug = self.resolve_embedding_model().rsplit("/", 1)[-1]
             known_paths = (
-                cache_dir / "models--qdrant--bge-small-en-v1.5-onnx-q",
-                cache_dir / "bge-small-en-v1.5",
-                cache_dir / "fast-bge-small-en-v1.5",
+                cache_dir / f"models--qdrant--{slug}-onnx-q",
+                cache_dir / slug,
+                cache_dir / f"fast-{slug}",
             )
             if not any(p.exists() for p in known_paths):
                 return {"status": "skipped", "reason": "local_cache_missing"}
@@ -2072,18 +2091,19 @@ project: {project or "default"}
             ]
 
             for cache_dir in cache_dirs:
-                if self._validate_fastembed_cache_dir(cache_dir):
+                if self._validate_fastembed_cache_dir(cache_dir, self.resolve_embedding_model()):
                     return True
 
             return False
         except Exception:
             return False
 
-    def _validate_fastembed_cache_dir(self, cache_dir: Path) -> bool:
+    def _validate_fastembed_cache_dir(self, cache_dir: Path, model_name: str = DEFAULT_EMBEDDING_MODEL) -> bool:
         """Strictly validate a fastembed cache directory: broken or partial
         caches must be detected and rejected."""
         # HuggingFace layout
-        hf_dir = cache_dir / "models--qdrant--bge-small-en-v1.5-onnx-q"
+        slug = model_name.rsplit("/", 1)[-1]
+        hf_dir = cache_dir / f"models--qdrant--{slug}-onnx-q"
         if hf_dir.is_dir():
             refs_main = hf_dir / "refs" / "main"
             if not refs_main.is_file():
@@ -2140,7 +2160,7 @@ project: {project or "default"}
             return True
 
         # Legacy GCS layouts
-        for legacy_dir_name in ("bge-small-en-v1.5", "fast-bge-small-en-v1.5"):
+        for legacy_dir_name in (slug, f"fast-{slug}"):
             gcs_dir = cache_dir / legacy_dir_name
             if gcs_dir.is_dir():
                 onnx = gcs_dir / "model.onnx"
@@ -2157,16 +2177,18 @@ project: {project or "default"}
             model_name: New embedding model name (e.g., 'BAAI/bge-large-en-v1.5')
             dry_run: If True, report how many chunks would be re-embedded without making changes
         """
-        import json
+        if not isinstance(model_name, str) or not model_name.strip():
+            raise ValueError("Embedding model name must be a non-blank string")
+        model_name = model_name.strip()
         harness = self._resolve_harness()
         config_path = harness / "config" / "embedding_model.json"
 
-        current_model = getattr(self.search, "_embedding_model", None) or "BAAI/bge-small-en-v1.5"
+        current_model = self.resolve_embedding_model()
 
         if dry_run:
             count = "unknown"
             try:
-                store = getattr(self.search, "_store", None)
+                store = getattr(self.search, "_vector_store", None)
                 if store and hasattr(store, "count"):
                     count = store.count()
             except Exception:
@@ -2186,7 +2208,9 @@ project: {project or "default"}
             "switched_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }, indent=2))
 
-        self.search._embedding_model = model_name
+        with self._model_lock:
+            self._model = None
+            self._local_load_failed = False
 
         return {
             "status": "success",

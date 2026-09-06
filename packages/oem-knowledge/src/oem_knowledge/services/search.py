@@ -418,6 +418,7 @@ class SearchService:
                             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(mtime)),
                             "importance": imp,
                             "memory_type": doc_memory_type,
+                             "embedding_model": self.engine.resolve_embedding_model(),
                         }
                         # Propagate document-level metadata from frontmatter
                         for fm_key in ("concept_id", "concept_status"):
@@ -454,6 +455,9 @@ class SearchService:
                 try:
                     texts = [c["text"] for c in chunks_to_upsert]
                     embeddings = self.embed(texts)
+                    for c, embedding in zip(chunks_to_upsert, embeddings):
+                        if embedding is not None:
+                            c["meta"]["embedding_dimension"] = len(embedding)
                 except Exception as e:
                     logger.warning("Batch embedding generation error: %s", e)
                     embeddings = [None] * len(chunks_to_upsert)
@@ -580,12 +584,16 @@ class SearchService:
                 "scope": "project",
                 "memory_type": event.get("event_type", event.get("type", "observation")),
                 "timestamp": str(event.get("timestamp", event.get("created_at", time.time()))),
+                "embedding_model": self.engine.resolve_embedding_model(),
             }
             chunks_to_upsert.append((chunk_id, document, meta))
         if chunks_to_upsert:
             texts = [c[1] for c in chunks_to_upsert]
             if self.resolve_retrieval_mode() == "hybrid":
                 embeddings = self.embed(texts)
+                for c, embedding in zip(chunks_to_upsert, embeddings):
+                    if embedding is not None:
+                        c[2]["embedding_dimension"] = len(embedding)
             else:
                 embeddings = [None] * len(texts)
             batch = [(cid, doc, meta, emb) for (cid, doc, meta), emb in zip(chunks_to_upsert, embeddings)]
@@ -658,6 +666,7 @@ class SearchService:
                         "project": str(ev.get("project", "") or ""),
                         "session_id": str(ev.get("session_id", "") or ""),
                         "provenance": "user_events",
+                        "embedding_model": self.engine.resolve_embedding_model(),
                     },
                 ))
         if budget_seconds is not None and (time.time() - start) >= budget_seconds:
@@ -678,6 +687,9 @@ class SearchService:
         try:
             if self.resolve_retrieval_mode() == "hybrid":
                 embeddings = self.embed([e[1] for e in events])
+                for event, embedding in zip(events, embeddings):
+                    if embedding is not None:
+                        event[2]["embedding_dimension"] = len(embedding)
             else:
                 embeddings = [None] * len(events)
             store.upsert_batch([(cid, doc, meta, emb) for (cid, doc, meta), emb in zip(events, embeddings)])
@@ -724,10 +736,19 @@ class SearchService:
         if retrieval_mode == "hybrid":
             query_vec = self.embed([query])[0]
             candidates = []
+            current_model = self.engine.resolve_embedding_model()
+            warned_incompatible = False
             for idx, chunk in enumerate(chunks):
-                dense = self.cosine_similarity(query_vec, chunk["embedding"]) if chunk["embedding"] else 0.0
-                sparse = bm25_scores[idx]
                 meta = chunk["metadata"]
+                embedding = chunk["embedding"]
+                compatible = (embedding and meta.get("embedding_model") == current_model
+                              and meta.get("embedding_dimension") == len(query_vec)
+                              and len(embedding) == len(query_vec))
+                if not compatible and embedding and not warned_incompatible:
+                    logger.warning("Skipping dense scoring for incompatible or legacy vectors; re-index with model '%s'.", current_model)
+                    warned_incompatible = True
+                dense = self.cosine_similarity(query_vec, embedding) if compatible else 0.0
+                sparse = bm25_scores[idx]
                 recency = self._recency_score(meta.get("created_at", str(time.time())))
                 importance = self._importance_score(meta.get("importance", "medium"))
                 final = (
