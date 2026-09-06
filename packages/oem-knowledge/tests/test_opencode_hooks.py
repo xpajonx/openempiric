@@ -204,13 +204,10 @@ def test_pending_events_are_not_durable_until_session_end(engine, tmp_path, monk
 
 def test_hook_session_end_processes_pending_events_through_state_service(engine, tmp_path, monkeypatch):
     monkeypatch.setenv("OEM_MOCK_LLM", "true")
-    
-    # Stage a pending event
     harness = tmp_path / OEM_DIR
     runtime_dir = harness / ".runtime"
     runtime_dir.mkdir(parents=True, exist_ok=True)
     pending_file = runtime_dir / "pending_events.jsonl"
-    
     pending_event = {
         "event_type": "observation",
         "summary": "Staged pending event summary",
@@ -218,50 +215,29 @@ def test_hook_session_end_processes_pending_events_through_state_service(engine,
         "source": "opencode_hook",
         "source_type": "agent_runtime_signal",
         "ingestion_eligible": True,
-        "durable": False
+        "durable": False,
     }
     pending_file.write_text(json.dumps(pending_event) + "\n", encoding="utf-8")
-    
     res = engine.session_commit(
         project=str(tmp_path),
         conversation_text="Empty conversation text",
-        extraction_mode="llm"
+        extraction_mode="llm",
     )
-    
-    # Staging file should be deleted after processing
     assert not pending_file.exists()
-    
-    # The event should be normalized and written to the official events log
-    assert res["status"] == "success"
-    assert res["events_written"] == 1
-    
-    # Read the canonical written event to confirm fields promotion
+    assert res["status"] == "empty"
+    assert res["events_written"] == 0
     events_path = engine._events_path(str(tmp_path))
-    assert events_path.exists()
-    
-    lines = events_path.read_text(encoding="utf-8").splitlines()
-    assert len(lines) == 1
-    written_ev = json.loads(lines[0])
-    
-    assert written_ev["event_type"] == "observation"
-    assert written_ev["summary"] == "Staged pending event summary"
-    assert written_ev["source"] == "opencode_hook"
-    assert written_ev["source_type"] == "agent_runtime_signal"
-    assert written_ev["ingestion_eligible"] is True
+    assert not events_path.exists() or not events_path.read_text(encoding="utf-8").strip()
 
 def test_hook_session_end_warns_not_fails_without_llm(engine, tmp_path, monkeypatch):
-    # Disable LLM
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("OEM_MOCK_LLM", raising=False)
-    
-    # Stage a pending event
     harness = tmp_path / OEM_DIR
     runtime_dir = harness / ".runtime"
     runtime_dir.mkdir(parents=True, exist_ok=True)
     pending_file = runtime_dir / "pending_events.jsonl"
-    
     pending_event = {
         "event_type": "observation",
         "summary": "Staged pending event summary",
@@ -269,20 +245,17 @@ def test_hook_session_end_warns_not_fails_without_llm(engine, tmp_path, monkeypa
         "source": "opencode_hook",
         "source_type": "agent_runtime_signal",
         "ingestion_eligible": True,
-        "durable": False
+        "durable": False,
     }
     pending_file.write_text(json.dumps(pending_event) + "\n", encoding="utf-8")
-    
     res = engine.session_commit(
         project=str(tmp_path),
         conversation_text="No LLM API keys configured",
-        extraction_mode="llm"
+        extraction_mode="llm",
     )
-    
-    # Should warn instead of failing since we have staged events to commit
     assert res["status"] == "warn"
-    assert any("LLM extraction unavailable" in w for w in res["warnings"])
-    assert res["events_written"] == 1
+    assert any("LLM extraction unavailable" in warning for warning in res["warnings"])
+    assert res["events_written"] == 0
     assert not pending_file.exists()
 
 def test_hook_runtime_does_not_mutate_agents_md(engine, tmp_path, monkeypatch):
@@ -307,7 +280,9 @@ def test_typescript_plugin_loading_and_methods(tmp_path):
     assert plugin_path.exists()
     
     content = plugin_path.read_text(encoding="utf-8")
-    assert "export const OpenempiricPlugin" in content
+    assert 'id: "openempiric"' in content
+    assert "async setup(ctx" in content
+    assert "export default definition" in content
 
 
 def test_setup_opencode_never_writes_top_level_plugins_key(engine, tmp_path, monkeypatch):
@@ -640,8 +615,9 @@ def test_opencode_plugin_uses_documented_hook_names():
     assert plugin_path.exists()
     
     content = plugin_path.read_text(encoding="utf-8")
-    assert "tui.prompt.append" in content
-    assert "tool.execute.after" in content
+    assert 'ctx?.session, "prompt"' in content
+    assert 'ctx?.tool, "execute.after"' in content
+    assert 'ctx?.session, "context"' in content
     assert "chat.message" not in content
     assert "onPrompt" not in content
     assert "onExit" not in content

@@ -29,7 +29,7 @@ def test_context_injection(tmp_path):
 
     engine = MagicMock(spec=KnowledgeEngine)
     engine.state = MagicMock()
-    engine.state._load_registry.return_value = {
+    engine.state.load_registry.return_value = {
         "concept_001": {
             "concept_id": "concept_001",
             "canonical_name": "ai-safety",
@@ -38,7 +38,7 @@ def test_context_injection(tmp_path):
         }
     }
     engine._concepts_dir.return_value = oem_dir / "wiki"
-    engine.state._load_events.return_value = []
+    engine.state.load_events.return_value = []
     engine.restore_session_state.return_value = {
         "active_goals": ["Implement stuff"],
         "recommended_files": []

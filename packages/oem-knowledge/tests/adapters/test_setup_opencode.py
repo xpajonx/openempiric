@@ -10,6 +10,7 @@ import tempfile
 import shutil
 
 from oem_knowledge.cli import main
+from oem_knowledge.util import _strip_jsonc_comments
 
 
 @pytest.fixture
@@ -59,6 +60,31 @@ def test_setup_opencode_preserves_existing_mcp_servers(temp_home, tmp_proj):
     assert "github" in data["mcp"]
     assert "context7" in data["mcp"]
     assert "filesystem" in data["mcp"]
+    assert "openempiric" in data["mcp"]
+
+
+def test_setup_opencode_accepts_jsonc_trailing_commas(temp_home, tmp_proj):
+    """OpenCode's valid JSONC syntax must not abort OEM setup."""
+    opencode_dir = temp_home / ".config" / "opencode"
+    opencode_dir.mkdir(parents=True, exist_ok=True)
+    jsonc_file = opencode_dir / "opencode.jsonc"
+    jsonc_file.write_text(
+        '{\n'
+        '  "model": "custom/model",\n'
+        '  "mcp": {\n'
+        '    "github": {"command": "github-mcp"},\n'
+        '  },\n'
+        '}\n',
+        encoding="utf-8",
+    )
+
+    with patch("pathlib.Path.home", return_value=temp_home):
+        with patch.object(sys, "argv", ["oem", "setup", "opencode"]):
+            main()
+
+    data = json.loads(_strip_jsonc_comments(jsonc_file.read_text(encoding="utf-8")))
+    assert data["model"] == "custom/model"
+    assert "github" in data["mcp"]
     assert "openempiric" in data["mcp"]
 
 

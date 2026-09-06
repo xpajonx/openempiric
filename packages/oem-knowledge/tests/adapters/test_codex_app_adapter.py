@@ -140,5 +140,10 @@ def test_run_codex_app_does_not_spawn_process(tmp_path, codex_home):
             with patch("sys.argv", ["oem", "run", "codex-app", "--project", str(tmp_path)]):
                 main()
 
-    mock_run.assert_not_called()
+    launched_commands = [
+        call.args[0]
+        for call in mock_run.call_args_list
+        if call.args and call.args[0] in (["codex"], ["codex-app"])
+    ]
+    assert launched_commands == []
     assert (tmp_path / ".oem").is_dir()

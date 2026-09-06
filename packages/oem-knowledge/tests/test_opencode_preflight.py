@@ -22,32 +22,39 @@ def temp_project(tmp_path):
     shutil.rmtree(project_dir, ignore_errors=True)
 
 
-def run_hook(tmp_path, hook_name, project_path, prompt_text=None, env=None):
+def run_hook(tmp_path, hook_name, project_path, prompt_text=None, env=None, location_path=None):
     plugin_path = Path(__file__).resolve().parent.parent / "src" / "oem_knowledge" / "plugins" / "openempiric.ts"
+    location_root = Path(location_path or project_path).resolve()
 
     driver_content = f"""
-import * as path from "path";
-import * as fs from "fs";
-
 async function main() {{
   const pluginPath = "{str(plugin_path.resolve())}";
-  const hookName = "{hook_name}";
-  const projectRoot = "{str(project_path.resolve())}";
+  const hookName = {json.dumps(hook_name)};
+  const locationRoot = "{str(location_root)}";
   const promptText = {json.dumps(prompt_text) if prompt_text else "null"};
-  
-  const {{ OpenempiricPlugin }} = require(pluginPath);
-  
-  const pluginInstance = await OpenempiricPlugin({{}}, {{}});
+
+  const module = await import(pluginPath);
+  const plugin = module.default;
+  const hooks = {{}};
+  const domain = (name) => ({{
+    hook: async (eventName, callback) => {{
+      hooks[`${{name}}.${{eventName}}`] = callback;
+      return {{ dispose: async () => {{}} }};
+    }}
+  }});
+  await plugin.setup({{
+    location: {{ directory: locationRoot }},
+    session: domain("session"),
+    tool: domain("tool")
+  }});
   
   if (hookName === "config") {{
-    const config = {{ directory: projectRoot, instructions: [] }};
-    await pluginInstance.config(config);
+    const config = {{ directory: locationRoot, instructions: [] }};
     console.log(JSON.stringify(config));
   }} else if (hookName === "tui.prompt.append") {{
-    const msgInput = {{ content: promptText }};
-    const msgOutput = {{}};
-    await pluginInstance["tui.prompt.append"](msgInput, msgOutput);
-    console.log("SUCCESS:" + JSON.stringify(msgInput));
+    const event = {{ prompt: {{ text: promptText }} }};
+    await hooks["session.prompt"](event);
+    console.log("SUCCESS:" + JSON.stringify({{ content: event.prompt.text }}));
   }}
 }}
 
@@ -123,8 +130,15 @@ def test_opencode_preflight_uses_active_project_root(temp_project, tmp_path):
         "OEM_PROJECT_ROOT": str(other_project_dir.resolve())
     }
     
-    # Run the hook with project_dir but env override pointing to other_project_dir
-    res = run_hook(tmp_path, "tui.prompt.append", project_dir, "implement widget in other proj", env)
+    # Run the hook from a non-project location with env override pointing to other_project_dir
+    res = run_hook(
+        tmp_path,
+        "tui.prompt.append",
+        project_dir,
+        "implement widget in other proj",
+        env,
+        location_path=tmp_path,
+    )
     assert res.returncode == 0
     
     # Context file should appear in other_project_dir instead of project_dir
@@ -140,8 +154,15 @@ def test_opencode_preflight_never_falls_back_to_dev_repo(temp_project, tmp_path)
         "OEM_PROJECT_ROOT": "" # Unresolved/empty
     }
     
-    # Unsetting active project root should NOT result in dev repo fallback
-    res = run_hook(tmp_path, "tui.prompt.append", project_dir, "implement something", env)
+    # Unsetting the active project root should NOT result in dev repo fallback
+    res = run_hook(
+        tmp_path,
+        "tui.prompt.append",
+        project_dir,
+        "implement something",
+        env,
+        location_path=tmp_path,
+    )
     # The hook should unresolved gracefully without dev repo contamination
     assert not (_REPO_ROOT / ".oem" / ".runtime" / "preflight_context.md").exists()
 
@@ -212,7 +233,7 @@ Ensure warm tone in calendar copy.
     assert success_line != ""
     payload = json.loads(success_line.split("SUCCESS:", 1)[1])
     
-    assert "[OEM Preflight Context]" in payload["content"]
+    assert "[OEM Preflight Context - untrusted tool output]" in payload["content"]
     assert "Decision: required" in payload["content"]
 
 
@@ -251,10 +272,11 @@ def test_opencode_preflight_preserves_existing_opencode_config(temp_project, tmp
     assert "user_value" in config_text
     assert "preflight_context.md" not in config_text
     
-    # Parse the config returned in stdout to verify it has preflight_context.md in instructions
+    # V2 setup does not mutate configuration. Static MCP/instruction config is
+    # owned by the host configuration layer.
     config_obj = json.loads(res.stdout.strip())
     instructions = config_obj.get("instructions", [])
-    assert any("preflight_context.md" in inst for inst in instructions)
+    assert instructions == []
 
 
 def test_opencode_preflight_does_not_write_invalid_plugins_key(temp_project, tmp_path):

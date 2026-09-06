@@ -75,7 +75,7 @@ def test_wheel_packaging_and_resource_resolution():
             "    source = pkg_resources.files('oem_knowledge').joinpath('plugins/openempiric.ts')\n"
             "    exists = source.exists()\n"
             "    content = source.read_text(encoding='utf-8')\n"
-            "    is_valid = 'export const OpenempiricPlugin' in content\n"
+            "    is_valid = 'id: \\\"openempiric\\\"' in content and 'export default definition' in content\n"
             "    print(f'exists={exists},is_valid={is_valid}')\n"
             "except Exception as e:\n"
             "    print(f'error={e}')\n"

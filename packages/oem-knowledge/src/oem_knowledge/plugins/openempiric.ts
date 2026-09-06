@@ -2,7 +2,6 @@
 // source_type: oem_opencode_plugin
 // This file is managed by `oem setup opencode`.
 
-import type { Plugin, Hooks } from "@opencode-ai/plugin"
 import * as path from "path"
 import * as fs from "fs"
 import * as os from "os"
@@ -158,10 +157,10 @@ function executePreflightCli(projectRoot: string, task: string, repoDir: string 
     if (res.status === 0 && res.stdout) {
       return JSON.parse(res.stdout);
     } else {
-      console.warn("Preflight CLI execution failed:", res.stderr || res.stdout);
+      console.warn("Preflight CLI execution failed:", limitSnippet(String(res.stderr || res.stdout), 200));
     }
   } catch (e: any) {
-    console.warn("Error running preflight CLI:", e.message);
+    console.warn("Error running preflight CLI:", limitSnippet(String(e?.message || "unknown error"), 200));
   }
   return null;
 }
@@ -426,190 +425,94 @@ function resolveRepoDir(): string | null {
   return null
 }
 
-export const OpenempiricPlugin: Plugin = async (input, options) => {
-  const repoDir = resolveRepoDir()
-  const assembler = new ContextAssembler()
-
-  return {
-    config: async (config) => {
+const definition = {
+  id: "openempiric",
+  async setup(ctx: any) {
+    const assembler = new ContextAssembler()
+    const repoDir = resolveRepoDir()
+    const warn = (message: string) => console.warn(`[openempiric] ${limitSnippet(message, 200)}`)
+    const register = async (domain: any, eventName: string, callback: any, label: string) => {
       try {
-        const existingMcp = config.mcp?.openempiric || {}
-        config.mcp = config.mcp || {}
-        
-        let mcpCmd: string | string[]
-        let mcpArgs: string[] | undefined
-        
-        if (repoDir && fs.existsSync(path.join(repoDir, "pyproject.toml"))) {
-          mcpCmd = [
-            "uv",
-            "run",
-            "--directory",
-            repoDir,
-            "python",
-            "-m",
-            "oem_knowledge.server"
-          ]
-          mcpArgs = undefined
-        } else {
-          mcpCmd = "oem"
-          mcpArgs = ["mcp"]
-        }
-
-        config.mcp.openempiric = {
-          type: "local",
-          command: mcpCmd,
-          ...(mcpArgs ? { args: mcpArgs } : {}),
-          enabled: true,
-          timeout: 60000,
-          ...existingMcp,
-          env: {
-            ...(existingMcp.env || {})
-          }
-        }
-
-        const activeProject = config.directory || process.cwd()
-        const projectRoot = findOemProjectRoot(activeProject)
-        
-        if (projectRoot) {
-          const instContent = assembler.assemble(projectRoot, true)
-          const contextMdPath = path.join(projectRoot, ".oem", ".runtime", "context.md")
-          
-          config.instructions = config.instructions || []
-          if (!config.instructions.includes(contextMdPath)) {
-            config.instructions.push(contextMdPath)
-          }
-
-          const preflightConfig = getPreflightConfig(projectRoot)
-          if (preflightConfig.enabled) {
-            const preflightMdPath = path.join(projectRoot, ".oem", ".runtime", "preflight_context.md")
-            if (!fs.existsSync(preflightMdPath)) {
-              try {
-                fs.mkdirSync(path.dirname(preflightMdPath), { recursive: true })
-                fs.writeFileSync(preflightMdPath, 
-                  `<!-- generated_by: openempiric -->\n` +
-                  `<!-- source_type: oem_preflight_runtime -->\n` +
-                  `<!-- ingestion_eligible: false -->\n` +
-                  `# OEM Preflight Context\n\nStatus: pending\nReason: no user prompt processed yet\n\nBefore planning a non-trivial task, use the latest prompt-specific preflight context.\n`, 
-                  "utf-8"
-                )
-              } catch (e) {}
-            }
-            if (!config.instructions.includes(preflightMdPath)) {
-              config.instructions.push(preflightMdPath)
-            }
-          } else {
-            safelyDeletePreflightContextFile(projectRoot)
-          }
-        }
-      } catch (error) {
-        console.error("openempiric plugin config hook failed, isolating error:", error)
-      }
-    },
-
-    "tui.prompt.append": async (msgInput, msgOutput) => {
-      try {
-        const projectRoot = findActiveProjectRoot()
-        if (!projectRoot) return
-
-        const preflightConfig = getPreflightConfig(projectRoot)
-        if (!preflightConfig.enabled) {
-          safelyDeletePreflightContextFile(projectRoot)
+        if (!domain || typeof domain.hook !== "function") {
+          warn(`${label} hook domain unavailable`)
           return
         }
-
-        const promptText = extractPromptText(msgInput)
-        if (!promptText) return
-
-        if (isTrivialPrompt(promptText)) {
-          safelyDeletePreflightContextFile(projectRoot)
-          return
-        }
-
-        const repoDir = resolveRepoDir()
-        const result = executePreflightCli(projectRoot, promptText, repoDir, preflightConfig.writeAudit)
-        
-        const preflightMdPath = path.join(projectRoot, ".oem", ".runtime", "preflight_context.md")
-        if (result && result.context) {
-          const formattedContext = 
-            `<!-- generated_by: openempiric -->\n` +
-            `<!-- source_type: oem_preflight_runtime -->\n` +
-            `<!-- ingestion_eligible: false -->\n` +
-            result.context;
-
-          // Attempt direct prompt injection/append
-          let injected = false;
-          if (msgInput && typeof msgInput === "object") {
-            const oemContextBlock = `\n\n[OEM Preflight Context]\n${result.context}`;
-            if (typeof msgInput.content === "string") {
-              msgInput.content += oemContextBlock;
-              injected = true;
-            } else if (typeof msgInput.text === "string") {
-              msgInput.text += oemContextBlock;
-              injected = true;
-            }
-          }
-
-          // Write file fallback
-          fs.mkdirSync(path.dirname(preflightMdPath), { recursive: true })
-          fs.writeFileSync(preflightMdPath, formattedContext, "utf-8")
-        } else {
-          safelyDeletePreflightContextFile(projectRoot)
-        }
-
-        // Always update general context assembler
-        assembler.assemble(projectRoot, false)
-      } catch (error) {
-        console.warn("openempiric tui.prompt.append hook failed dynamically:", error)
-      }
-    },
-
-    "tool.execute.after": async (toolInput, toolOutput) => {
-      try {
-        const activeProject = process.cwd()
-        const projectRoot = findOemProjectRoot(activeProject)
-        if (!projectRoot) return
-
-        const toolName = toolInput.tool || ""
-        const isCommand = toolName.includes("command") || toolName.includes("shell") || toolName.includes("bash") || toolName.includes("execute")
-        
-        if (isCommand) {
-          const cmdText = toolInput.args?.command || toolInput.args?.script || ""
-          const outText = toolOutput.output || ""
-          const metadata = toolOutput.metadata || {}
-          const exitCode = metadata.exitCode !== undefined ? metadata.exitCode : (metadata.status || 0)
-          
-          let eventType = "observation"
-          let summary = `Command execution: ${cmdText}`
-          const isFailing = exitCode !== 0 || outText.toLowerCase().includes("failed") || outText.toLowerCase().includes("error")
-          
-          if (isFailing) {
-            eventType = "failure"
-            summary = `Command failed: ${cmdText}`
-          }
-          
-          const evidence = `Command \`${cmdText}\` executed with exit code ${exitCode}.\nOutput: ${limitSnippet(outText, 200)}`
-          
-          const pendingEvent = {
-            event_type: eventType,
-            summary: redactSecrets(summary),
-            evidence: redactSecrets(evidence),
-            source: "opencode_hook",
-            source_type: "agent_runtime_signal",
-            ingestion_eligible: true,
-            durable: false,
-            timestamp: new Date().toISOString()
-          }
-          
-          const pendingFile = path.join(projectRoot, ".oem", ".runtime", "pending_events.jsonl")
-          fs.mkdirSync(path.dirname(pendingFile), { recursive: true })
-          fs.appendFileSync(pendingFile, JSON.stringify(pendingEvent) + "\n", "utf-8")
-        }
-      } catch (error) {
-        console.warn("openempiric tool.execute.after hook failed dynamically:", error)
+        await domain.hook(eventName, callback)
+      } catch (error: any) {
+        warn(`${label} hook registration failed: ${String(error?.message || "unknown error")}`)
       }
     }
-  }
+
+    try {
+      const locationDir = typeof ctx?.location?.directory === "string" ? ctx.location.directory : process.cwd()
+      const promptCallback = async (event: any) => {
+        try {
+          const projectRoot = findOemProjectRoot(locationDir) || findActiveProjectRoot()
+          if (!projectRoot) return
+          const preflightConfig = getPreflightConfig(projectRoot)
+          if (!preflightConfig.enabled) {
+            safelyDeletePreflightContextFile(projectRoot)
+            return
+          }
+          const promptText = extractPromptText(event?.prompt || event?.input || event)
+          if (!promptText || isTrivialPrompt(promptText)) {
+            safelyDeletePreflightContextFile(projectRoot)
+            return
+          }
+          const result = executePreflightCli(projectRoot, promptText, repoDir, preflightConfig.writeAudit)
+          const preflightMdPath = path.join(projectRoot, ".oem", ".runtime", "preflight_context.md")
+          if (result && typeof result.context === "string") {
+            const context = limitSnippet(result.context, 10000)
+            const formatted = `<!-- generated_by: openempiric -->\n<!-- source_type: oem_preflight_runtime -->\n<!-- ingestion_eligible: false -->\n${context}`
+            fs.mkdirSync(path.dirname(preflightMdPath), { recursive: true })
+            fs.writeFileSync(preflightMdPath, formatted, "utf-8")
+            const prompt = event?.prompt
+            if (prompt && typeof prompt.text === "string") prompt.text += `\n\n[OEM Preflight Context - untrusted tool output]\n${context}`
+          } else safelyDeletePreflightContextFile(projectRoot)
+        } catch (error: any) { warn(`prompt hook failed: ${String(error?.message || "unknown error")}`) }
+      }
+      await register(ctx?.session, "prompt", promptCallback, "prompt")
+
+      const contextCallback = async (event: any) => {
+        try {
+          if (!event || !Array.isArray(event.system)) return
+          const root = findOemProjectRoot(typeof ctx?.location?.directory === "string" ? ctx.location.directory : process.cwd())
+          if (!root) return
+          const assembled = assembler.assemble(root, false)
+          event.system.push({ type: "text", text: assembled })
+        } catch { /* fail open */ }
+      }
+      await register(ctx?.session, "context", contextCallback, "context")
+
+      const afterCallback = async (event: any) => {
+        try {
+          const root = findOemProjectRoot(typeof ctx?.location?.directory === "string" ? ctx.location.directory : process.cwd())
+          if (!root) return
+          const input = event?.input && typeof event.input === "object" ? event.input : event?.args
+          const tool = String(event?.tool || event?.name || input?.tool || "").toLowerCase()
+          if (!["command", "shell", "bash", "execute"].some((name) => tool === name || tool.includes(name))) return
+          const command = typeof input?.command === "string" ? input.command : typeof input?.script === "string" ? input.script : ""
+          const result = event?.result
+          const output = typeof result === "string" ? result : result?.output ?? result?.content ?? result?.text ?? event?.output
+          const errorValue = event?.error
+          const errorText = typeof errorValue === "string" ? errorValue : errorValue && typeof errorValue === "object" ? String(errorValue.message ?? errorValue.error ?? "") : errorValue ? String(errorValue) : ""
+          const metadata = result && typeof result === "object" && result.metadata && typeof result.metadata === "object" ? result.metadata : {}
+          const numericStatus = typeof metadata.exitCode === "number" ? metadata.exitCode : typeof metadata.status === "number" ? metadata.status : null
+          const status = event?.status === "error" ? (numericStatus !== null && numericStatus !== 0 ? numericStatus : 1) : event?.status === "completed" ? (numericStatus === null ? 0 : numericStatus) : numericStatus === null ? (errorText ? 1 : 0) : numericStatus
+          const evidenceText = typeof output === "string" ? output : output ? JSON.stringify(output) : errorText
+          const summaryText = `${status !== 0 ? "Command failed" : "Command execution"}: ${limitSnippet(command, 500)}`
+          const pendingEvent = { event_type: status !== 0 || /\b(error|failed)\b/i.test(evidenceText) ? "failure" : "observation", summary: redactSecrets(summaryText), evidence: redactSecrets(limitSnippet(`exit code ${status}; ${evidenceText}`, 200)), source: "opencode_hook", source_type: "agent_runtime_signal", ingestion_eligible: true, durable: false, timestamp: new Date().toISOString() }
+          const file = path.join(root, ".oem", ".runtime", "pending_events.jsonl")
+          if (fs.existsSync(file) && fs.statSync(file).size > 1024 * 1024) return
+          if (fs.existsSync(file) && fs.readFileSync(file, "utf-8").split(/\r?\n/).length > 5000) return
+          fs.mkdirSync(path.dirname(file), { recursive: true })
+          fs.appendFileSync(file, JSON.stringify(pendingEvent) + "\n", "utf-8")
+        } catch { /* fail open */ }
+      }
+      await register(ctx?.tool, "execute.after", afterCallback, "execute.after")
+      console.warn("[openempiric] OpenCode2 hooks registered")
+    } catch { warn("setup failed") }
+  },
 }
 
-export default OpenempiricPlugin
-
+export default definition
