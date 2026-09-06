@@ -24,8 +24,17 @@ Rules:
 - `knowledge_source_search` retrieves implementation paths from the separate source corpus.
 - `knowledge_source_read` reads exact project files with hard line and character limits.
 - Do not use `knowledge_index` as a fallback for failed reflection.
-- If `dense_llm_unavailable` is returned, do not repeatedly retry dense reflection. Use structured or marker-based reflection instead, then call session_end/session_commit, report the warning, and stop.
+- If `dense_llm_unavailable` is returned, do not repeatedly retry dense reflection. Use structured or marker-based reflection instead, then call session_end, report the warning, and stop.
 - Do not treat the source corpus as learned memory.
 - Prefer structured events or explicit markers for reflection.
 - Do not manually edit `.oem` files.
 - If OEM health is degraded, report it and suggest `oem doctor` or `oem recover`.
+
+Canonical workflow routing:
+
+- `knowledge_preflight` decision `required`: follow the returned context before planning; use `knowledge_read` only for broad orientation if needed.
+- `knowledge_preflight` decision `suggest`: use the context; call `knowledge_search` for learned memory OR `knowledge_source_search` for implementation evidence only when a specific gap remains.
+- `knowledge_preflight` decision `noop`: proceed normally and do not retrieve memory just to confirm.
+- Durable fact during work: call `knowledge_add_memory` with concise content and evidence.
+- Batch/session learnings at the end: call `knowledge_session_end`; `knowledge_session_commit` is deprecated and is not an agent action.
+- Source search/read returns code evidence, not learned memory; do not treat source corpus results as learned memory.

@@ -949,6 +949,13 @@ class KnowledgeEngine:
             result["status"] = "partial"
         return result
 
+    @staticmethod
+    def _build_session_phase_timings(timer: PhaseTimer) -> dict[str, float]:
+        return {
+            key: timer.timings.get(key, 0.0)
+            for key in ("load_state", "reflection", "append_events", "materialization", "search_index", "write_report", "cleanup", "total")
+        }
+
     def session_end(
         self,
         project: str | None = None,
@@ -1270,16 +1277,7 @@ class KnowledgeEngine:
                     progress.update_step("session_close", "success")
 
                     timer.timings["total"] = time.perf_counter() - start_time
-                    p_timings = {
-                        "load_state": timer.timings.get("load_state", 0.0),
-                        "reflection": timer.timings.get("reflection", 0.0),
-                        "append_events": 0.0,
-                        "materialization": 0.0,
-                        "search_index": 0.0,
-                        "write_report": 0.0,
-                        "cleanup": 0.0,
-                        "total": timer.timings["total"],
-                    }
+                    p_timings = self._build_session_phase_timings(timer)
                     from oem_knowledge.runtime.result import make_result
                     return make_result(
                         status=status_val,
@@ -1310,16 +1308,7 @@ class KnowledgeEngine:
                 if res.get("status") == "error":
                     progress.update_step("reflection", "failed")
                     timer.timings["total"] = time.perf_counter() - start_time
-                    p_timings = {
-                        "load_state": timer.timings.get("load_state", 0.0),
-                        "reflection": timer.timings.get("reflection", 0.0),
-                        "append_events": 0.0,
-                        "materialization": 0.0,
-                        "search_index": 0.0,
-                        "write_report": 0.0,
-                        "cleanup": 0.0,
-                        "total": timer.timings["total"],
-                    }
+                    p_timings = self._build_session_phase_timings(timer)
                     from oem_knowledge.runtime.result import error
                     return error(
                         operation="session_end",
@@ -1473,16 +1462,7 @@ project: {project or "default"}
                         progress.update_step("session_close", "success")
 
                         timer.timings["total"] = time.perf_counter() - start_time
-                        p_timings = {
-                            "load_state": timer.timings.get("load_state", 0.0),
-                            "reflection": timer.timings.get("reflection", 0.0),
-                            "append_events": timer.timings.get("append_events", 0.0),
-                            "materialization": timer.timings.get("materialization", 0.0),
-                            "search_index": 0.0,
-                            "write_report": timer.timings.get("write_report", 0.0),
-                            "cleanup": 0.0,
-                            "total": timer.timings["total"],
-                        }
+                        p_timings = self._build_session_phase_timings(timer)
                         
                         from oem_knowledge.runtime.result import make_result
                         res_dict = make_result(
@@ -1567,16 +1547,7 @@ project: {project or "default"}
                             if idx_res.get("status") == "error":
                                 progress.update_step("index", "failed")
                                 timer.timings["total"] = time.perf_counter() - start_time
-                                p_timings = {
-                                    "load_state": timer.timings.get("load_state", 0.0),
-                                    "reflection": timer.timings.get("reflection", 0.0),
-                                    "append_events": timer.timings.get("append_events", 0.0),
-                                    "materialization": timer.timings.get("materialization", 0.0),
-                                    "search_index": timer.timings.get("search_index", 0.0),
-                                    "write_report": timer.timings.get("write_report", 0.0),
-                                    "cleanup": 0.0,
-                                    "total": timer.timings["total"],
-                                }
+                                p_timings = self._build_session_phase_timings(timer)
                                 from oem_knowledge.runtime.result import error
                                 return error(
                                     operation="session_end",
@@ -1622,16 +1593,7 @@ project: {project or "default"}
 
         except LockTimeoutError as e:
             timer.timings["total"] = time.perf_counter() - start_time
-            p_timings = {
-                "load_state": timer.timings.get("load_state", 0.0),
-                "reflection": timer.timings.get("reflection", 0.0),
-                "append_events": timer.timings.get("append_events", 0.0),
-                "materialization": timer.timings.get("materialization", 0.0),
-                "search_index": timer.timings.get("search_index", 0.0),
-                "write_report": timer.timings.get("write_report", 0.0),
-                "cleanup": timer.timings.get("cleanup", 0.0),
-                "total": timer.timings["total"],
-            }
+            p_timings = self._build_session_phase_timings(timer)
             from oem_knowledge.runtime.result import error
             return error(
                 operation="session_end",
@@ -1653,16 +1615,7 @@ project: {project or "default"}
         explainability = res.get("explainability", {})
         explainability["materialized"] = len(mat_log)
         
-        p_timings = {
-            "load_state": timer.timings.get("load_state", 0.0),
-            "reflection": timer.timings.get("reflection", 0.0),
-            "append_events": timer.timings.get("append_events", 0.0),
-            "materialization": timer.timings.get("materialization", 0.0),
-            "search_index": timer.timings.get("search_index", 0.0),
-            "write_report": timer.timings.get("write_report", 0.0),
-            "cleanup": timer.timings.get("cleanup", 0.0),
-            "total": timer.timings["total"],
-        }
+        p_timings = self._build_session_phase_timings(timer)
 
         ret_status = status
         if index_failed_reason:

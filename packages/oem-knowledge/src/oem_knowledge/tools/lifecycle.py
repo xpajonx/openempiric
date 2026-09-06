@@ -14,6 +14,21 @@ from ..project import (
 )
 from ..ui import render_panel
 
+def _decorate_session_result(res: dict, project_root: Path, session_id: str, operation: str, deprecated: bool = False) -> dict:
+    if res.get("status") in ("success", "partial", "warn", "empty") and session_id:
+        SESSION_TO_PROJECT.pop(session_id, None)
+    res["project_root"] = str(project_root)
+    res["memory_root"] = str(project_root / ".oem")
+    res["operation"] = operation
+    if deprecated:
+        res["deprecated"] = True
+        warning_msg = "knowledge_session_commit is deprecated. Use knowledge_session_end instead."
+        warnings_list = res.get("warnings", [])
+        if warning_msg not in warnings_list:
+            warnings_list.append(warning_msg)
+        res["warnings"] = warnings_list
+    return res
+
 def _commit_session_from_tool(
     eng: KnowledgeEngine,
     project_root: Path,
@@ -250,7 +265,7 @@ def register(mcp: object) -> None:
         evidence: str = "",
         project: str = "",
     ) -> str:
-        """Add an inline memory during active work without waiting for session end.
+        """Add a durable fact discovered now during active work; use concise content with evidence. This is not a replacement for session_end.
 
         Args:
             memory_type: Type of memory: 'decision', 'observation', 'preference', 'failure', 'workaround'
@@ -486,7 +501,7 @@ def register(mcp: object) -> None:
 
     @mcp.tool()
     def knowledge_preflight(task: str, project: str = "", mode: str = "auto", limit: int = 8, write_audit: bool = True) -> str:
-        """Run deterministic OEM preflight before non-trivial planning.
+        """Run deterministic, read-only OEM preflight before non-trivial planning. For required, follow the returned context before planning; for suggest, use the context and retrieve only a specific remaining gap; for noop, proceed without retrieval just to confirm.
 
         Args:
             task: The user task or planning prompt to evaluate.
@@ -671,19 +686,7 @@ def register(mcp: object) -> None:
                     extraction_mode=extraction_mode,
                     timeout_seconds=timeout_seconds,
                 )
-            if res.get("status") in ("success", "partial", "warn", "empty") and session_id in SESSION_TO_PROJECT:
-                SESSION_TO_PROJECT.pop(session_id, None)
-
-            res["project_root"] = str(project_root)
-            res["memory_root"] = str(memory_root)
-            res["operation"] = "knowledge_session_commit"
-            res["deprecated"] = True
-            
-            warning_msg = "knowledge_session_commit is deprecated. Use knowledge_session_end instead."
-            warnings_list = res.get("warnings", [])
-            if warning_msg not in warnings_list:
-                warnings_list.append(warning_msg)
-            res["warnings"] = warnings_list
+            res = _decorate_session_result(res, project_root, session_id, "knowledge_session_commit", deprecated=True)
             return json.dumps(res, indent=2)
         except ProjectResolutionError as e:
             return handle_resolution_error("knowledge_session_commit", e)
@@ -703,7 +706,7 @@ def register(mcp: object) -> None:
         extraction_mode: str = "auto",
         timeout_seconds: float | None = None,
     ) -> str:
-        """End the current knowledge session, trigger reflection/materialization, update graph, and re-index.
+        """Preferred session close: trigger reflection/materialization, update graph, and re-index. knowledge_session_commit is deprecated. Structured root fields are authoritative; message is display text.
 
         Args:
             project: Project directory path. Defaults to current directory.
@@ -726,12 +729,7 @@ def register(mcp: object) -> None:
                     extraction_mode=extraction_mode,
                     timeout_seconds=timeout_seconds,
                 )
-            if res.get("status") in ("success", "partial", "warn", "empty") and session_id in SESSION_TO_PROJECT:
-                SESSION_TO_PROJECT.pop(session_id, None)
-
-            res["project_root"] = str(project_root)
-            res["memory_root"] = str(memory_root)
-            res["operation"] = "knowledge_session_end"
+            res = _decorate_session_result(res, project_root, session_id, "knowledge_session_end")
             return json.dumps(res, indent=2)
         except ProjectResolutionError as e:
             return handle_resolution_error("knowledge_session_end", e)

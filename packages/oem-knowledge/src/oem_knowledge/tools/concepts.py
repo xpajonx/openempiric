@@ -159,7 +159,7 @@ def register(mcp: object) -> None:
     def knowledge_search(query: str, k: int = 3, project: str = "",
                          scope: str | None = None, memory_type: str | None = None,
                          since: str | None = None, until: str | None = None) -> str:
-        """Fast lookup and term-based search across concepts.
+        """Search learned memory for a specific memory query using fast lookup and term-based search across concepts.
 
         Args:
             query: Search query

@@ -19,7 +19,7 @@ def register(mcp: object) -> None:
 
     @mcp.tool()
     def knowledge_source_search(query: str, k: int = 5, project: str = "") -> str:
-        """Search indexed project source files (separate source corpus).
+        """Search implementation/source evidence in indexed project files (separate source corpus), not learned memory.
 
         Args:
             query: Search query
