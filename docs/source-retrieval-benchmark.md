@@ -51,4 +51,16 @@ The hybrid column uses a deterministic noisy sparse hybrid proxy embedder with a
 
 ## Storage follow-up
 
+## R2 real-model periodic evaluation
+
+Run `OEM_RUN_PERIODIC_EVAL=1 uv run pytest -q -m periodic_eval packages/oem-knowledge/tests/test_source_retrieval_real_model_eval.py`.
+
+The opt-in fixture contains fixture-derived counts of at least 20 exact, 40 semantic, and 20 negative new-query cases and references the frozen R0 corpus. BM25 and real hybrid runs use paired temporary projects. The model uses `_load_local_model()` with `local_files_only=True`; no download is attempted. Missing package/cache/model causes an explicit skip, while an available model with a failing source index or quality gate fails the periodic evaluation.
+
+The threshold is measured BM25 semantic hit@5 plus 0.15, with BM25 semantic hit@5 at or below 0.85, hybrid exact top-1 at 1.0, and zero hybrid filtered and dense negative false positives. Output includes fixture-derived counts, model class/name/dimension, per-case paired paths/ranks/diagnostics, semantic transitions, and a deterministic seeded bootstrap 95% CI for the paired semantic hit-rate delta.
+
+R2 is distinct from the R0 proxy: it is limited to new queries on one shared corpus, and its small-sample bootstrap interval is not a population guarantee. The 40 semantic records include repeated variants of 10 base paraphrase templates, so they should not be treated as 40 independent semantic concepts.
+
+Latest local cached-model run (2026-09-07) measured BM25 semantic hit@5 0.4000 (MRR@5 0.3200) and hybrid semantic hit@5 0.8000 (MRR@5 0.6646), with hybrid exact top-1 1.0000. The hybrid run returned filtered results and dense false positives for all 20 negative cases, so the R2 gate status was FAIL. This is recorded as evaluation evidence; no production retrieval behavior was changed to make the gate pass.
+
 Old generations are retained by design until a later explicit cleanup policy is approved. Embeddings for files removed from the source corpus are deleted during source re-indexing. The benchmark reports the storage increase so model-generation retention is visible.

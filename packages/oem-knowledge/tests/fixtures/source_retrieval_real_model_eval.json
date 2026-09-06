@@ -1,0 +1,606 @@
+{
+  "version": 1,
+  "corpus_fixture": "source_retrieval_benchmark.json",
+  "cases": [
+    {
+      "id": "real-exact-01",
+      "kind": "exact_identifier",
+      "query": "reconcile_ledger",
+      "relevant_paths": [
+        "src/ledger.py"
+      ]
+    },
+    {
+      "id": "real-exact-02",
+      "kind": "exact_identifier",
+      "query": "SourceManifest",
+      "relevant_paths": [
+        "src/manifest.py"
+      ]
+    },
+    {
+      "id": "real-exact-03",
+      "kind": "exact_identifier",
+      "query": "build_source_index",
+      "relevant_paths": [
+        "src/indexer.py"
+      ]
+    },
+    {
+      "id": "real-exact-04",
+      "kind": "exact_identifier",
+      "query": "rank_source_results",
+      "relevant_paths": [
+        "src/retrieval.py"
+      ]
+    },
+    {
+      "id": "real-exact-05",
+      "kind": "exact_identifier",
+      "query": "close_session_resources",
+      "relevant_paths": [
+        "src/session.py"
+      ]
+    },
+    {
+      "id": "real-exact-06",
+      "kind": "exact_identifier",
+      "query": "normalize_rel_path",
+      "relevant_paths": [
+        "src/normalizer.py"
+      ]
+    },
+    {
+      "id": "real-exact-07",
+      "kind": "exact_identifier",
+      "query": "SourceClassifier",
+      "relevant_paths": [
+        "src/classifier.py"
+      ]
+    },
+    {
+      "id": "real-exact-08",
+      "kind": "exact_identifier",
+      "query": "calculate_hit_rate",
+      "relevant_paths": [
+        "src/metrics.py"
+      ]
+    },
+    {
+      "id": "real-exact-09",
+      "kind": "exact_identifier",
+      "query": "src/ledger.py",
+      "relevant_paths": [
+        "src/ledger.py"
+      ]
+    },
+    {
+      "id": "real-exact-10",
+      "kind": "exact_identifier",
+      "query": "manifest.py",
+      "relevant_paths": [
+        "src/manifest.py"
+      ]
+    },
+    {
+      "id": "real-exact-11",
+      "kind": "exact_identifier",
+      "query": "src/indexer.py",
+      "relevant_paths": [
+        "src/indexer.py"
+      ]
+    },
+    {
+      "id": "real-exact-12",
+      "kind": "exact_identifier",
+      "query": "retrieval.py",
+      "relevant_paths": [
+        "src/retrieval.py"
+      ]
+    },
+    {
+      "id": "real-exact-13",
+      "kind": "exact_identifier",
+      "query": "session.py",
+      "relevant_paths": [
+        "src/session.py"
+      ]
+    },
+    {
+      "id": "real-exact-14",
+      "kind": "exact_identifier",
+      "query": "rel_path",
+      "relevant_paths": [
+        "src/normalizer.py"
+      ]
+    },
+    {
+      "id": "real-exact-15",
+      "kind": "exact_identifier",
+      "query": "Classifier",
+      "relevant_paths": [
+        "src/classifier.py"
+      ]
+    },
+    {
+      "id": "real-exact-16",
+      "kind": "exact_identifier",
+      "query": "hit_rate",
+      "relevant_paths": [
+        "src/metrics.py"
+      ]
+    },
+    {
+      "id": "real-exact-17",
+      "kind": "exact_identifier",
+      "query": "ledger",
+      "relevant_paths": [
+        "src/ledger.py"
+      ]
+    },
+    {
+      "id": "real-exact-18",
+      "kind": "exact_identifier",
+      "query": "source_index",
+      "relevant_paths": [
+        "src/indexer.py"
+      ]
+    },
+    {
+      "id": "real-exact-19",
+      "kind": "exact_identifier",
+      "query": "source_results",
+      "relevant_paths": [
+        "src/retrieval.py"
+      ]
+    },
+    {
+      "id": "real-exact-20",
+      "kind": "exact_identifier",
+      "query": "session_resources",
+      "relevant_paths": [
+        "src/session.py"
+      ]
+    },
+    {
+      "id": "real-semantic-01",
+      "kind": "semantic_paraphrase",
+      "query": "combine accounting entries into a consistent book task variant 1",
+      "relevant_paths": [
+        "src/ledger.py"
+      ]
+    },
+    {
+      "id": "real-semantic-02",
+      "kind": "semantic_paraphrase",
+      "query": "read the catalog describing indexed source files task variant 2",
+      "relevant_paths": [
+        "src/manifest.py"
+      ]
+    },
+    {
+      "id": "real-semantic-03",
+      "kind": "semantic_paraphrase",
+      "query": "create the searchable database from project files task variant 3",
+      "relevant_paths": [
+        "src/indexer.py"
+      ]
+    },
+    {
+      "id": "real-semantic-04",
+      "kind": "semantic_paraphrase",
+      "query": "order matching source documents for a query task variant 4",
+      "relevant_paths": [
+        "src/retrieval.py"
+      ]
+    },
+    {
+      "id": "real-semantic-05",
+      "kind": "semantic_paraphrase",
+      "query": "return the resources at the end of a work cycle task variant 5",
+      "relevant_paths": [
+        "src/session.py"
+      ]
+    },
+    {
+      "id": "real-semantic-06",
+      "kind": "semantic_paraphrase",
+      "query": "clean and standardize a relative location task variant 6",
+      "relevant_paths": [
+        "src/normalizer.py"
+      ]
+    },
+    {
+      "id": "real-semantic-07",
+      "kind": "semantic_paraphrase",
+      "query": "assign a category to document contents task variant 7",
+      "relevant_paths": [
+        "src/classifier.py"
+      ]
+    },
+    {
+      "id": "real-semantic-08",
+      "kind": "semantic_paraphrase",
+      "query": "compute the fraction of searches that find a result task variant 8",
+      "relevant_paths": [
+        "src/metrics.py"
+      ]
+    },
+    {
+      "id": "real-semantic-09",
+      "kind": "semantic_paraphrase",
+      "query": "written guidance about searching project code task variant 9",
+      "relevant_paths": [
+        "docs/retrieval.md"
+      ]
+    },
+    {
+      "id": "real-semantic-10",
+      "kind": "semantic_paraphrase",
+      "query": "guidance for an automated worker locating files task variant 10",
+      "relevant_paths": [
+        "agent/instructions.md"
+      ]
+    },
+    {
+      "id": "real-semantic-11",
+      "kind": "semantic_paraphrase",
+      "query": "combine accounting entries into a consistent book task variant 11",
+      "relevant_paths": [
+        "src/ledger.py"
+      ]
+    },
+    {
+      "id": "real-semantic-12",
+      "kind": "semantic_paraphrase",
+      "query": "read the catalog describing indexed source files task variant 12",
+      "relevant_paths": [
+        "src/manifest.py"
+      ]
+    },
+    {
+      "id": "real-semantic-13",
+      "kind": "semantic_paraphrase",
+      "query": "create the searchable database from project files task variant 13",
+      "relevant_paths": [
+        "src/indexer.py"
+      ]
+    },
+    {
+      "id": "real-semantic-14",
+      "kind": "semantic_paraphrase",
+      "query": "order matching source documents for a query task variant 14",
+      "relevant_paths": [
+        "src/retrieval.py"
+      ]
+    },
+    {
+      "id": "real-semantic-15",
+      "kind": "semantic_paraphrase",
+      "query": "return the resources at the end of a work cycle task variant 15",
+      "relevant_paths": [
+        "src/session.py"
+      ]
+    },
+    {
+      "id": "real-semantic-16",
+      "kind": "semantic_paraphrase",
+      "query": "clean and standardize a relative location task variant 16",
+      "relevant_paths": [
+        "src/normalizer.py"
+      ]
+    },
+    {
+      "id": "real-semantic-17",
+      "kind": "semantic_paraphrase",
+      "query": "assign a category to document contents task variant 17",
+      "relevant_paths": [
+        "src/classifier.py"
+      ]
+    },
+    {
+      "id": "real-semantic-18",
+      "kind": "semantic_paraphrase",
+      "query": "compute the fraction of searches that find a result task variant 18",
+      "relevant_paths": [
+        "src/metrics.py"
+      ]
+    },
+    {
+      "id": "real-semantic-19",
+      "kind": "semantic_paraphrase",
+      "query": "written guidance about searching project code task variant 19",
+      "relevant_paths": [
+        "docs/retrieval.md"
+      ]
+    },
+    {
+      "id": "real-semantic-20",
+      "kind": "semantic_paraphrase",
+      "query": "guidance for an automated worker locating files task variant 20",
+      "relevant_paths": [
+        "agent/instructions.md"
+      ]
+    },
+    {
+      "id": "real-semantic-21",
+      "kind": "semantic_paraphrase",
+      "query": "combine accounting entries into a consistent book task variant 21",
+      "relevant_paths": [
+        "src/ledger.py"
+      ]
+    },
+    {
+      "id": "real-semantic-22",
+      "kind": "semantic_paraphrase",
+      "query": "read the catalog describing indexed source files task variant 22",
+      "relevant_paths": [
+        "src/manifest.py"
+      ]
+    },
+    {
+      "id": "real-semantic-23",
+      "kind": "semantic_paraphrase",
+      "query": "create the searchable database from project files task variant 23",
+      "relevant_paths": [
+        "src/indexer.py"
+      ]
+    },
+    {
+      "id": "real-semantic-24",
+      "kind": "semantic_paraphrase",
+      "query": "order matching source documents for a query task variant 24",
+      "relevant_paths": [
+        "src/retrieval.py"
+      ]
+    },
+    {
+      "id": "real-semantic-25",
+      "kind": "semantic_paraphrase",
+      "query": "return the resources at the end of a work cycle task variant 25",
+      "relevant_paths": [
+        "src/session.py"
+      ]
+    },
+    {
+      "id": "real-semantic-26",
+      "kind": "semantic_paraphrase",
+      "query": "clean and standardize a relative location task variant 26",
+      "relevant_paths": [
+        "src/normalizer.py"
+      ]
+    },
+    {
+      "id": "real-semantic-27",
+      "kind": "semantic_paraphrase",
+      "query": "assign a category to document contents task variant 27",
+      "relevant_paths": [
+        "src/classifier.py"
+      ]
+    },
+    {
+      "id": "real-semantic-28",
+      "kind": "semantic_paraphrase",
+      "query": "compute the fraction of searches that find a result task variant 28",
+      "relevant_paths": [
+        "src/metrics.py"
+      ]
+    },
+    {
+      "id": "real-semantic-29",
+      "kind": "semantic_paraphrase",
+      "query": "written guidance about searching project code task variant 29",
+      "relevant_paths": [
+        "docs/retrieval.md"
+      ]
+    },
+    {
+      "id": "real-semantic-30",
+      "kind": "semantic_paraphrase",
+      "query": "guidance for an automated worker locating files task variant 30",
+      "relevant_paths": [
+        "agent/instructions.md"
+      ]
+    },
+    {
+      "id": "real-semantic-31",
+      "kind": "semantic_paraphrase",
+      "query": "combine accounting entries into a consistent book task variant 31",
+      "relevant_paths": [
+        "src/ledger.py"
+      ]
+    },
+    {
+      "id": "real-semantic-32",
+      "kind": "semantic_paraphrase",
+      "query": "read the catalog describing indexed source files task variant 32",
+      "relevant_paths": [
+        "src/manifest.py"
+      ]
+    },
+    {
+      "id": "real-semantic-33",
+      "kind": "semantic_paraphrase",
+      "query": "create the searchable database from project files task variant 33",
+      "relevant_paths": [
+        "src/indexer.py"
+      ]
+    },
+    {
+      "id": "real-semantic-34",
+      "kind": "semantic_paraphrase",
+      "query": "order matching source documents for a query task variant 34",
+      "relevant_paths": [
+        "src/retrieval.py"
+      ]
+    },
+    {
+      "id": "real-semantic-35",
+      "kind": "semantic_paraphrase",
+      "query": "return the resources at the end of a work cycle task variant 35",
+      "relevant_paths": [
+        "src/session.py"
+      ]
+    },
+    {
+      "id": "real-semantic-36",
+      "kind": "semantic_paraphrase",
+      "query": "clean and standardize a relative location task variant 36",
+      "relevant_paths": [
+        "src/normalizer.py"
+      ]
+    },
+    {
+      "id": "real-semantic-37",
+      "kind": "semantic_paraphrase",
+      "query": "assign a category to document contents task variant 37",
+      "relevant_paths": [
+        "src/classifier.py"
+      ]
+    },
+    {
+      "id": "real-semantic-38",
+      "kind": "semantic_paraphrase",
+      "query": "compute the fraction of searches that find a result task variant 38",
+      "relevant_paths": [
+        "src/metrics.py"
+      ]
+    },
+    {
+      "id": "real-semantic-39",
+      "kind": "semantic_paraphrase",
+      "query": "written guidance about searching project code task variant 39",
+      "relevant_paths": [
+        "docs/retrieval.md"
+      ]
+    },
+    {
+      "id": "real-semantic-40",
+      "kind": "semantic_paraphrase",
+      "query": "guidance for an automated worker locating files task variant 40",
+      "relevant_paths": [
+        "agent/instructions.md"
+      ]
+    },
+    {
+      "id": "real-negative-01",
+      "kind": "negative",
+      "query": "quantum entanglement laboratory measurements 1",
+      "relevant_paths": []
+    },
+    {
+      "id": "real-negative-02",
+      "kind": "negative",
+      "query": "quantum entanglement laboratory measurements 2",
+      "relevant_paths": []
+    },
+    {
+      "id": "real-negative-03",
+      "kind": "negative",
+      "query": "quantum entanglement laboratory measurements 3",
+      "relevant_paths": []
+    },
+    {
+      "id": "real-negative-04",
+      "kind": "negative",
+      "query": "quantum entanglement laboratory measurements 4",
+      "relevant_paths": []
+    },
+    {
+      "id": "real-negative-05",
+      "kind": "negative",
+      "query": "quantum entanglement laboratory measurements 5",
+      "relevant_paths": []
+    },
+    {
+      "id": "real-negative-06",
+      "kind": "negative",
+      "query": "quantum entanglement laboratory measurements 6",
+      "relevant_paths": []
+    },
+    {
+      "id": "real-negative-07",
+      "kind": "negative",
+      "query": "quantum entanglement laboratory measurements 7",
+      "relevant_paths": []
+    },
+    {
+      "id": "real-negative-08",
+      "kind": "negative",
+      "query": "quantum entanglement laboratory measurements 8",
+      "relevant_paths": []
+    },
+    {
+      "id": "real-negative-09",
+      "kind": "negative",
+      "query": "quantum entanglement laboratory measurements 9",
+      "relevant_paths": []
+    },
+    {
+      "id": "real-negative-10",
+      "kind": "negative",
+      "query": "quantum entanglement laboratory measurements 10",
+      "relevant_paths": []
+    },
+    {
+      "id": "real-negative-11",
+      "kind": "negative",
+      "query": "quantum entanglement laboratory measurements 11",
+      "relevant_paths": []
+    },
+    {
+      "id": "real-negative-12",
+      "kind": "negative",
+      "query": "quantum entanglement laboratory measurements 12",
+      "relevant_paths": []
+    },
+    {
+      "id": "real-negative-13",
+      "kind": "negative",
+      "query": "quantum entanglement laboratory measurements 13",
+      "relevant_paths": []
+    },
+    {
+      "id": "real-negative-14",
+      "kind": "negative",
+      "query": "quantum entanglement laboratory measurements 14",
+      "relevant_paths": []
+    },
+    {
+      "id": "real-negative-15",
+      "kind": "negative",
+      "query": "quantum entanglement laboratory measurements 15",
+      "relevant_paths": []
+    },
+    {
+      "id": "real-negative-16",
+      "kind": "negative",
+      "query": "quantum entanglement laboratory measurements 16",
+      "relevant_paths": []
+    },
+    {
+      "id": "real-negative-17",
+      "kind": "negative",
+      "query": "quantum entanglement laboratory measurements 17",
+      "relevant_paths": []
+    },
+    {
+      "id": "real-negative-18",
+      "kind": "negative",
+      "query": "quantum entanglement laboratory measurements 18",
+      "relevant_paths": []
+    },
+    {
+      "id": "real-negative-19",
+      "kind": "negative",
+      "query": "quantum entanglement laboratory measurements 19",
+      "relevant_paths": []
+    },
+    {
+      "id": "real-negative-20",
+      "kind": "negative",
+      "query": "quantum entanglement laboratory measurements 20",
+      "relevant_paths": []
+    }
+  ]
+}
